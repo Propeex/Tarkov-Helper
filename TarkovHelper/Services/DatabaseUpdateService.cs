@@ -20,6 +20,7 @@ public sealed class DatabaseUpdateService : IDisposable
 
     private const string LocalVersionFile = "db_version.txt";
     private const string DatabaseFile = "tarkov_data.db";
+    private const string ProgressBarTag = "ApiDatabaseUpdateProgress";
 
     private readonly string _assetsPath;
     private readonly string _databasePath;
@@ -116,7 +117,7 @@ public sealed class DatabaseUpdateService : IDisposable
             // SQLite table rewriting performs substantial synchronous work between
             // awaits. Run the complete build off the dispatcher thread so progress
             // text and the rest of the window remain responsive.
-            var result = await Task.Run(() => builder.BuildAsync(_databasePath));
+            var result = await Task.Run(() => builder.BuildPreferredAsync(_databasePath));
 
             var version = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
             try
@@ -138,7 +139,7 @@ public sealed class DatabaseUpdateService : IDisposable
 
             var message = $"데이터베이스 생성 완료: 아이템 {result.ItemCount:N0}개, " +
                           $"퀘스트 {result.QuestCount:N0}개, 은신처 {result.HideoutStationCount:N0}개";
-            UpdateUiStatus(message);
+            UpdateUiStatus(message, 100, false);
             var success = new UpdateCheckResult(true, true, message);
             UpdateCheckCompleted?.Invoke(this, success);
             return success;
@@ -147,7 +148,7 @@ public sealed class DatabaseUpdateService : IDisposable
         {
             const string message = "데이터베이스 생성이 취소되었습니다. 기존 데이터베이스는 유지됩니다.";
             _log.Warning(message);
-            UpdateUiStatus(message);
+            UpdateUiStatus(message, 0, false);
             var result = new UpdateCheckResult(false, false, message);
             UpdateCheckCompleted?.Invoke(this, result);
             return result;
@@ -156,7 +157,7 @@ public sealed class DatabaseUpdateService : IDisposable
         {
             _log.Error("Database rebuild failed", exception);
             var message = $"데이터베이스 생성 실패: {exception.Message} 기존 데이터베이스는 유지됩니다.";
-            UpdateUiStatus(message);
+            UpdateUiStatus(message, 0, false);
             var result = new UpdateCheckResult(false, false, message);
             UpdateCheckCompleted?.Invoke(this, result);
             return result;
@@ -164,6 +165,7 @@ public sealed class DatabaseUpdateService : IDisposable
         finally
         {
             _isUpdating = false;
+            SetUpdateButtonEnabled(true);
             _buildGate.Release();
         }
     }
@@ -176,16 +178,22 @@ public sealed class DatabaseUpdateService : IDisposable
     private void ReportProgress(DatabaseBuildProgress progress)
     {
         ProgressChanged?.Invoke(this, progress);
-        UpdateUiStatus(progress.ToDisplayText());
+        UpdateUiStatus(
+            progress.ToDisplayText(),
+            progress.Percent,
+            progress.Percent < 100);
         _log.Debug($"Database rebuild: {progress.Percent:F1}% - {progress.Message}");
     }
 
     /// <summary>
-    /// Updates the existing settings status label without requiring the large
-    /// MainWindow code-behind to own the rebuild pipeline. ProgressChanged is
-    /// also exposed for a future dedicated progress view.
+    /// Reflows the existing settings status area vertically so long messages
+    /// wrap instead of being clipped, and adds a progress bar without requiring
+    /// a large MainWindow code-behind dependency.
     /// </summary>
-    private static void UpdateUiStatus(string text)
+    private static void UpdateUiStatus(
+        string text,
+        double? percent = null,
+        bool isActive = false)
     {
         var application = Application.Current;
         if (application?.Dispatcher == null)
@@ -193,8 +201,64 @@ public sealed class DatabaseUpdateService : IDisposable
 
         application.Dispatcher.BeginInvoke(() =>
         {
-            if (application.MainWindow?.FindName("TxtApiUpdateStatus") is TextBlock statusText)
-                statusText.Text = text;
+            if (application.MainWindow?.FindName("TxtApiUpdateStatus") is not TextBlock statusText)
+                return;
+
+            statusText.Text = text;
+            statusText.TextWrapping = TextWrapping.Wrap;
+            statusText.HorizontalAlignment = HorizontalAlignment.Stretch;
+            statusText.VerticalAlignment = VerticalAlignment.Center;
+            statusText.Margin = new Thickness(0, 8, 0, 4);
+            statusText.ToolTip = text;
+
+            if (statusText.Parent is StackPanel statusPanel)
+            {
+                statusPanel.Orientation = Orientation.Vertical;
+                statusPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+
+                var progressBar = statusPanel.Children
+                    .OfType<ProgressBar>()
+                    .FirstOrDefault(value => Equals(value.Tag, ProgressBarTag));
+
+                if (progressBar == null)
+                {
+                    progressBar = new ProgressBar
+                    {
+                        Tag = ProgressBarTag,
+                        Minimum = 0,
+                        Maximum = 100,
+                        Height = 10,
+                        Margin = new Thickness(0, 4, 0, 8),
+                        HorizontalAlignment = HorizontalAlignment.Stretch
+                    };
+                    statusPanel.Children.Add(progressBar);
+                }
+
+                progressBar.IsIndeterminate = isActive && !percent.HasValue;
+                if (percent.HasValue)
+                    progressBar.Value = Math.Clamp(percent.Value, 0, 100);
+                progressBar.Visibility = Visibility.Visible;
+            }
+
+            if (application.MainWindow.FindName("BtnUpdateApiData") is Button updateButton)
+            {
+                updateButton.HorizontalAlignment = HorizontalAlignment.Left;
+                updateButton.Margin = new Thickness(0, 0, 0, 0);
+                updateButton.IsEnabled = !isActive;
+            }
+        });
+    }
+
+    private static void SetUpdateButtonEnabled(bool enabled)
+    {
+        var application = Application.Current;
+        if (application?.Dispatcher == null)
+            return;
+
+        application.Dispatcher.BeginInvoke(() =>
+        {
+            if (application.MainWindow?.FindName("BtnUpdateApiData") is Button updateButton)
+                updateButton.IsEnabled = enabled;
         });
     }
 
