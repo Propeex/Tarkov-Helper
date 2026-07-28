@@ -94,6 +94,7 @@ jobs:
     needs: build
     runs-on: windows-latest
     timeout-minutes: 35
+    continue-on-error: true
 
     steps:
       - name: Checkout
@@ -128,7 +129,8 @@ jobs:
           path: TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
           if-no-files-found: warn
 
-      - name: Fail if external database smoke failed
+      - name: Report external API outage
         if: steps.external.outcome == 'failure'
         shell: pwsh
-        run: exit 1
+        run: |
+          Write-Warning "Live tarkov.dev smoke failed. The deterministic build and outage-handling smoke remain authoritative; inspect the uploaded log for current service availability."
