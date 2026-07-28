@@ -4,8 +4,9 @@ using System.Text.Json.Nodes;
 
 internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
 {
-    private const string FirstObjectiveId = "fixture-objective-bolts";
-    private const string SecondObjectiveId = "fixture-objective-bolts-alt";
+    internal const string SharedObjectiveId = "fixture-shared-objective";
+    internal const string ScopedSecondObjectiveId =
+        SharedObjectiveId + ":task:fixture-quest-second:objective:0";
 
     public ObjectiveIdCollisionFixtureHandler(HttpMessageHandler innerHandler)
         : base(innerHandler)
@@ -32,40 +33,42 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
         }
 
         if (string.Equals(path, "regular/tasks", StringComparison.OrdinalIgnoreCase))
-            AddCollisionObjectives(root);
+            AddDuplicateObjectiveIds(root);
         else if (string.Equals(path, "regular/tasks_en", StringComparison.OrdinalIgnoreCase))
-            AddCollisionTranslations(root, "Hand over syringe");
+            AddCollisionTranslation(root, "Hand over syringe");
         else if (string.Equals(path, "regular/tasks_ko", StringComparison.OrdinalIgnoreCase))
-            AddCollisionTranslations(root, "주사기 건네주기");
+            AddCollisionTranslation(root, "주사기 건네주기");
 
         ReplaceContent(response, root.ToJsonString());
         return response;
     }
 
-    private static void AddCollisionObjectives(JsonObject root)
+    private static void AddDuplicateObjectiveIds(JsonObject root)
     {
-        if (root["data"]?["tasks"]?["fixture-quest-first"]?["objectives"] is not JsonArray objectives ||
-            objectives.Count == 0 || objectives[0] is not JsonObject first)
+        if (root["data"]?["tasks"] is not JsonObject tasks ||
+            tasks["fixture-quest-first"]?["objectives"] is not JsonArray firstObjectives ||
+            firstObjectives.Count == 0 ||
+            firstObjectives[0] is not JsonObject firstObjective ||
+            tasks["fixture-quest-second"]?["objectives"] is not JsonArray secondObjectives)
         {
-            throw new InvalidDataException("Objective collision fixture could not locate the first quest objective.");
+            throw new InvalidDataException("Objective collision fixture could not locate both quests.");
         }
 
-        first["id"] = FirstObjectiveId;
-        first["description"] = FirstObjectiveId;
+        firstObjective["id"] = SharedObjectiveId;
+        firstObjective["description"] = SharedObjectiveId;
 
-        var second = first.DeepClone().AsObject();
-        second["id"] = SecondObjectiveId;
-        second["description"] = SecondObjectiveId;
-        objectives.Add(second);
+        var secondObjective = firstObjective.DeepClone().AsObject();
+        secondObjective["id"] = SharedObjectiveId;
+        secondObjective["description"] = SharedObjectiveId;
+        secondObjectives.Add(secondObjective);
     }
 
-    private static void AddCollisionTranslations(JsonObject root, string translatedDescription)
+    private static void AddCollisionTranslation(JsonObject root, string translatedDescription)
     {
         if (root["data"] is not JsonObject translations)
             throw new InvalidDataException("Objective collision fixture translation payload is invalid.");
 
-        translations[FirstObjectiveId] = translatedDescription;
-        translations[SecondObjectiveId] = translatedDescription;
+        translations[SharedObjectiveId] = translatedDescription;
     }
 
     private static void ReplaceContent(HttpResponseMessage response, string json)
