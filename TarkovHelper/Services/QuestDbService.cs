@@ -17,6 +17,7 @@ public sealed class QuestDbService
     public static QuestDbService Instance => _instance ??= new QuestDbService();
 
     private readonly string _databasePath;
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
     private List<TarkovTask> _allQuests = new();
     private Dictionary<string, TarkovTask> _questsById = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, TarkovTask> _questsByNormalizedName = new(StringComparer.OrdinalIgnoreCase);
@@ -79,14 +80,15 @@ public sealed class QuestDbService
     /// </summary>
     public async Task<bool> LoadQuestsAsync()
     {
-        if (!DatabaseExists)
-        {
-            _log.Warning($"Database not found: {_databasePath}");
-            return false;
-        }
-
+        await _loadGate.WaitAsync();
         try
         {
+            if (!DatabaseExists)
+            {
+                _log.Warning($"Database not found: {_databasePath}");
+                return false;
+            }
+
             var connectionString = $"Data Source={_databasePath};Mode=ReadOnly";
             await using var connection = new SqliteConnection(connectionString);
             await connection.OpenAsync();
@@ -100,7 +102,17 @@ public sealed class QuestDbService
 
             // 1. 기본 퀘스트 정보 로드
             var quests = await LoadBaseQuestsAsync(connection);
-            var questLookup = quests.ToDictionary(q => q.Ids?.FirstOrDefault() ?? "", q => q, StringComparer.OrdinalIgnoreCase);
+            EnsureUniqueNormalizedNames(quests);
+
+            var questLookup = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
+            foreach (var quest in quests)
+            {
+                foreach (var id in quest.Ids ?? [])
+                {
+                    if (!string.IsNullOrWhiteSpace(id))
+                        questLookup.TryAdd(id, quest);
+                }
+            }
 
             // 2. 선행 퀘스트 요구사항 로드
             await LoadQuestRequirementsAsync(connection, questLookup);
@@ -123,15 +135,14 @@ public sealed class QuestDbService
 
             foreach (var quest in quests)
             {
-                var id = quest.Ids?.FirstOrDefault();
-                if (!string.IsNullOrEmpty(id))
+                foreach (var id in quest.Ids ?? [])
                 {
-                    newQuestsById[id] = quest;
+                    if (!string.IsNullOrWhiteSpace(id))
+                        newQuestsById.TryAdd(id, quest);
                 }
+
                 if (!string.IsNullOrEmpty(quest.NormalizedName))
-                {
-                    newQuestsByNormalizedName[quest.NormalizedName] = quest;
-                }
+                    newQuestsByNormalizedName.TryAdd(quest.NormalizedName, quest);
             }
 
             // Atomic swap - 모든 데이터가 준비된 후 한 번에 교체
@@ -144,8 +155,12 @@ public sealed class QuestDbService
         }
         catch (Exception ex)
         {
-            _log.Error($"Error loading quests: {ex.Message}");
+            _log.Error("Error loading quests", ex);
             return false;
+        }
+        finally
+        {
+            _loadGate.Release();
         }
     }
 
@@ -212,7 +227,7 @@ public sealed class QuestDbService
                 {(hasRequiredDecodeCount ? "RequiredDecodeCount" : "NULL")} as RequiredDecodeCount,
                 {(hasWikiPageLink ? "WikiPageLink" : "NULL")} as WikiPageLink
             FROM Quests
-            ORDER BY Name";
+            ORDER BY Name, Id";
 
         await using var cmd = new SqliteCommand(sql, connection);
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -244,9 +259,7 @@ public sealed class QuestDbService
 
             // BsgId가 있으면 Ids에 추가
             if (!string.IsNullOrEmpty(bsgId) && bsgId != id)
-            {
                 quest.Ids.Add(bsgId);
-            }
 
             quests.Add(quest);
         }
@@ -255,9 +268,7 @@ public sealed class QuestDbService
         var questsWithBsgId = quests.Count(q => q.Ids != null && q.Ids.Count > 1);
         _log.Debug($"Quests with BsgId: {questsWithBsgId}/{quests.Count}");
         if (quests.Count > 0 && quests[0].Ids != null)
-        {
             _log.Debug($"Sample quest IDs: {string.Join(", ", quests[0].Ids ?? [])} - {quests[0].Name}");
-        }
 
         return quests;
     }
@@ -296,13 +307,80 @@ public sealed class QuestDbService
         return name.ToLowerInvariant()
             .Replace(" ", "-")
             .Replace("'", "")
-            .Replace("'", "")
+            .Replace("’", "")
             .Replace(".", "")
             .Replace(",", "")
             .Replace("?", "")
             .Replace("!", "")
             .Replace(":", "")
             .Replace("\"", "");
+    }
+
+    /// <summary>
+    /// tarkov.dev에는 이름이 같은 별도 퀘스트가 존재한다. 화면의 레거시 조회 키는
+    /// NormalizedName을 사용하므로 첫 항목은 기존 키를 유지하고 후속 항목에 안정적인
+    /// BSG/DB ID 접미사를 부여해 모든 퀘스트를 별도 항목으로 보존한다.
+    /// </summary>
+    private void EnsureUniqueNormalizedNames(List<TarkovTask> quests)
+    {
+        var duplicateGroups = quests
+            .Where(quest => !string.IsNullOrWhiteSpace(quest.NormalizedName))
+            .GroupBy(quest => quest.NormalizedName!, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .ToList();
+
+        if (duplicateGroups.Count == 0)
+            return;
+
+        var usedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var renamedCount = 0;
+
+        foreach (var quest in quests)
+        {
+            var baseKey = quest.NormalizedName;
+            if (string.IsNullOrWhiteSpace(baseKey))
+                continue;
+
+            if (usedKeys.Add(baseKey))
+                continue;
+
+            var suffix = BuildStableQuestKeySuffix(quest);
+            var candidate = $"{baseKey}--{suffix}";
+            var collisionIndex = 2;
+            while (!usedKeys.Add(candidate))
+            {
+                candidate = $"{baseKey}--{suffix}-{collisionIndex}";
+                collisionIndex++;
+            }
+
+            quest.NormalizedName = candidate;
+            renamedCount++;
+        }
+
+        var samples = duplicateGroups
+            .Take(8)
+            .Select(group => $"{group.Key}({group.Count()})");
+        _log.Warning(
+            $"Resolved {renamedCount} duplicate normalized quest keys across " +
+            $"{duplicateGroups.Count} name groups: {string.Join(", ", samples)}");
+    }
+
+    private static string BuildStableQuestKeySuffix(TarkovTask quest)
+    {
+        var stableId = quest.Ids?
+            .LastOrDefault(value => !string.IsNullOrWhiteSpace(value))
+            ?? quest.Ids?.FirstOrDefault()
+            ?? "quest";
+
+        var normalized = new string(stableId
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToLowerInvariant)
+            .ToArray());
+
+        if (string.IsNullOrWhiteSpace(normalized))
+            return "quest";
+
+        return normalized.Length <= 12 ? normalized : normalized[..12];
     }
 
     /// <summary>
@@ -342,9 +420,7 @@ public sealed class QuestDbService
             // Previous 리스트에 추가
             quest.Previous ??= new List<string>();
             if (!quest.Previous.Contains(requiredNormalizedName, StringComparer.OrdinalIgnoreCase))
-            {
                 quest.Previous.Add(requiredNormalizedName);
-            }
 
             // TaskRequirements에 상세 정보 추가 (GroupId 포함)
             quest.TaskRequirements ??= new List<TaskRequirement>();
@@ -356,7 +432,7 @@ public sealed class QuestDbService
                 quest.TaskRequirements.Add(new TaskRequirement
                 {
                     TaskId = requiredQuestId,
-                    TaskNormalizedName = requiredNormalizedName ?? "",
+                    TaskNormalizedName = requiredNormalizedName,
                     Status = new List<string> { requirementType.ToLowerInvariant() },
                     GroupId = groupId
                 });
@@ -481,9 +557,7 @@ public sealed class QuestDbService
 
             quest.AlternativeQuests ??= new List<string>();
             if (!quest.AlternativeQuests.Contains(altNormalizedName, StringComparer.OrdinalIgnoreCase))
-            {
                 quest.AlternativeQuests.Add(altNormalizedName);
-            }
         }
 
         return true;
@@ -494,9 +568,12 @@ public sealed class QuestDbService
     /// </summary>
     private void BuildLeadsToReferences(List<TarkovTask> quests)
     {
-        var questByName = quests
-            .Where(q => !string.IsNullOrEmpty(q.NormalizedName))
-            .ToDictionary(q => q.NormalizedName!, q => q, StringComparer.OrdinalIgnoreCase);
+        var questByName = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
+        foreach (var quest in quests)
+        {
+            if (!string.IsNullOrWhiteSpace(quest.NormalizedName))
+                questByName.TryAdd(quest.NormalizedName, quest);
+        }
 
         foreach (var quest in quests)
         {
@@ -509,9 +586,7 @@ public sealed class QuestDbService
                 {
                     prevQuest.LeadsTo ??= new List<string>();
                     if (!prevQuest.LeadsTo.Contains(quest.NormalizedName, StringComparer.OrdinalIgnoreCase))
-                    {
                         prevQuest.LeadsTo.Add(quest.NormalizedName);
-                    }
                 }
             }
         }
@@ -523,11 +598,9 @@ public sealed class QuestDbService
     public async Task RefreshAsync()
     {
         _log.Debug("Refreshing quest data...");
-        // 기존 데이터를 클리어하지 않음 - LoadQuestsAsync()에서 atomic swap으로 교체
-        await LoadQuestsAsync();
-
-        // 데이터 새로고침 완료 이벤트 발생
-        OnDataRefreshed();
+        // 성공한 경우에만 UI에 새 데이터 이벤트를 전달한다.
+        if (await LoadQuestsAsync())
+            OnDataRefreshed();
     }
 
     /// <summary>
