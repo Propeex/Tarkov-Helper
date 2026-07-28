@@ -1,7 +1,11 @@
 using Microsoft.Data.Sqlite;
+using TarkovHelper.Models;
 using TarkovHelper.Services;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
+
+if (ProfileService.Instance.CurrentProfile != ProfileType.Pvp)
+    throw new InvalidOperationException("The application profile is not locked to PVP.");
 
 if (args.Contains("--external", StringComparer.OrdinalIgnoreCase))
 {
@@ -88,7 +92,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
 
     Console.WriteLine(
-        $"Deterministic database smoke passed: items={result.ItemCount}, quests={result.QuestCount}, " +
+        $"Deterministic database smoke passed: profile=PVP, items={result.ItemCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
