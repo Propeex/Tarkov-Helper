@@ -13,6 +13,23 @@ return await RunDeterministicDatabaseSmokeAsync();
 static async Task<int> RunDeterministicDatabaseSmokeAsync()
 {
     var databasePath = Path.Combine(AppContext.BaseDirectory, "Assets", "tarkov_data.db");
+
+    // The deterministic fixture intentionally contains only two quests. Remove
+    // legacy alternative-quest rows from the copied production DB so this test
+    // validates the rebuilt API-managed tables rather than unrelated fixture gaps.
+    await using (var cleanupConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath,
+        Mode = SqliteOpenMode.ReadWrite,
+        Pooling = false
+    }.ConnectionString))
+    {
+        await cleanupConnection.OpenAsync();
+        await using var cleanupCommand = cleanupConnection.CreateCommand();
+        cleanupCommand.CommandText = "DELETE FROM OptionalQuests;";
+        await cleanupCommand.ExecuteNonQueryAsync();
+    }
+
     using var httpClient = new HttpClient(new FixtureTarkovApiHandler())
     {
         Timeout = TimeSpan.FromMinutes(2)
