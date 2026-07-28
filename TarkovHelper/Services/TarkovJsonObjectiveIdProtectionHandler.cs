@@ -18,10 +18,15 @@ namespace TarkovHelper.Services;
 /// localization is applied. The first occurrence keeps its original ID so any
 /// existing hand-maintained objective data can still be reused where possible.
 ///
-/// This handler also classifies endpoint outages before the builder's generic
-/// retry loops. DNS failures, HTTP 503 responses, and requests that cannot even
-/// receive response headers within a bounded interval should move immediately to
-/// the fallback path or return a clear error instead of leaving the UI at 1%.
+/// This handler also normalizes API compatibility differences before the data is
+/// written. Neutral quest factions such as "Any Target" are stored without a
+/// faction restriction, and sell-item catalogue objectives do not become player
+/// inventory requirements.
+///
+/// Endpoint outages are classified before the builder's generic retry loops.
+/// DNS failures, HTTP 503 responses, and requests that cannot even receive
+/// response headers within a bounded interval should move immediately to the
+/// fallback path or return a clear error instead of leaving the UI at 1%.
 /// </summary>
 internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
 {
@@ -68,20 +73,19 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
                 $"{host} 서버가 현재 점검 또는 과부하 상태입니다(503). 잠시 후 다시 시도하십시오.");
         }
 
-        if (!response.IsSuccessStatusCode ||
-            request.Method != HttpMethod.Get ||
-            response.Content == null)
-        {
+        if (!response.IsSuccessStatusCode || response.Content == null)
             return response;
-        }
 
         var path = request.RequestUri?.AbsolutePath.Trim('/') ?? string.Empty;
-        if (!string.Equals(path, "regular/tasks", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(path, "regular/tasks_en", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(path, "regular/tasks_ko", StringComparison.OrdinalIgnoreCase))
-        {
+        var isStaticTaskDocument = request.Method == HttpMethod.Get &&
+            (string.Equals(path, "regular/tasks", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(path, "regular/tasks_en", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(path, "regular/tasks_ko", StringComparison.OrdinalIgnoreCase));
+        var isGraphQlResponse = request.Method == HttpMethod.Post &&
+            string.Equals(path, "graphql", StringComparison.OrdinalIgnoreCase);
+
+        if (!isStaticTaskDocument && !isGraphQlResponse)
             return response;
-        }
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         JsonObject? root;
@@ -101,7 +105,11 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
             return response;
         }
 
-        if (string.Equals(path, "regular/tasks", StringComparison.OrdinalIgnoreCase))
+        if (isGraphQlResponse)
+        {
+            NormalizeGraphQlTasks(root);
+        }
+        else if (string.Equals(path, "regular/tasks", StringComparison.OrdinalIgnoreCase))
         {
             ProtectObjectiveIds(root);
         }
@@ -151,7 +159,12 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
 
             foreach (var (taskKey, taskNode) in tasks)
             {
-                if (taskNode is not JsonObject task || task["objectives"] is not JsonArray objectives)
+                if (taskNode is not JsonObject task)
+                    continue;
+
+                NormalizeQuestCompatibility(task);
+
+                if (task["objectives"] is not JsonArray objectives)
                     continue;
 
                 var taskId = ReadString(task["id"]) ?? taskKey;
@@ -177,6 +190,52 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
                 }
             }
         }
+    }
+
+    private static void NormalizeGraphQlTasks(JsonObject root)
+    {
+        if (root["data"]?["tasks"] is not JsonArray tasks)
+            return;
+
+        foreach (var taskNode in tasks)
+        {
+            if (taskNode is JsonObject task)
+                NormalizeQuestCompatibility(task);
+        }
+    }
+
+    private static void NormalizeQuestCompatibility(JsonObject task)
+    {
+        if (IsNeutralFaction(ReadString(task["factionName"])))
+            task["factionName"] = null;
+
+        if (task["objectives"] is not JsonArray objectives)
+            return;
+
+        foreach (var objectiveNode in objectives)
+        {
+            if (objectiveNode is not JsonObject objective)
+                continue;
+
+            // tarkov.dev sellItem objectives expose the trader's entire accepted
+            // catalogue. Those rows describe what may be sold, not items the player
+            // must collect for quest completion.
+            if (string.Equals(ReadString(objective["type"]), "sellItem", StringComparison.OrdinalIgnoreCase))
+                objective["items"] = new JsonArray();
+        }
+    }
+
+    private static bool IsNeutralFaction(string? faction)
+    {
+        if (string.IsNullOrWhiteSpace(faction))
+            return true;
+
+        return faction.Trim().ToLowerInvariant() is
+            "any" or
+            "any target" or
+            "all" or
+            "both" or
+            "pmc";
     }
 
     private static string ReserveCanonicalId(
