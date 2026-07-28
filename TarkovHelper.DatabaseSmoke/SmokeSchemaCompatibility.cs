@@ -21,6 +21,7 @@ internal static class SmokeSchemaCompatibility
         }.ConnectionString);
         connection.Open();
 
+        EnsureColumn(connection, "Items", "NormalizedName", "TEXT");
         EnsureColumn(connection, "QuestObjectives", "DescriptionEN", "TEXT");
         EnsureColumn(connection, "QuestObjectives", "DescriptionKO", "TEXT");
         EnsureColumn(connection, "QuestRequiredItems", "ObjectiveId", "TEXT");
