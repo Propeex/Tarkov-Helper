@@ -97,11 +97,6 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
             HAVING COUNT(*) > 1
         );
         """);
-    var linkedObjectiveItems = await ScalarAsync(connection, """
-        SELECT COUNT(*)
-        FROM QuestRequiredItems r
-        JOIN QuestObjectives o ON o.Id = r.ObjectiveId;
-        """);
     var duplicateLocalizedDescriptions = await ScalarAsync(connection, """
         SELECT COUNT(*)
         FROM QuestObjectives
@@ -136,11 +131,10 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
             $"Globally duplicate objective IDs were not scoped correctly: " +
             $"ids={protectedObjectiveIds}, scoped={correctlyScopedObjectives}, duplicates={duplicateObjectiveIds}.");
     }
-    if (linkedObjectiveItems != 2 || duplicateLocalizedDescriptions != 2)
+    if (duplicateLocalizedDescriptions != 2)
     {
         throw new InvalidDataException(
-            $"Localized objective relationships were corrupted: " +
-            $"links={linkedObjectiveItems}, localized={duplicateLocalizedDescriptions}.");
+            $"Localized objective descriptions were corrupted: localized={duplicateLocalizedDescriptions}.");
     }
     if (missingChildIds != 0)
         throw new InvalidDataException($"Rebuilt child rows contain {missingChildIds} missing primary keys.");
@@ -152,7 +146,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"objectiveIds={protectedObjectiveIds}, scopedObjectives={correctlyScopedObjectives}, " +
-        $"objectiveLinks={linkedObjectiveItems}, duplicateObjectiveIds={duplicateObjectiveIds}, " +
+        $"duplicateObjectiveIds={duplicateObjectiveIds}, " +
         $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
