@@ -33,7 +33,7 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
         }
 
         if (string.Equals(path, "regular/tasks", StringComparison.OrdinalIgnoreCase))
-            AddDuplicateObjectiveIds(root);
+            AddCompatibilityCases(root);
         else if (string.Equals(path, "regular/tasks_en", StringComparison.OrdinalIgnoreCase))
             AddCollisionTranslation(root, "Hand over syringe");
         else if (string.Equals(path, "regular/tasks_ko", StringComparison.OrdinalIgnoreCase))
@@ -43,16 +43,21 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
         return response;
     }
 
-    private static void AddDuplicateObjectiveIds(JsonObject root)
+    private static void AddCompatibilityCases(JsonObject root)
     {
         if (root["data"]?["tasks"] is not JsonObject tasks ||
-            tasks["fixture-quest-first"]?["objectives"] is not JsonArray firstObjectives ||
+            tasks["fixture-quest-first"] is not JsonObject firstTask ||
+            firstTask["objectives"] is not JsonArray firstObjectives ||
             firstObjectives.Count == 0 ||
             firstObjectives[0] is not JsonObject firstObjective ||
-            tasks["fixture-quest-second"]?["objectives"] is not JsonArray secondObjectives)
+            tasks["fixture-quest-second"] is not JsonObject secondTask ||
+            secondTask["objectives"] is not JsonArray secondObjectives)
         {
-            throw new InvalidDataException("Objective collision fixture could not locate both quests.");
+            throw new InvalidDataException("Objective compatibility fixture could not locate both quests.");
         }
+
+        firstTask["factionName"] = "Any Target";
+        secondTask["factionName"] = "Any";
 
         firstObjective["id"] = SharedObjectiveId;
         firstObjective["description"] = SharedObjectiveId;
@@ -61,6 +66,19 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
         secondObjective["id"] = SharedObjectiveId;
         secondObjective["description"] = SharedObjectiveId;
         secondObjectives.Add(secondObjective);
+
+        firstObjectives.Add(new JsonObject
+        {
+            ["id"] = "fixture-sell-objective",
+            ["type"] = "sellItem",
+            ["description"] = "fixture-sell-objective Description",
+            ["optional"] = false,
+            ["maps"] = new JsonArray(),
+            ["items"] = new JsonArray("fixture-item-bolts", "fixture-item-wire"),
+            ["count"] = 1,
+            ["foundInRaid"] = false,
+            ["dogTagLevel"] = null
+        });
     }
 
     private static void AddCollisionTranslation(JsonObject root, string translatedDescription)
@@ -69,6 +87,7 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
             throw new InvalidDataException("Objective collision fixture translation payload is invalid.");
 
         translations[SharedObjectiveId] = translatedDescription;
+        translations["fixture-sell-objective Description"] = "Sell catalogue fixture";
     }
 
     private static void ReplaceContent(HttpResponseMessage response, string json)
