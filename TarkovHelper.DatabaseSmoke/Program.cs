@@ -34,7 +34,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         await cleanupCommand.ExecuteNonQueryAsync();
     }
 
-    using var httpClient = new HttpClient(new FixtureTarkovApiHandler())
+    var fixtureHandler = new FixtureTarkovApiHandler();
+    using var httpClient = new HttpClient(fixtureHandler)
     {
         Timeout = TimeSpan.FromMinutes(2)
     };
@@ -43,7 +44,12 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         httpClient,
         progress => Console.WriteLine($"[{progress.Percent,6:F1}%] {progress.Message}"));
 
-    var result = await builder.BuildAsync(databasePath);
+    var result = await builder.BuildPreferredAsync(databasePath);
+
+    if (fixtureHandler.StaticRequestCount == 0)
+        throw new InvalidDataException("The static JSON API path was not exercised.");
+    if (fixtureHandler.GraphQlRequestCount != 0)
+        throw new InvalidDataException("The deterministic static JSON test unexpectedly used GraphQL fallback.");
 
     var connectionString = new SqliteConnectionStringBuilder
     {
@@ -92,7 +98,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
 
     Console.WriteLine(
-        $"Deterministic database smoke passed: profile=PVP, items={result.ItemCount}, quests={result.QuestCount}, " +
+        $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
+        $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
