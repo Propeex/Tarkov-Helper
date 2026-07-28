@@ -112,7 +112,11 @@ public sealed class DatabaseUpdateService : IDisposable
                 null));
 
             var builder = new TarkovDataDatabaseBuilder(_httpClient, ReportProgress);
-            var result = await builder.BuildAsync(_databasePath);
+
+            // SQLite table rewriting performs substantial synchronous work between
+            // awaits. Run the complete build off the dispatcher thread so progress
+            // text and the rest of the window remain responsive.
+            var result = await Task.Run(() => builder.BuildAsync(_databasePath));
 
             var version = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
             try
@@ -127,8 +131,14 @@ public sealed class DatabaseUpdateService : IDisposable
 
             OnDatabaseUpdated();
 
+            // Progress services aggregate quest and hideout data. Recreate their
+            // PVP snapshots after the reference database has been replaced.
+            if (Application.Current?.MainWindow is TarkovHelper.MainWindow mainWindow)
+                await mainWindow.ReloadAfterDatabaseRebuildAsync();
+
             var message = $"데이터베이스 생성 완료: 아이템 {result.ItemCount:N0}개, " +
                           $"퀘스트 {result.QuestCount:N0}개, 은신처 {result.HideoutStationCount:N0}개";
+            UpdateUiStatus(message);
             var success = new UpdateCheckResult(true, true, message);
             UpdateCheckCompleted?.Invoke(this, success);
             return success;
