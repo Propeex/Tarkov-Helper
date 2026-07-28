@@ -19,10 +19,10 @@ public partial class QuestListPage
 
     private async void ApplySafeDefaultsAndRecoverDatabaseAsync(object sender, RoutedEventArgs e)
     {
-        // Showing only Active quests by default can make a correctly loaded
-        // database appear empty. Start from the complete list instead.
-        if (CmbStatus.SelectedIndex != 1)
-            CmbStatus.SelectedIndex = 1;
+        // The normal working view is Active quests. Database recovery below is
+        // responsible for distinguishing a genuinely empty cache from a filter result.
+        if (CmbStatus.SelectedIndex != 0)
+            CmbStatus.SelectedIndex = 0;
 
         if (_databaseRecoveryAttempted)
             return;
@@ -62,7 +62,7 @@ public partial class QuestListPage
             PopulateTraderFilter();
             PopulateMapFilter();
             LoadFactionSelection();
-            CmbStatus.SelectedIndex = 1;
+            CmbStatus.SelectedIndex = 0;
             _isDataLoaded = true;
         }
         finally
