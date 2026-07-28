@@ -193,7 +193,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     .ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase)
                     ?? new Dictionary<string, ApiItemReference>(StringComparer.OrdinalIgnoreCase);
 
-                foreach (var requiredItem in objective.Items)
+                foreach (var requiredItem in CollapseLogicalRequiredItems(objective.Items))
                 {
                     if (string.IsNullOrWhiteSpace(requiredItem.Id) ||
                         !itemIdByApiId.TryGetValue(requiredItem.Id, out var itemId))
@@ -216,6 +216,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 }
             }
         }
+
+        var preservedQuestLocations = PreserveLegacyQuestObjectiveLocations(
+            snapshots["QuestObjectives"],
+            questRows,
+            questObjectiveRows);
+        if (preservedQuestLocations > 0)
+            Log.Info($"기존 퀘스트 지도 좌표 {preservedQuestLocations:N0}개를 보존했습니다.");
 
         var hideoutStationRows = new List<RowData>(data.HideoutStations.Count);
         var hideoutLevelRows = new List<RowData>();
