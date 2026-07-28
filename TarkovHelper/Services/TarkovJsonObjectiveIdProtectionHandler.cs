@@ -1,4 +1,6 @@
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -15,10 +17,16 @@ namespace TarkovHelper.Services;
 /// Repeated IDs therefore receive a deterministic quest-scoped suffix before
 /// localization is applied. The first occurrence keeps its original ID so any
 /// existing hand-maintained objective data can still be reused where possible.
+///
+/// This handler also classifies endpoint outages before the builder's generic
+/// retry loops. DNS failures, HTTP 503 responses, and requests that cannot even
+/// receive response headers within a bounded interval should move immediately to
+/// the fallback path or return a clear error instead of leaving the UI at 1%.
 /// </summary>
 internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
 {
     private const string ProtectedPrefix = "__tarkov_helper_objective_id__:";
+    private static readonly TimeSpan ResponseHeaderTimeout = TimeSpan.FromSeconds(25);
     private readonly object _sync = new();
     private readonly Dictionary<string, string> _protectedIds = new(StringComparer.Ordinal);
 
@@ -31,7 +39,35 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
-        var response = await base.SendAsync(request, cancellationToken);
+        var host = request.RequestUri?.Host ?? "tarkov.dev";
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(ResponseHeaderTimeout);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await base.SendAsync(request, timeoutSource.Token);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TarkovApiUnavailableException(
+                $"{host} 서버가 {ResponseHeaderTimeout.TotalSeconds:F0}초 안에 응답하지 않았습니다. 잠시 후 다시 시도하십시오.",
+                exception);
+        }
+        catch (HttpRequestException exception) when (IsDnsFailure(exception))
+        {
+            throw new TarkovApiUnavailableException(
+                $"{host} 주소를 찾지 못했습니다. 인터넷 또는 DNS 연결을 확인한 뒤 다시 시도하십시오.",
+                exception);
+        }
+
+        if (response.StatusCode == HttpStatusCode.ServiceUnavailable && IsTarkovHost(host))
+        {
+            response.Dispose();
+            throw new TarkovApiUnavailableException(
+                $"{host} 서버가 현재 점검 또는 과부하 상태입니다(503). 잠시 후 다시 시도하십시오.");
+        }
+
         if (!response.IsSuccessStatusCode ||
             request.Method != HttpMethod.Get ||
             response.Content == null)
@@ -76,6 +112,28 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
 
         ReplaceContent(response, root.ToJsonString());
         return response;
+    }
+
+    private static bool IsTarkovHost(string host)
+    {
+        return string.Equals(host, "tarkov.dev", StringComparison.OrdinalIgnoreCase) ||
+               host.EndsWith(".tarkov.dev", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDnsFailure(Exception exception)
+    {
+        for (Exception? current = exception; current != null; current = current.InnerException)
+        {
+            if (current is not SocketException socketException)
+                continue;
+
+            return socketException.SocketErrorCode is
+                SocketError.HostNotFound or
+                SocketError.NoData or
+                SocketError.TryAgain;
+        }
+
+        return false;
     }
 
     private void ProtectObjectiveIds(JsonObject root)
@@ -166,5 +224,18 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
     {
         response.Content.Dispose();
         response.Content = new StringContent(json, Encoding.UTF8, "application/json");
+    }
+}
+
+internal sealed class TarkovApiUnavailableException : Exception
+{
+    public TarkovApiUnavailableException(string message)
+        : base(message)
+    {
+    }
+
+    public TarkovApiUnavailableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
     }
 }
