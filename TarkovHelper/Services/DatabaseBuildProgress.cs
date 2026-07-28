@@ -20,8 +20,15 @@ public sealed record DatabaseBuildProgress(
             : Current > 0
                 ? $" · {Current:N0}개"
                 : string.Empty;
-        var etaText = EstimatedRemaining.HasValue
-            ? $" · 예상 {FormatDuration(EstimatedRemaining.Value)} 남음"
+
+        // Download speed and server retry delays are not linear progress, so an
+        // extrapolated ETA during the API stage can incorrectly show hours while
+        // the UI is still at 1%. Only show ETA for deterministic local work.
+        var showEta = EstimatedRemaining.HasValue &&
+                      Percent >= 5 &&
+                      !string.Equals(Stage, "API", StringComparison.OrdinalIgnoreCase);
+        var etaText = showEta
+            ? $" · 예상 {FormatDuration(EstimatedRemaining!.Value)} 남음"
             : string.Empty;
 
         return $"{percentText} · {Message}{countText}{etaText}";
