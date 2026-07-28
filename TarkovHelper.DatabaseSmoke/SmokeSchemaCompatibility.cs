@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
 internal static class SmokeSchemaCompatibility
 {
     [ModuleInitializer]
-    internal static void EnsureObjectiveLocalizationColumns()
+    internal static void EnsureSmokeVerificationColumns()
     {
         if (Environment.GetCommandLineArgs().Contains("--external", StringComparer.OrdinalIgnoreCase))
             return;
@@ -21,20 +21,25 @@ internal static class SmokeSchemaCompatibility
         }.ConnectionString);
         connection.Open();
 
-        EnsureColumn(connection, "DescriptionEN");
-        EnsureColumn(connection, "DescriptionKO");
+        EnsureColumn(connection, "QuestObjectives", "DescriptionEN", "TEXT");
+        EnsureColumn(connection, "QuestObjectives", "DescriptionKO", "TEXT");
+        EnsureColumn(connection, "QuestRequiredItems", "ObjectiveId", "TEXT");
     }
 
-    private static void EnsureColumn(SqliteConnection connection, string columnName)
+    private static void EnsureColumn(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string sqlType)
     {
         using var check = connection.CreateCommand();
-        check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('QuestObjectives') WHERE name = @name;";
+        check.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{tableName}') WHERE name = @name;";
         check.Parameters.AddWithValue("@name", columnName);
         if (Convert.ToInt32(check.ExecuteScalar()) != 0)
             return;
 
         using var alter = connection.CreateCommand();
-        alter.CommandText = $"ALTER TABLE QuestObjectives ADD COLUMN [{columnName}] TEXT;";
+        alter.CommandText = $"ALTER TABLE [{tableName}] ADD COLUMN [{columnName}] {sqlType};";
         alter.ExecuteNonQuery();
     }
 }
