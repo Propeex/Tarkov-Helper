@@ -70,7 +70,12 @@ internal sealed partial class TarkovDataDatabaseBuilder
         {
             CleanupFile(tempPath);
             _lastPercent = 0;
-            Report("API", "정적 JSON API 연결 실패 · GraphQL 예비 경로로 전환", 1, 0, null);
+            Report(
+                "API",
+                $"정적 JSON API 실패: {CompactApiError(staticException.Message)} · GraphQL 예비 경로로 전환",
+                1,
+                0,
+                null);
 
             try
             {
@@ -347,12 +352,22 @@ internal sealed partial class TarkovDataDatabaseBuilder
         {
             case JsonObject jsonObject:
                 foreach (var key in jsonObject.Select(pair => pair.Key).ToArray())
-                    jsonObject[key] = TranslateNode(jsonObject[key], primary, fallback);
+                {
+                    var original = jsonObject[key];
+                    var translatedChild = TranslateNode(original, primary, fallback);
+                    if (!ReferenceEquals(original, translatedChild))
+                        jsonObject[key] = translatedChild;
+                }
                 return jsonObject;
 
             case JsonArray jsonArray:
                 for (var index = 0; index < jsonArray.Count; index++)
-                    jsonArray[index] = TranslateNode(jsonArray[index], primary, fallback);
+                {
+                    var original = jsonArray[index];
+                    var translatedChild = TranslateNode(original, primary, fallback);
+                    if (!ReferenceEquals(original, translatedChild))
+                        jsonArray[index] = translatedChild;
+                }
                 return jsonArray;
 
             case JsonValue jsonValue when jsonValue.TryGetValue<string>(out var text):
