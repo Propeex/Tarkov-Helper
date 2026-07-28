@@ -71,10 +71,36 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         "SELECT COUNT(*) FROM QuestRequiredItems q JOIN Items i ON q.ItemId = i.Id;");
     var hideoutItemLinks = await ScalarAsync(connection,
         "SELECT COUNT(*) FROM HideoutItemRequirements h JOIN Items i ON h.ItemId = i.BsgId;");
-    var protectedObjectiveIds = await ScalarAsync(connection, """
+    var protectedObjectiveIds = await ScalarAsync(connection, $"""
         SELECT COUNT(*)
         FROM QuestObjectives
-        WHERE Id IN ('fixture-objective-bolts', 'fixture-objective-bolts-alt');
+        WHERE Id IN (
+            '{ObjectiveIdCollisionFixtureHandler.SharedObjectiveId}',
+            '{ObjectiveIdCollisionFixtureHandler.ScopedSecondObjectiveId}'
+        );
+        """);
+    var correctlyScopedObjectives = await ScalarAsync(connection, $"""
+        SELECT COUNT(*)
+        FROM QuestObjectives o
+        JOIN Quests q ON q.Id = o.QuestId
+        WHERE (o.Id = '{ObjectiveIdCollisionFixtureHandler.SharedObjectiveId}'
+               AND q.BsgId = 'fixture-quest-first')
+           OR (o.Id = '{ObjectiveIdCollisionFixtureHandler.ScopedSecondObjectiveId}'
+               AND q.BsgId = 'fixture-quest-second');
+        """);
+    var duplicateObjectiveIds = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM (
+            SELECT Id
+            FROM QuestObjectives
+            GROUP BY Id
+            HAVING COUNT(*) > 1
+        );
+        """);
+    var linkedObjectiveItems = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequiredItems r
+        JOIN QuestObjectives o ON o.Id = r.ObjectiveId;
         """);
     var duplicateLocalizedDescriptions = await ScalarAsync(connection, """
         SELECT COUNT(*)
@@ -104,10 +130,17 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException("Korean localized names were not written correctly.");
     if (questItemLinks < 2 || hideoutItemLinks < 1)
         throw new InvalidDataException("Quest or hideout item links were not persisted correctly.");
-    if (protectedObjectiveIds != 2 || duplicateLocalizedDescriptions != 2)
+    if (protectedObjectiveIds != 2 || correctlyScopedObjectives != 2 || duplicateObjectiveIds != 0)
     {
         throw new InvalidDataException(
-            $"Localized objective IDs were corrupted: ids={protectedObjectiveIds}, localized={duplicateLocalizedDescriptions}.");
+            $"Globally duplicate objective IDs were not scoped correctly: " +
+            $"ids={protectedObjectiveIds}, scoped={correctlyScopedObjectives}, duplicates={duplicateObjectiveIds}.");
+    }
+    if (linkedObjectiveItems != 2 || duplicateLocalizedDescriptions != 2)
+    {
+        throw new InvalidDataException(
+            $"Localized objective relationships were corrupted: " +
+            $"links={linkedObjectiveItems}, localized={duplicateLocalizedDescriptions}.");
     }
     if (missingChildIds != 0)
         throw new InvalidDataException($"Rebuilt child rows contain {missingChildIds} missing primary keys.");
@@ -118,7 +151,9 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
-        $"objectiveIds={protectedObjectiveIds}, duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
+        $"objectiveIds={protectedObjectiveIds}, scopedObjectives={correctlyScopedObjectives}, " +
+        $"objectiveLinks={linkedObjectiveItems}, duplicateObjectiveIds={duplicateObjectiveIds}, " +
+        $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
 }
