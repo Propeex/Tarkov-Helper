@@ -61,4 +61,22 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Rebuild and validate tarkov_data.db
-        run: dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release
+        id: smoke
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release *> database-smoke.log
+          exit $LASTEXITCODE
+
+      - name: Upload database smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-smoke-log
+          path: database-smoke.log
+          if-no-files-found: error
+
+      - name: Fail if database smoke failed
+        if: steps.smoke.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
