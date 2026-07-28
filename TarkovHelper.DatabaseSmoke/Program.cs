@@ -35,7 +35,9 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     }
 
     var fixtureHandler = new FixtureTarkovApiHandler();
-    using var httpClient = new HttpClient(fixtureHandler)
+    using var httpClient = new HttpClient(
+        new TarkovJsonObjectiveIdProtectionHandler(
+            new ObjectiveIdCollisionFixtureHandler(fixtureHandler)))
     {
         Timeout = TimeSpan.FromMinutes(2)
     };
@@ -69,6 +71,16 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         "SELECT COUNT(*) FROM QuestRequiredItems q JOIN Items i ON q.ItemId = i.Id;");
     var hideoutItemLinks = await ScalarAsync(connection,
         "SELECT COUNT(*) FROM HideoutItemRequirements h JOIN Items i ON h.ItemId = i.BsgId;");
+    var protectedObjectiveIds = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestObjectives
+        WHERE Id IN ('fixture-objective-bolts', 'fixture-objective-bolts-alt');
+        """);
+    var duplicateLocalizedDescriptions = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestObjectives
+        WHERE DescriptionKO = '주사기 건네주기';
+        """);
     var missingChildIds = await ScalarAsync(connection, """
         SELECT
           (SELECT COUNT(*) FROM QuestRequirements WHERE Id IS NULL OR Id = '') +
@@ -90,8 +102,13 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
     if (koreanItems < 2 || koreanQuests < 2)
         throw new InvalidDataException("Korean localized names were not written correctly.");
-    if (questItemLinks < 1 || hideoutItemLinks < 1)
+    if (questItemLinks < 2 || hideoutItemLinks < 1)
         throw new InvalidDataException("Quest or hideout item links were not persisted correctly.");
+    if (protectedObjectiveIds != 2 || duplicateLocalizedDescriptions != 2)
+    {
+        throw new InvalidDataException(
+            $"Localized objective IDs were corrupted: ids={protectedObjectiveIds}, localized={duplicateLocalizedDescriptions}.");
+    }
     if (missingChildIds != 0)
         throw new InvalidDataException($"Rebuilt child rows contain {missingChildIds} missing primary keys.");
     if (invalidMaxLevels != 0)
@@ -101,6 +118,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
+        $"objectiveIds={protectedObjectiveIds}, duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
 }
