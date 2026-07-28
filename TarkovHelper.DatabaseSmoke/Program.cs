@@ -59,6 +59,22 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         "SELECT COUNT(*) FROM QuestRequiredItems q JOIN Items i ON q.ItemId = i.Id;");
     var hideoutItemLinks = await ScalarAsync(connection,
         "SELECT COUNT(*) FROM HideoutItemRequirements h JOIN Items i ON h.ItemId = i.BsgId;");
+    var missingChildIds = await ScalarAsync(connection, """
+        SELECT
+          (SELECT COUNT(*) FROM QuestRequirements WHERE Id IS NULL OR Id = '') +
+          (SELECT COUNT(*) FROM QuestRequiredItems WHERE Id IS NULL OR Id = '') +
+          (SELECT COUNT(*) FROM HideoutItemRequirements WHERE Id IS NULL OR Id = '') +
+          (SELECT COUNT(*) FROM HideoutStationRequirements WHERE Id IS NULL OR Id = '') +
+          (SELECT COUNT(*) FROM HideoutTraderRequirements WHERE Id IS NULL OR Id = '') +
+          (SELECT COUNT(*) FROM HideoutSkillRequirements WHERE Id IS NULL OR Id = '');
+        """);
+    var invalidMaxLevels = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM HideoutStations s
+        WHERE s.MaxLevel != COALESCE((
+            SELECT MAX(l.Level) FROM HideoutLevels l WHERE l.StationId = s.Id
+        ), 0);
+        """);
 
     if (result.ItemCount != 2 || result.QuestCount != 2 || result.HideoutStationCount != 1)
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
@@ -66,10 +82,15 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException("Korean localized names were not written correctly.");
     if (questItemLinks < 1 || hideoutItemLinks < 1)
         throw new InvalidDataException("Quest or hideout item links were not persisted correctly.");
+    if (missingChildIds != 0)
+        throw new InvalidDataException($"Rebuilt child rows contain {missingChildIds} missing primary keys.");
+    if (invalidMaxLevels != 0)
+        throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
 
     Console.WriteLine(
         $"Deterministic database smoke passed: items={result.ItemCount}, quests={result.QuestCount}, " +
-        $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}");
+        $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
+        $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
 }
 
