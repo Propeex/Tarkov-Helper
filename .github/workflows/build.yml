@@ -25,4 +25,22 @@ jobs:
         run: dotnet restore TarkovHelper.sln
 
       - name: Build
-        run: dotnet build TarkovHelper.sln --configuration Release --no-restore -clp:ErrorsOnly
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet build TarkovHelper.sln --configuration Release --no-restore -clp:ErrorsOnly *> build.log
+          exit $LASTEXITCODE
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: error
+
+      - name: Fail if build failed
+        if: steps.build.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
