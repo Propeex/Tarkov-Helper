@@ -157,6 +157,12 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
             Set(retainedRow, "Id", retainedId);
             Set(retainedRow, "QuestId", legacyQuestId);
+
+            // A legacy coordinate row can reference an item that no longer exists in
+            // the current API data set. Markers need only quest/map/coordinate data;
+            // retaining the stale item foreign key would reject the rebuilt database.
+            Set(retainedRow, "ItemId", null);
+
             objectiveRows.Add(retainedRow);
             preserved++;
         }
