@@ -165,9 +165,19 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
     private sealed class RowData : Dictionary<string, object?>
     {
-        public RowData() : base(StringComparer.OrdinalIgnoreCase) { }
+        public RowData() : base(StringComparer.OrdinalIgnoreCase)
+        {
+            // Child requirement tables use TEXT primary keys. Generate an ID for
+            // every new row; entity rows replace it with the stable API/database ID.
+            this["Id"] = Guid.NewGuid().ToString("N");
+        }
+
         public RowData(IDictionary<string, object?> source, IEqualityComparer<string> comparer)
-            : base(source, comparer) { }
+            : base(source, comparer)
+        {
+            if (!TryGetValue("Id", out var id) || id is null || string.IsNullOrWhiteSpace(id.ToString()))
+                this["Id"] = Guid.NewGuid().ToString("N");
+        }
     }
 
     private sealed record DatabaseCounts(
