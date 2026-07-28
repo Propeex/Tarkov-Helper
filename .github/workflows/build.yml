@@ -25,4 +25,4 @@ jobs:
         run: dotnet restore TarkovHelper.sln
 
       - name: Build
-        run: dotnet build TarkovHelper.sln --configuration Release --no-restore
+        run: dotnet build TarkovHelper.sln --configuration Release --no-restore -clp:ErrorsOnly
