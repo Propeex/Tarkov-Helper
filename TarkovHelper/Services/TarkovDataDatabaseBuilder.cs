@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -18,7 +19,8 @@ namespace TarkovHelper.Services;
 internal sealed partial class TarkovDataDatabaseBuilder
 {
     private const string ApiUrl = "https://api.tarkov.dev/graphql";
-    private const int PageSize = 500;
+    private const int PageSize = 200;
+    private const int MaxApiAttempts = 6;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -266,17 +268,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 variables = new { limit = PageSize, offset }
             });
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, ApiUrl)
-            {
-                Content = new StringContent(payload, Encoding.UTF8, "application/json")
-            };
-
-            using var response = await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-            response.EnsureSuccessStatusCode();
-
+            using var response = await SendGraphQlAsync(payload, label, cancellationToken);
             await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
             await using var memory = new MemoryStream();
             var totalBytes = response.Content.Headers.ContentLength;
@@ -326,6 +318,88 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
         Report("API", $"{label} {result.Count:N0}개 수신 완료", phaseEnd, result.Count, result.Count);
         return result;
+    }
+
+    private async Task<HttpResponseMessage> SendGraphQlAsync(
+        string payload,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastException = null;
+
+        for (var attempt = 1; attempt <= MaxApiAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, ApiUrl)
+                {
+                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
+                };
+
+                var response = await _httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
+
+                if (response.IsSuccessStatusCode)
+                    return response;
+
+                var retryable = response.StatusCode == HttpStatusCode.TooManyRequests ||
+                                (int)response.StatusCode >= 500;
+                if (!retryable || attempt == MaxApiAttempts)
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                    var status = $"{(int)response.StatusCode} {response.ReasonPhrase}";
+                    response.Dispose();
+                    throw new HttpRequestException(
+                        $"tarkov.dev 요청 실패 ({status}): {TrimError(errorBody)}",
+                        null,
+                        response.StatusCode);
+                }
+
+                var delay = GetRetryDelay(response, attempt);
+                response.Dispose();
+                Report("API", $"{label} 서버 응답 지연 - {delay.TotalSeconds:F0}초 후 재시도 ({attempt}/{MaxApiAttempts})", _lastPercent, 0, null);
+                await Task.Delay(delay, cancellationToken);
+            }
+            catch (HttpRequestException exception) when (attempt < MaxApiAttempts)
+            {
+                lastException = exception;
+                var delay = TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, attempt)));
+                Report("API", $"{label} 네트워크 재시도 - {delay.TotalSeconds:F0}초 후 재시도 ({attempt}/{MaxApiAttempts})", _lastPercent, 0, null);
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+
+        throw new HttpRequestException(
+            "tarkov.dev API 요청이 반복적으로 실패했습니다.",
+            lastException);
+    }
+
+    private static TimeSpan GetRetryDelay(HttpResponseMessage response, int attempt)
+    {
+        if (response.Headers.RetryAfter?.Delta is { } delta && delta > TimeSpan.Zero)
+            return delta > TimeSpan.FromMinutes(2) ? TimeSpan.FromMinutes(2) : delta;
+
+        if (response.Headers.RetryAfter?.Date is { } retryDate)
+        {
+            var calculated = retryDate - DateTimeOffset.UtcNow;
+            if (calculated > TimeSpan.Zero)
+                return calculated > TimeSpan.FromMinutes(2) ? TimeSpan.FromMinutes(2) : calculated;
+        }
+
+        return TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, attempt)));
+    }
+
+    private static string TrimError(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "응답 본문 없음";
+
+        value = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return value.Length <= 300 ? value : value[..300] + "…";
     }
 
     private static double PageProgress(int completedPages)
