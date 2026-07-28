@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
@@ -17,6 +18,8 @@ return await RunDeterministicDatabaseSmokeAsync();
 static async Task<int> RunDeterministicDatabaseSmokeAsync()
 {
     var databasePath = Path.Combine(AppContext.BaseDirectory, "Assets", "tarkov_data.db");
+
+    await RunOutageHandlingSmokeAsync(databasePath);
 
     // The deterministic fixture intentionally contains only two quests. Remove
     // legacy alternative-quest rows from the copied production DB so this test
@@ -150,6 +153,70 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
+}
+
+static async Task RunOutageHandlingSmokeAsync(string databasePath)
+{
+    var outageHandler = new TarkovApiOutageFixtureHandler();
+    using var httpClient = new HttpClient(
+        new TarkovJsonObjectiveIdProtectionHandler(outageHandler))
+    {
+        Timeout = TimeSpan.FromMinutes(1)
+    };
+
+    var progressMessages = new List<string>();
+    var builder = new TarkovDataDatabaseBuilder(
+        httpClient,
+        progress => progressMessages.Add(progress.ToDisplayText()));
+
+    var stopwatch = Stopwatch.StartNew();
+    string? failureMessage = null;
+
+    try
+    {
+        await builder.BuildPreferredAsync(databasePath);
+    }
+    catch (InvalidOperationException exception)
+    {
+        failureMessage = exception.Message;
+    }
+
+    stopwatch.Stop();
+
+    if (failureMessage == null ||
+        !failureMessage.Contains("정적 JSON API와 GraphQL API가 모두 응답하지 않았습니다", StringComparison.Ordinal))
+    {
+        throw new InvalidDataException(
+            $"Outage fixture did not return the expected combined API error: {failureMessage ?? "no error"}");
+    }
+
+    if (outageHandler.StaticRequestCount != 1 || outageHandler.GraphQlRequestCount != 1)
+    {
+        throw new InvalidDataException(
+            $"Outage handling retried unavailable endpoints: static={outageHandler.StaticRequestCount}, " +
+            $"graphql={outageHandler.GraphQlRequestCount}.");
+    }
+
+    if (stopwatch.Elapsed > TimeSpan.FromSeconds(5))
+        throw new InvalidDataException($"Outage handling was too slow: {stopwatch.Elapsed}.");
+
+    var misleadingEta = new DatabaseBuildProgress(
+        "API",
+        "서버 응답 확인 중",
+        1,
+        0,
+        null,
+        TimeSpan.FromMinutes(2),
+        TimeSpan.FromHours(3)).ToDisplayText();
+    if (misleadingEta.Contains("예상", StringComparison.Ordinal))
+        throw new InvalidDataException($"API progress still exposes a misleading ETA: {misleadingEta}");
+
+    if (File.Exists(databasePath + ".rebuild.tmp"))
+        throw new InvalidDataException("Outage handling left a temporary database behind.");
+
+    Console.WriteLine(
+        $"Outage handling smoke passed: elapsed={stopwatch.Elapsed.TotalMilliseconds:F0}ms, " +
+        $"static={outageHandler.StaticRequestCount}, graphql={outageHandler.GraphQlRequestCount}, etaHidden=true");
 }
 
 static async Task<int> RunExternalApiSmokeAsync()
