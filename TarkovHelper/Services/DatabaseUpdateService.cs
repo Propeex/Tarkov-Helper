@@ -2,6 +2,7 @@ using System.IO;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Services.Logging;
 
@@ -21,6 +22,8 @@ public sealed class DatabaseUpdateService : IDisposable
     private const string LocalVersionFile = "db_version.txt";
     private const string DatabaseFile = "tarkov_data.db";
     private const string ProgressBarTag = "ApiDatabaseUpdateProgress";
+    private const double ProgressAreaMaxWidth = 340;
+    private const double ProgressBarMaxWidth = 320;
 
     private readonly string _assetsPath;
     private readonly string _databasePath;
@@ -47,12 +50,14 @@ public sealed class DatabaseUpdateService : IDisposable
         _databasePath = Path.Combine(_assetsPath, DatabaseFile);
         _versionFilePath = Path.Combine(_assetsPath, LocalVersionFile);
 
-        _httpClient = new HttpClient
+        _httpClient = new HttpClient(
+            new TarkovJsonObjectiveIdProtectionHandler(new HttpClientHandler()))
         {
             Timeout = TimeSpan.FromMinutes(15)
         };
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("TarkovHelper/1.5.7 database-builder");
 
+        EnsureUiResources();
         LoadLocalVersion();
     }
 
@@ -93,6 +98,7 @@ public sealed class DatabaseUpdateService : IDisposable
     public async Task<UpdateCheckResult> CheckAndUpdateAsync()
     {
         ThrowIfDisposed();
+        EnsureUiResources();
 
         if (!await _buildGate.WaitAsync(0))
             return new UpdateCheckResult(false, false, "데이터베이스 생성이 이미 진행 중입니다.");
@@ -148,6 +154,7 @@ public sealed class DatabaseUpdateService : IDisposable
         {
             const string message = "데이터베이스 생성이 취소되었습니다. 기존 데이터베이스는 유지됩니다.";
             _log.Warning(message);
+            EnsureUiResources();
             UpdateUiStatus(message, 0, false);
             var result = new UpdateCheckResult(false, false, message);
             UpdateCheckCompleted?.Invoke(this, result);
@@ -157,6 +164,7 @@ public sealed class DatabaseUpdateService : IDisposable
         {
             _log.Error("Database rebuild failed", exception);
             var message = $"데이터베이스 생성 실패: {exception.Message} 기존 데이터베이스는 유지됩니다.";
+            EnsureUiResources();
             UpdateUiStatus(message, 0, false);
             var result = new UpdateCheckResult(false, false, message);
             UpdateCheckCompleted?.Invoke(this, result);
@@ -187,8 +195,8 @@ public sealed class DatabaseUpdateService : IDisposable
 
     /// <summary>
     /// Reflows the existing settings status area vertically so long messages
-    /// wrap instead of being clipped, and adds a progress bar without requiring
-    /// a large MainWindow code-behind dependency.
+    /// wrap instead of being clipped, and adds a bounded progress bar without
+    /// requiring a large MainWindow code-behind dependency.
     /// </summary>
     private static void UpdateUiStatus(
         string text,
@@ -206,15 +214,17 @@ public sealed class DatabaseUpdateService : IDisposable
 
             statusText.Text = text;
             statusText.TextWrapping = TextWrapping.Wrap;
-            statusText.HorizontalAlignment = HorizontalAlignment.Stretch;
+            statusText.HorizontalAlignment = HorizontalAlignment.Left;
             statusText.VerticalAlignment = VerticalAlignment.Center;
             statusText.Margin = new Thickness(0, 8, 0, 4);
+            statusText.MaxWidth = ProgressAreaMaxWidth;
             statusText.ToolTip = text;
 
             if (statusText.Parent is StackPanel statusPanel)
             {
                 statusPanel.Orientation = Orientation.Vertical;
-                statusPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+                statusPanel.HorizontalAlignment = HorizontalAlignment.Left;
+                statusPanel.MaxWidth = ProgressAreaMaxWidth;
 
                 var progressBar = statusPanel.Children
                     .OfType<ProgressBar>()
@@ -229,11 +239,15 @@ public sealed class DatabaseUpdateService : IDisposable
                         Maximum = 100,
                         Height = 10,
                         Margin = new Thickness(0, 4, 0, 8),
-                        HorizontalAlignment = HorizontalAlignment.Stretch
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        MaxWidth = ProgressBarMaxWidth,
+                        Width = ProgressBarMaxWidth
                     };
                     statusPanel.Children.Add(progressBar);
                 }
 
+                progressBar.MaxWidth = ProgressBarMaxWidth;
+                progressBar.Width = ProgressBarMaxWidth;
                 progressBar.IsIndeterminate = isActive && !percent.HasValue;
                 if (percent.HasValue)
                     progressBar.Value = Math.Clamp(percent.Value, 0, 100);
@@ -247,6 +261,28 @@ public sealed class DatabaseUpdateService : IDisposable
                 updateButton.IsEnabled = !isActive;
             }
         });
+    }
+
+    private static void EnsureUiResources()
+    {
+        var application = Application.Current;
+        if (application == null)
+            return;
+
+        void Ensure()
+        {
+            if (application.Resources.Contains("ErrorBrush"))
+                return;
+
+            var brush = new SolidColorBrush(Color.FromRgb(0xEF, 0x53, 0x50));
+            brush.Freeze();
+            application.Resources["ErrorBrush"] = brush;
+        }
+
+        if (application.Dispatcher.CheckAccess())
+            Ensure();
+        else
+            application.Dispatcher.Invoke(Ensure);
     }
 
     private static void SetUpdateButtonEnabled(bool enabled)
