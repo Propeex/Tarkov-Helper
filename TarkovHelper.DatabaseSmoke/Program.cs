@@ -79,7 +79,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     var duplicateLocalizedDescriptions = await ScalarAsync(connection, """
         SELECT COUNT(*)
         FROM QuestObjectives
-        WHERE DescriptionKO = '주사기 건네주기';
+        WHERE Description = '주사기 건네주기';
         """);
     var missingChildIds = await ScalarAsync(connection, """
         SELECT
