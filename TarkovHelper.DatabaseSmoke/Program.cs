@@ -74,6 +74,21 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         "SELECT COUNT(*) FROM QuestRequiredItems q JOIN Items i ON q.ItemId = i.Id;");
     var hideoutItemLinks = await ScalarAsync(connection,
         "SELECT COUNT(*) FROM HideoutItemRequirements h JOIN Items i ON h.ItemId = i.BsgId;");
+    var iconLinks = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM Items
+        WHERE IconUrl LIKE 'http://%' OR IconUrl LIKE 'https://%';
+        """);
+    var restrictedNeutralQuests = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM Quests
+        WHERE LOWER(TRIM(COALESCE(Faction, ''))) IN ('any', 'any target', 'all', 'both', 'pmc');
+        """);
+    var sellItemRequirements = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequiredItems
+        WHERE LOWER(COALESCE(RequirementType, '')) = 'sellitem';
+        """);
     var protectedObjectiveIds = await ScalarAsync(connection, $"""
         SELECT COUNT(*)
         FROM QuestObjectives
@@ -128,6 +143,12 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException("Korean localized names were not written correctly.");
     if (questItemLinks < 2 || hideoutItemLinks < 1)
         throw new InvalidDataException("Quest or hideout item links were not persisted correctly.");
+    if (iconLinks != result.ItemCount)
+        throw new InvalidDataException($"Item icon URLs were not persisted: {iconLinks}/{result.ItemCount}.");
+    if (restrictedNeutralQuests != 0)
+        throw new InvalidDataException($"Neutral quests still contain a faction restriction: {restrictedNeutralQuests}.");
+    if (sellItemRequirements != 0)
+        throw new InvalidDataException($"Sell catalogues leaked into quest item requirements: {sellItemRequirements}.");
     if (protectedObjectiveIds != 2 || correctlyScopedObjectives != 2 || duplicateObjectiveIds != 0)
     {
         throw new InvalidDataException(
@@ -148,6 +169,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
+        $"iconLinks={iconLinks}, neutralRestrictions={restrictedNeutralQuests}, sellItemRows={sellItemRequirements}, " +
         $"objectiveIds={protectedObjectiveIds}, scopedObjectives={correctlyScopedObjectives}, " +
         $"duplicateObjectiveIds={duplicateObjectiveIds}, " +
         $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
