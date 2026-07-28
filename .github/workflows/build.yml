@@ -44,3 +44,21 @@ jobs:
         if: steps.build.outcome == 'failure'
         shell: pwsh
         run: exit 1
+
+  database-smoke:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Rebuild and validate tarkov_data.db
+        run: dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release
