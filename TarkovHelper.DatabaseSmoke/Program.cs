@@ -56,6 +56,38 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     if (fixtureHandler.GraphQlRequestCount != 0)
         throw new InvalidDataException("The deterministic static JSON test unexpectedly used GraphQL fallback.");
 
+    // Real tarkov.dev data contains distinct quests with the same English title
+    // (for example Battery Change). Reproduce that condition after the builder
+    // succeeds and verify that the application DB loader keeps both quests.
+    await ForceDuplicateQuestNamesAsync(databasePath);
+    var questLoaderSucceeded = await QuestDbService.Instance.LoadQuestsAsync();
+    var loadedQuests = QuestDbService.Instance.AllQuests.ToList();
+    var uniqueQuestKeys = loadedQuests
+        .Select(quest => quest.NormalizedName)
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Count();
+    var disambiguatedQuestKeys = loadedQuests.Count(quest =>
+        quest.NormalizedName?.StartsWith("duplicate-fixture-quest--", StringComparison.OrdinalIgnoreCase) == true);
+
+    if (!questLoaderSucceeded || loadedQuests.Count != result.QuestCount)
+    {
+        throw new InvalidDataException(
+            $"QuestDbService failed to load duplicate-name quests: success={questLoaderSucceeded}, " +
+            $"loaded={loadedQuests.Count}, expected={result.QuestCount}.");
+    }
+    if (uniqueQuestKeys != result.QuestCount || disambiguatedQuestKeys != 1)
+    {
+        throw new InvalidDataException(
+            $"Duplicate quest names were not assigned stable unique keys: " +
+            $"unique={uniqueQuestKeys}, disambiguated={disambiguatedQuestKeys}.");
+    }
+    if (QuestDbService.Instance.GetQuestById("fixture-quest-first") == null ||
+        QuestDbService.Instance.GetQuestById("fixture-quest-second") == null)
+    {
+        throw new InvalidDataException("Quest ID lookup lost one of the duplicate-name quests.");
+    }
+
     var connectionString = new SqliteConnectionStringBuilder
     {
         DataSource = databasePath,
@@ -88,6 +120,15 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         SELECT COUNT(*)
         FROM QuestRequiredItems
         WHERE LOWER(COALESCE(RequirementType, '')) = 'sellitem';
+        """);
+    var duplicateDisplayNames = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM (
+            SELECT LOWER(Name)
+            FROM Quests
+            GROUP BY LOWER(Name)
+            HAVING COUNT(*) > 1
+        );
         """);
     var protectedObjectiveIds = await ScalarAsync(connection, $"""
         SELECT COUNT(*)
@@ -149,6 +190,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Neutral quests still contain a faction restriction: {restrictedNeutralQuests}.");
     if (sellItemRequirements != 0)
         throw new InvalidDataException($"Sell catalogues leaked into quest item requirements: {sellItemRequirements}.");
+    if (duplicateDisplayNames != 1)
+        throw new InvalidDataException($"Duplicate-name loader fixture was not created: groups={duplicateDisplayNames}.");
     if (protectedObjectiveIds != 2 || correctlyScopedObjectives != 2 || duplicateObjectiveIds != 0)
     {
         throw new InvalidDataException(
@@ -170,11 +213,36 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"iconLinks={iconLinks}, neutralRestrictions={restrictedNeutralQuests}, sellItemRows={sellItemRequirements}, " +
+        $"duplicateDisplayNames={duplicateDisplayNames}, questLoader={loadedQuests.Count}, " +
+        $"uniqueQuestKeys={uniqueQuestKeys}, disambiguatedQuestKeys={disambiguatedQuestKeys}, " +
         $"objectiveIds={protectedObjectiveIds}, scopedObjectives={correctlyScopedObjectives}, " +
         $"duplicateObjectiveIds={duplicateObjectiveIds}, " +
         $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
+}
+
+static async Task ForceDuplicateQuestNamesAsync(string databasePath)
+{
+    var connectionString = new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath,
+        Mode = SqliteOpenMode.ReadWrite,
+        Pooling = false
+    }.ConnectionString;
+
+    await using var connection = new SqliteConnection(connectionString);
+    await connection.OpenAsync();
+    await using var command = connection.CreateCommand();
+    command.CommandText = """
+        UPDATE Quests
+        SET Name = 'Duplicate Fixture Quest',
+            NameEN = 'Duplicate Fixture Quest'
+        WHERE BsgId IN ('fixture-quest-first', 'fixture-quest-second');
+        """;
+    var changed = await command.ExecuteNonQueryAsync();
+    if (changed != 2)
+        throw new InvalidDataException($"Could not create duplicate quest-name fixture: changed={changed}.");
 }
 
 static async Task RunOutageHandlingSmokeAsync(string databasePath)
