@@ -9,6 +9,12 @@ namespace TarkovHelper.Services;
 /// files are applied. Objective descriptions use their objective ID as the
 /// translation key, so translating every matching JSON string would otherwise
 /// replace both the description and the ID with the localized sentence.
+///
+/// The static data can also reuse an objective ID in more than one quest even
+/// though the local QuestObjectives table requires IDs to be globally unique.
+/// Repeated IDs therefore receive a deterministic quest-scoped suffix before
+/// localization is applied. The first occurrence keeps its original ID so any
+/// existing hand-maintained objective data can still be reused where possible.
 /// </summary>
 internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
 {
@@ -81,13 +87,16 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
             if (root["data"]?["tasks"] is not JsonObject tasks)
                 return;
 
+            // QuestObjectives.Id is globally unique in SQLite, so the used-ID set
+            // must span every quest rather than being reset for each individual quest.
+            var usedCanonicalIds = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var (taskKey, taskNode) in tasks)
             {
                 if (taskNode is not JsonObject task || task["objectives"] is not JsonArray objectives)
                     continue;
 
                 var taskId = ReadString(task["id"]) ?? taskKey;
-                var seenIds = new HashSet<string>(StringComparer.Ordinal);
 
                 for (var index = 0; index < objectives.Count; index++)
                 {
@@ -95,12 +104,14 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
                         continue;
 
                     var originalId = ReadString(objective["id"]);
-                    var canonicalId = string.IsNullOrWhiteSpace(originalId)
+                    var baseId = string.IsNullOrWhiteSpace(originalId)
                         ? $"{taskId}:objective:{index}"
                         : originalId;
-
-                    if (!seenIds.Add(canonicalId))
-                        canonicalId = $"{canonicalId}:duplicate:{index}";
+                    var canonicalId = ReserveCanonicalId(
+                        baseId,
+                        taskId,
+                        index,
+                        usedCanonicalIds);
 
                     var protectedId = ProtectedPrefix + canonicalId;
                     _protectedIds[protectedId] = canonicalId;
@@ -108,6 +119,28 @@ internal sealed class TarkovJsonObjectiveIdProtectionHandler : DelegatingHandler
                 }
             }
         }
+    }
+
+    private static string ReserveCanonicalId(
+        string baseId,
+        string taskId,
+        int objectiveIndex,
+        ISet<string> usedIds)
+    {
+        if (usedIds.Add(baseId))
+            return baseId;
+
+        var scopedBase = $"{baseId}:task:{taskId}:objective:{objectiveIndex}";
+        var candidate = scopedBase;
+        var duplicateIndex = 2;
+
+        while (!usedIds.Add(candidate))
+        {
+            candidate = $"{scopedBase}:duplicate:{duplicateIndex}";
+            duplicateIndex++;
+        }
+
+        return candidate;
     }
 
     private void AddRestorationTranslations(JsonObject root)
