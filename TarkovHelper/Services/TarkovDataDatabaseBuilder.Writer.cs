@@ -144,6 +144,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 if (!HasValue(row, "GroupId"))
                     Set(row, "GroupId", 0);
                 Set(row, "SortOrder", index);
+                Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                 questRequirementRows.Add(row);
             }
 
@@ -169,6 +170,18 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 Set(row, "ObjectiveType", objective.Type);
                 Set(row, "Optional", objective.Optional ? 1 : 0);
                 Set(row, "SortOrder", index);
+                Set(row, "TargetCount", objective.Count);
+                Set(row, "RequiresFIR", objective.FoundInRaid == true ? 1 : 0);
+                Set(row, "DogtagMinLevel", objective.DogTagLevel);
+                Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+
+                var primaryObjectiveItem = objective.Items.FirstOrDefault();
+                if (primaryObjectiveItem != null && itemIdByApiId.TryGetValue(primaryObjectiveItem.Id, out var primaryItemId))
+                {
+                    Set(row, "ItemId", primaryItemId);
+                    Set(row, "ItemName", Fallback(objectiveKo?.Items.FirstOrDefault(item => item.Id == primaryObjectiveItem.Id)?.Name, primaryObjectiveItem.Name, primaryObjectiveItem.Id));
+                }
+
                 questObjectiveRows.Add(row);
 
                 if (!string.Equals(objective.Type, "item", StringComparison.OrdinalIgnoreCase) &&
@@ -191,13 +204,14 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(itemRow, "QuestId", questId);
                     Set(itemRow, "ObjectiveId", objectiveId);
                     Set(itemRow, "ItemId", itemId);
-                    Set(itemRow, "ItemName", Fallback(requiredItem.Name, requiredItem.Id));
+                    Set(itemRow, "ItemName", Fallback(requiredItemKo?.Name, requiredItem.Name, requiredItem.Id));
                     Set(itemRow, "ItemNameKO", Fallback(requiredItemKo?.Name, requiredItem.Name, requiredItem.Id));
                     Set(itemRow, "Count", Math.Max(1, objective.Count ?? 1));
                     Set(itemRow, "RequiresFIR", objective.FoundInRaid == true ? 1 : 0);
                     Set(itemRow, "RequirementType", objective.Type);
                     Set(itemRow, "DogtagMinLevel", objective.DogTagLevel);
                     Set(itemRow, "SortOrder", index);
+                    Set(itemRow, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     questRequiredItemRows.Add(itemRow);
                 }
             }
@@ -222,6 +236,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
             PreserveOrSet(stationRow, "NameJA", old, null);
             Set(stationRow, "NormalizedName", Fallback(station.NormalizedName, Normalize(station.Name), station.Id));
             Set(stationRow, "ImageLink", station.ImageLink);
+            Set(stationRow, "MaxLevel", station.Levels.Count == 0 ? 0 : station.Levels.Max(level => level.Level));
+            Set(stationRow, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             hideoutStationRows.Add(stationRow);
 
             var koLevels = localized.Korean?.Levels.ToDictionary(level => level.Level)
@@ -235,6 +251,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 Set(levelRow, "StationId", station.Id);
                 Set(levelRow, "Level", level.Level);
                 Set(levelRow, "ConstructionTime", level.ConstructionTime);
+                Set(levelRow, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                 hideoutLevelRows.Add(levelRow);
 
                 var koItemRequirements = levelKo?.ItemRequirements
@@ -242,8 +259,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     .ToDictionary(requirement => requirement.Item!.Id, StringComparer.OrdinalIgnoreCase)
                     ?? new Dictionary<string, ApiHideoutItemRequirement>(StringComparer.OrdinalIgnoreCase);
 
-                foreach (var requirement in level.ItemRequirements)
+                for (var itemIndex = 0; itemIndex < level.ItemRequirements.Count; itemIndex++)
                 {
+                    var requirement = level.ItemRequirements[itemIndex];
                     if (requirement.Item?.Id is not { Length: > 0 } apiItemId ||
                         !itemIdByApiId.ContainsKey(apiItemId))
                         continue;
@@ -259,11 +277,14 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(row, "IconLink", requirement.Item.IconLink);
                     Set(row, "Count", Math.Max(1, requirement.Count ?? requirement.Quantity ?? 1));
                     Set(row, "FoundInRaid", 0);
+                    Set(row, "SortOrder", itemIndex);
+                    Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     hideoutItemRows.Add(row);
                 }
 
-                foreach (var requirement in level.StationLevelRequirements)
+                for (var stationIndex = 0; stationIndex < level.StationLevelRequirements.Count; stationIndex++)
                 {
+                    var requirement = level.StationLevelRequirements[stationIndex];
                     if (requirement.Station?.Id is not { Length: > 0 } requiredStationId)
                         continue;
 
@@ -271,7 +292,12 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(row, "StationId", station.Id);
                     Set(row, "Level", level.Level);
                     Set(row, "RequiredStationId", requiredStationId);
+                    Set(row, "RequiredStationName", Fallback(requirement.Station.Name, requiredStationId));
+                    Set(row, "RequiredStationNameKO", levelKo?.StationLevelRequirements.FirstOrDefault(value => value.Station?.Id == requiredStationId)?.Station?.Name);
+                    Set(row, "RequiredStationNameJA", null);
                     Set(row, "RequiredLevel", requirement.Level);
+                    Set(row, "SortOrder", stationIndex);
+                    Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     hideoutStationRequirementRows.Add(row);
                 }
 
@@ -280,8 +306,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     .ToDictionary(requirement => requirement.Trader!.Id, StringComparer.OrdinalIgnoreCase)
                     ?? new Dictionary<string, ApiTraderRequirement>(StringComparer.OrdinalIgnoreCase);
 
-                foreach (var requirement in level.TraderRequirements)
+                for (var traderIndex = 0; traderIndex < level.TraderRequirements.Count; traderIndex++)
                 {
+                    var requirement = level.TraderRequirements[traderIndex];
                     if (requirement.Trader?.Id is not { Length: > 0 } traderId)
                         continue;
 
@@ -294,6 +321,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(row, "TraderNameKO", Fallback(requirementKo?.Trader?.Name, requirement.Trader.Name, traderId));
                     Set(row, "TraderNameJA", null);
                     Set(row, "RequiredLevel", requirement.Value ?? requirement.Level ?? 0);
+                    Set(row, "SortOrder", traderIndex);
+                    Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     hideoutTraderRequirementRows.Add(row);
                 }
 
@@ -302,8 +331,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     .ToDictionary(requirement => requirement.Skill?.Id ?? requirement.Name!, StringComparer.OrdinalIgnoreCase)
                     ?? new Dictionary<string, ApiSkillRequirement>(StringComparer.OrdinalIgnoreCase);
 
-                foreach (var requirement in level.SkillRequirements)
+                for (var skillIndex = 0; skillIndex < level.SkillRequirements.Count; skillIndex++)
                 {
+                    var requirement = level.SkillRequirements[skillIndex];
                     var skillKey = requirement.Skill?.Id ?? requirement.Name;
                     if (string.IsNullOrWhiteSpace(skillKey))
                         continue;
@@ -317,6 +347,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(row, "SkillNameKO", Fallback(requirementKo?.Skill?.Name, requirementKo?.Name, requirement.Skill?.Name, requirement.Name, skillKey));
                     Set(row, "SkillNameJA", null);
                     Set(row, "RequiredLevel", requirement.Level);
+                    Set(row, "SortOrder", skillIndex);
+                    Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     hideoutSkillRequirementRows.Add(row);
                 }
             }
