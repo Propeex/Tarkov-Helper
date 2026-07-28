@@ -30,6 +30,13 @@ jobs:
         shell: pwsh
         run: |
           dotnet build TarkovHelper.sln --configuration Release --no-restore -clp:ErrorsOnly *> build.log
+          $buildExit = $LASTEXITCODE
+          if ($buildExit -ne 0) {
+            exit $buildExit
+          }
+
+          $env:TARKOV_ICON_SELF_TEST = "1"
+          dotnet run --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj --configuration Release --no-build *>> build.log
           exit $LASTEXITCODE
 
       - name: Upload build log
