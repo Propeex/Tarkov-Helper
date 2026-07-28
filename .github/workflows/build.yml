@@ -88,3 +88,47 @@ jobs:
         if: steps.smoke.outcome == 'failure'
         shell: pwsh
         run: exit 1
+
+  database-external-smoke:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Rebuild from live tarkov.dev data
+        id: external
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release -- --external *> database-external-smoke.log
+          exit $LASTEXITCODE
+
+      - name: Upload external smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-external-smoke-log
+          path: database-external-smoke.log
+          if-no-files-found: error
+
+      - name: Upload externally rebuilt database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-external-smoke-db
+          path: TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
+          if-no-files-found: warn
+
+      - name: Fail if external database smoke failed
+        if: steps.external.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
