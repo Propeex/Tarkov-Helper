@@ -27,13 +27,25 @@ internal sealed partial class TarkovDataDatabaseBuilder
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadOnly,
+            Mode = SqliteOpenMode.ReadWrite,
             Pooling = false,
             DefaultTimeout = 60
         }.ConnectionString;
 
         await using var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
+
+        var removedOptionalQuestRows = await PruneDanglingOptionalQuestsAsync(connection, cancellationToken);
+        if (removedOptionalQuestRows > 0)
+        {
+            Log.Warning($"존재하지 않는 퀘스트를 참조하던 선택 퀘스트 연결 {removedOptionalQuestRows}개를 정리했습니다.");
+            Report(
+                "검증",
+                $"구버전 선택 퀘스트 연결 {removedOptionalQuestRows}개 정리",
+                94,
+                counts.TotalRows,
+                counts.TotalRows);
+        }
 
         var integrity = await ExecuteScalarStringAsync(connection, "PRAGMA integrity_check;", cancellationToken);
         if (!string.Equals(integrity, "ok", StringComparison.OrdinalIgnoreCase))
@@ -77,11 +89,56 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (missingQuestReferences != 0)
             throw new InvalidDataException($"선행 퀘스트 연결 실패: {missingQuestReferences}개");
 
-        var foreignKeyIssues = await CountRowsAsync(connection, "PRAGMA foreign_key_check;", cancellationToken);
-        if (foreignKeyIssues != 0)
-            throw new InvalidDataException($"외래 키 검사 실패: {foreignKeyIssues}개");
+        var foreignKeyIssues = await ReadForeignKeyIssuesAsync(connection, cancellationToken);
+        if (foreignKeyIssues.Count != 0)
+        {
+            throw new InvalidDataException(
+                $"외래 키 검사 실패: {foreignKeyIssues.Count}개 · " +
+                string.Join("; ", foreignKeyIssues.Take(12)));
+        }
 
         Report("검증", "아이템·퀘스트·은신처 연결 검증 완료", 98, counts.TotalRows, counts.TotalRows);
+    }
+
+    private static async Task<int> PruneDanglingOptionalQuestsAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "OptionalQuests", cancellationToken))
+            return 0;
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM OptionalQuests
+            WHERE NOT EXISTS (
+                      SELECT 1 FROM Quests q WHERE q.Id = OptionalQuests.QuestId
+                  )
+               OR NOT EXISTS (
+                      SELECT 1 FROM Quests q WHERE q.Id = OptionalQuests.AlternativeQuestId
+                  );
+            """;
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<List<string>> ReadForeignKeyIssuesAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var issues = new List<string>();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA foreign_key_check;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var table = reader.IsDBNull(0) ? "?" : reader.GetString(0);
+            var rowId = reader.IsDBNull(1) ? "?" : reader.GetValue(1)?.ToString() ?? "?";
+            var parent = reader.IsDBNull(2) ? "?" : reader.GetString(2);
+            var foreignKeyId = reader.IsDBNull(3) ? "?" : reader.GetValue(3)?.ToString() ?? "?";
+            issues.Add($"{table}(rowid={rowId}) → {parent}(fk={foreignKeyId})");
+        }
+
+        return issues;
     }
 
     private static async Task<TableSnapshot> ReadSnapshotAsync(
@@ -134,6 +191,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
             if (keyParts.Length == 0)
                 continue;
 
+            // Store an entry for each single key as well as the composite key.
             foreach (var keyPart in keyParts)
                 result.TryAdd(keyPart!, row);
             result.TryAdd(BuildCompositeKey(keyParts), row);
