@@ -6,12 +6,15 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <AssemblyName>TarkovHelper_JH</AssemblyName>
+    <Product>타르코프헬퍼_JH</Product>
+    <Title>타르코프헬퍼_JH</Title>
+    <Description>Escape from Tarkov PVP 진행도·아이템·은신처 관리 도우미</Description>
     <!-- Version Info for Auto-Update -->
-    <Version>1.5.7</Version>
-    <AssemblyVersion>1.5.7</AssemblyVersion>
-    <FileVersion>1.5.7</FileVersion>
+    <Version>1.6.0</Version>
+    <AssemblyVersion>1.6.0.0</AssemblyVersion>
+    <FileVersion>1.6.0.0</FileVersion>
     <ApplicationIcon>1764579946.ico</ApplicationIcon>
-    <!-- AutoUpdater.NET ?????????????????????????????????????????????????????????????????????(ko?????) -->
     <SatelliteResourceLanguages>ko</SatelliteResourceLanguages>
     <!-- Run as Administrator -->
     <ApplicationManifest>app.manifest</ApplicationManifest>

@@ -7,127 +7,109 @@ using TarkovHelper.Windows.Dialogs;
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// 오버레이 미니맵 서비스 - 오버레이 윈도우 생명주기 및 설정 관리
+/// 오버레이 미니맵 창의 초기화, 표시 상태와 설정 저장을 관리합니다.
 /// </summary>
-public class OverlayMiniMapService : IDisposable
+public sealed class OverlayMiniMapService : IDisposable
 {
     private static readonly ILogger _log = Log.For<OverlayMiniMapService>();
+    private static readonly object InstanceLock = new();
     private static OverlayMiniMapService? _instance;
-    private static readonly object _lock = new();
 
     public static OverlayMiniMapService Instance
     {
         get
         {
-            if (_instance == null)
+            if (_instance != null)
+                return _instance;
+
+            lock (InstanceLock)
             {
-                lock (_lock)
-                {
-                    _instance ??= new OverlayMiniMapService();
-                }
+                return _instance ??= new OverlayMiniMapService();
             }
-            return _instance;
         }
     }
 
+    private const string SettingsKey = "overlayMiniMap.settings";
+
+    private readonly UserDataDbService _userDataDb = UserDataDbService.Instance;
+    private readonly SemaphoreSlim _initializeGate = new(1, 1);
+    private readonly object _settingsSaveLock = new();
+
     private OverlayMiniMapWindow? _overlayWindow;
-    private OverlayMiniMapSettings _settings;
+    private OverlaySettingsWindow? _settingsWindow;
+    private OverlayMiniMapSettings _settings = new();
+    private Task _settingsSaveTask = Task.CompletedTask;
     private bool _isInitialized;
+    private bool _disposed;
 
-    /// <summary>
-    /// 오버레이 표시 상태 변경 이벤트
-    /// </summary>
     public event Action<bool>? OverlayVisibilityChanged;
-
-    /// <summary>
-    /// 설정 변경 이벤트
-    /// </summary>
     public event Action<OverlayMiniMapSettings>? SettingsChanged;
 
-    /// <summary>
-    /// 현재 설정
-    /// </summary>
     public OverlayMiniMapSettings Settings => _settings;
-
-    /// <summary>
-    /// 오버레이 표시 여부
-    /// </summary>
     public bool IsOverlayVisible => _overlayWindow?.IsVisible == true;
 
     private OverlayMiniMapService()
     {
-        _settings = new OverlayMiniMapSettings();
     }
 
-    /// <summary>
-    /// 서비스 초기화
-    /// </summary>
     public async Task InitializeAsync()
     {
-        if (_isInitialized) return;
+        if (_disposed || _isInitialized)
+            return;
 
+        await _initializeGate.WaitAsync();
         try
         {
+            if (_disposed || _isInitialized)
+                return;
+
             await LoadSettingsAsync();
+            if (_disposed)
+                return;
 
-            // 단축키 이벤트 연결
-            GlobalKeyboardHookService.Instance.OverlayTogglePressed += OnOverlayTogglePressed;
-            GlobalKeyboardHookService.Instance.OverlaySettingsPressed += OnSettingsPressed;
-            GlobalKeyboardHookService.Instance.OverlayZoomInPressed += OnZoomInPressed;
-            GlobalKeyboardHookService.Instance.OverlayZoomOutPressed += OnZoomOutPressed;
-
+            SubscribeHotkeys();
             _isInitialized = true;
             _log.Info("OverlayMiniMapService initialized");
 
-            // 이전 상태가 활성화였다면 오버레이 표시
             if (_settings.Enabled)
-            {
-                ShowOverlay();
-            }
+                ShowOverlayCore();
         }
         catch (Exception ex)
         {
+            _isInitialized = false;
             _log.Error("Failed to initialize OverlayMiniMapService", ex);
         }
+        finally
+        {
+            _initializeGate.Release();
+        }
     }
 
-    #region Overlay Window Management
-
-    /// <summary>
-    /// 오버레이 표시
-    /// </summary>
     public void ShowOverlay()
     {
-        try
-        {
-            if (_overlayWindow == null)
-            {
-                CreateOverlayWindow();
-            }
+        if (_disposed)
+            return;
 
-            _overlayWindow?.Show();
-            _settings.Enabled = true;
-            OverlayVisibilityChanged?.Invoke(true);
-
-            _log.Debug("Overlay shown");
-        }
-        catch (Exception ex)
+        if (!_isInitialized)
         {
-            _log.Error("Failed to show overlay", ex);
+            _ = InitializeAndShowAsync();
+            return;
         }
+
+        ShowOverlayCore();
     }
 
-    /// <summary>
-    /// 오버레이 숨기기
-    /// </summary>
     public void HideOverlay()
     {
+        if (_disposed)
+            return;
+
         try
         {
             _overlayWindow?.Hide();
             _settings.Enabled = false;
             OverlayVisibilityChanged?.Invoke(false);
-
+            QueueSettingsSave();
             _log.Debug("Overlay hidden");
         }
         catch (Exception ex)
@@ -136,57 +118,143 @@ public class OverlayMiniMapService : IDisposable
         }
     }
 
-    /// <summary>
-    /// 오버레이 토글
-    /// </summary>
     public void ToggleOverlay()
     {
+        if (_disposed)
+            return;
+
+        if (!_isInitialized)
+        {
+            // 초기화 전 버튼을 눌러도 첫 클릭에서 바로 표시되도록 합니다.
+            _ = InitializeAndShowAsync();
+            return;
+        }
+
         if (IsOverlayVisible)
             HideOverlay();
         else
-            ShowOverlay();
+            ShowOverlayCore();
+    }
+
+    private async Task InitializeAndShowAsync()
+    {
+        await InitializeAsync();
+        if (!_disposed && _isInitialized && !IsOverlayVisible)
+            ShowOverlayCore();
+    }
+
+    private void ShowOverlayCore()
+    {
+        try
+        {
+            if (_overlayWindow == null)
+                CreateOverlayWindow();
+
+            _overlayWindow!.Show();
+            _overlayWindow.Activate();
+            _settings.Enabled = true;
+            OverlayVisibilityChanged?.Invoke(true);
+            QueueSettingsSave();
+            _log.Debug("Overlay shown");
+        }
+        catch (InvalidOperationException ex)
+        {
+            // 닫힌 WPF Window는 다시 Show할 수 없습니다. 참조를 버리고 새 창으로 복구합니다.
+            _log.Warning($"Overlay window was no longer reusable; recreating it: {ex.Message}");
+            DetachOverlayWindow();
+
+            try
+            {
+                CreateOverlayWindow();
+                _overlayWindow!.Show();
+                _overlayWindow.Activate();
+                _settings.Enabled = true;
+                OverlayVisibilityChanged?.Invoke(true);
+                QueueSettingsSave();
+            }
+            catch (Exception retryException)
+            {
+                _settings.Enabled = false;
+                QueueSettingsSave();
+                _log.Error("Failed to recreate overlay", retryException);
+            }
+        }
+        catch (Exception ex)
+        {
+            _settings.Enabled = false;
+            QueueSettingsSave();
+            _log.Error("Failed to show overlay", ex);
+        }
     }
 
     private void CreateOverlayWindow()
     {
-        _overlayWindow = new OverlayMiniMapWindow(_settings);
-        _overlayWindow.SettingsChanged += OnOverlaySettingsChanged;
-        _overlayWindow.OverlayClosed += OnOverlayClosed;
+        var window = new OverlayMiniMapWindow(_settings);
+        window.SettingsChanged += OnOverlaySettingsChanged;
+        window.OverlayClosed += OnOverlayClosed;
+        _overlayWindow = window;
+    }
+
+    private void DetachOverlayWindow()
+    {
+        if (_overlayWindow == null)
+            return;
+
+        _overlayWindow.SettingsChanged -= OnOverlaySettingsChanged;
+        _overlayWindow.OverlayClosed -= OnOverlayClosed;
+        _overlayWindow = null;
     }
 
     private void OnOverlaySettingsChanged(OverlayMiniMapSettings settings)
     {
         _settings = settings;
         SyncHotkeys();
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
         SettingsChanged?.Invoke(settings);
     }
 
     private void OnOverlayClosed()
     {
+        // 닫힌 창 객체를 보관하면 다음 Show()가 InvalidOperationException으로 실패합니다.
+        DetachOverlayWindow();
         _settings.Enabled = false;
         OverlayVisibilityChanged?.Invoke(false);
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
+        _log.Debug("Overlay window closed and released");
     }
 
-    #endregion
+    private void SubscribeHotkeys()
+    {
+        var hooks = GlobalKeyboardHookService.Instance;
+        hooks.OverlayTogglePressed -= OnOverlayTogglePressed;
+        hooks.OverlaySettingsPressed -= OnSettingsPressed;
+        hooks.OverlayZoomInPressed -= OnZoomInPressed;
+        hooks.OverlayZoomOutPressed -= OnZoomOutPressed;
 
-    #region Keyboard Shortcuts
+        hooks.OverlayTogglePressed += OnOverlayTogglePressed;
+        hooks.OverlaySettingsPressed += OnSettingsPressed;
+        hooks.OverlayZoomInPressed += OnZoomInPressed;
+        hooks.OverlayZoomOutPressed += OnZoomOutPressed;
+        SyncHotkeys();
+    }
+
+    private void UnsubscribeHotkeys()
+    {
+        var hooks = GlobalKeyboardHookService.Instance;
+        hooks.OverlayTogglePressed -= OnOverlayTogglePressed;
+        hooks.OverlaySettingsPressed -= OnSettingsPressed;
+        hooks.OverlayZoomInPressed -= OnZoomInPressed;
+        hooks.OverlayZoomOutPressed -= OnZoomOutPressed;
+    }
 
     private void OnOverlayTogglePressed()
     {
-        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            ToggleOverlay();
-        });
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(ToggleOverlay);
     }
 
     private void OnSettingsPressed()
     {
-        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            ShowSettingsWindow();
-        });
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(ShowSettingsWindow);
     }
 
     private void OnZoomInPressed()
@@ -194,10 +262,7 @@ public class OverlayMiniMapService : IDisposable
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             if (_overlayWindow != null && IsOverlayVisible)
-            {
                 _overlayWindow.ZoomIn();
-                _log.Debug($"Overlay zoom in: {_settings.ZoomLevel:F2}");
-            }
         });
     }
 
@@ -206,124 +271,126 @@ public class OverlayMiniMapService : IDisposable
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             if (_overlayWindow != null && IsOverlayVisible)
-            {
                 _overlayWindow.ZoomOut();
-                _log.Debug($"Overlay zoom out: {_settings.ZoomLevel:F2}");
-            }
         });
     }
-
-    #endregion
-
-    #region Settings Persistence
-
-    private const string SettingsKey = "overlayMiniMap.settings";
-    private readonly UserDataDbService _userDataDb = UserDataDbService.Instance;
 
     private async Task LoadSettingsAsync()
     {
         try
         {
             var json = await _userDataDb.GetSettingAsync(SettingsKey);
-            if (!string.IsNullOrEmpty(json))
-            {
-                var loaded = JsonSerializer.Deserialize<OverlayMiniMapSettings>(json);
-                if (loaded != null)
-                {
-                    _settings = loaded;
-                    _log.Debug("Overlay settings loaded from database");
-                }
-            }
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            var loaded = JsonSerializer.Deserialize<OverlayMiniMapSettings>(json);
+            if (loaded != null)
+                _settings = loaded;
         }
         catch (Exception ex)
         {
             _log.Warning($"Failed to load overlay settings: {ex.Message}");
             _settings = new OverlayMiniMapSettings();
         }
-        finally
-        {
-            SyncHotkeys();
-        }
     }
 
-    private async Task SaveSettingsAsync()
+    private void QueueSettingsSave()
     {
+        string json;
         try
         {
-            var json = JsonSerializer.Serialize(_settings);
-            await _userDataDb.SetSettingAsync(SettingsKey, json);
-            _log.Debug("Overlay settings saved to database");
+            // Capture an immutable snapshot now. Serializing later could persist a
+            // newer state ahead of an older queued save and reverse user actions.
+            json = JsonSerializer.Serialize(_settings);
         }
         catch (Exception ex)
         {
-            _log.Warning($"Failed to save overlay settings: {ex.Message}");
+            _log.Warning($"Failed to serialize overlay settings: {ex.Message}");
+            return;
+        }
+
+        lock (_settingsSaveLock)
+        {
+            _settingsSaveTask = _settingsSaveTask.ContinueWith(
+                async previous =>
+                {
+                    if (previous.IsFaulted)
+                        _log.Error("Previous overlay settings save failed", previous.Exception!);
+
+                    try
+                    {
+                        await _userDataDb.SetSettingAsync(SettingsKey, json).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Warning($"Failed to save overlay settings: {ex.Message}");
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default).Unwrap();
         }
     }
 
-    /// <summary>
-    /// 설정 저장 (동기)
-    /// </summary>
-    public void SaveSettings()
+    private void FlushSettingsSaves(bool includeCurrentSnapshot)
     {
-        _ = SaveSettingsAsync();
+        // During an in-flight initialization, _settings can still be the temporary
+        // default object. Do not overwrite a persisted user configuration with that
+        // default merely because the application is closing.
+        if (includeCurrentSnapshot)
+            QueueSettingsSave();
+
+        Task pending;
+        lock (_settingsSaveLock)
+            pending = _settingsSaveTask;
+
+        pending.GetAwaiter().GetResult();
     }
 
-    /// <summary>
-    /// 설정 초기화
-    /// </summary>
+    public void SaveSettings()
+    {
+        QueueSettingsSave();
+    }
+
     public void ResetSettings()
     {
         _settings.ResetToDefaults();
-        _ = SaveSettingsAsync();
 
-        if (_overlayWindow != null)
-        {
-            _overlayWindow.Close();
-            _overlayWindow = null;
+        var window = _overlayWindow;
+        DetachOverlayWindow();
+        window?.Close();
 
-            if (_settings.Enabled)
-            {
-                ShowOverlay();
-            }
-        }
+        QueueSettingsSave();
+        OverlayVisibilityChanged?.Invoke(false);
     }
 
-    #endregion
-
-    #region Public Methods
-
-    /// <summary>
-    /// 맵 새로고침
-    /// </summary>
     public void RefreshMap()
     {
         _overlayWindow?.RefreshMap();
     }
 
-    private OverlaySettingsWindow? _settingsWindow;
-
-    /// <summary>
-    /// 설정창 열기
-    /// </summary>
     public void ShowSettingsWindow()
     {
+        if (_disposed)
+            return;
+
         if (_settingsWindow == null || !_settingsWindow.IsVisible)
         {
             _settingsWindow = new OverlaySettingsWindow(_settings, _overlayWindow);
             _settingsWindow.SettingsApplied += OnSettingsApplied;
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
+            return;
         }
-        else
-        {
-            _settingsWindow.Activate();
-        }
+
+        _settingsWindow.Activate();
     }
 
     private void OnSettingsApplied(OverlayMiniMapSettings settings)
     {
         _settings.CopyFrom(settings);
         SyncHotkeys();
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
         SettingsChanged?.Invoke(_settings);
     }
 
@@ -333,24 +400,37 @@ public class OverlayMiniMapService : IDisposable
         GlobalKeyboardHookService.Instance.ZoomOutKey = _settings.ZoomOutKey;
     }
 
-    #endregion
-
-    #region IDisposable
-
     public void Dispose()
     {
-        GlobalKeyboardHookService.Instance.OverlayTogglePressed -= OnOverlayTogglePressed;
-        GlobalKeyboardHookService.Instance.OverlaySettingsPressed -= OnSettingsPressed;
-        GlobalKeyboardHookService.Instance.OverlayZoomInPressed -= OnZoomInPressed;
-        GlobalKeyboardHookService.Instance.OverlayZoomOutPressed -= OnZoomOutPressed;
+        if (_disposed)
+            return;
 
-        _overlayWindow?.Close();
-        _overlayWindow = null;
+        _disposed = true;
+        UnsubscribeHotkeys();
 
+        if (_settingsWindow != null)
+        {
+            _settingsWindow.Close();
+            _settingsWindow = null;
+        }
+
+        var window = _overlayWindow;
+        DetachOverlayWindow();
+        window?.Close();
+
+        try
+        {
+            FlushSettingsSaves(_isInitialized);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning($"Failed to flush overlay settings during shutdown: {ex.Message}");
+        }
+
+        _isInitialized = false;
+        // Do not dispose _initializeGate here. An initialization already awaiting
+        // LoadSettingsAsync must still be able to release it during shutdown.
         _log.Info("OverlayMiniMapService disposed");
-
         GC.SuppressFinalize(this);
     }
-
-    #endregion
 }

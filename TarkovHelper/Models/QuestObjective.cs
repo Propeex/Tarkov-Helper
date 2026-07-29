@@ -46,8 +46,29 @@ public enum QuestObjectiveType
 public class QuestObjective
 {
     public string Id { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Stable database quest ID referenced by QuestObjectives.QuestId.
+    /// </summary>
     public string QuestId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// BSG/tarkov.dev quest ID. Map status resolution must prefer this ID and must
+    /// never fall back to a display name.
+    /// </summary>
+    public string? QuestBsgId { get; set; }
+
+    /// <summary>
+    /// English objective description, or the legacy description when a dedicated
+    /// English column is not present.
+    /// </summary>
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Korean objective description. UI should prefer this while keeping quest names
+    /// in their original English form.
+    /// </summary>
+    public string? DescriptionKo { get; set; }
 
     /// <summary>
     /// Type of objective (Kill, Visit, Mark, etc.)

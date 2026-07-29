@@ -1,96 +1,84 @@
-using System;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
 using TarkovHelper.Models;
 
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// 현재 활성화된 프로필(PVP 또는 PVE)을 관리하고 변경 시 알림을 제공하는 서비스.
+/// PVP-only profile service.
+/// ProfileType remains in the model for legacy user_data.db compatibility, but
+/// the application no longer exposes or loads a PVE profile.
 /// </summary>
 public sealed class ProfileService
 {
     private static ProfileService? _instance;
-    public static ProfileService Instance
-    {
-        get
-        {
-            if (_instance == null) _instance = new ProfileService();
-            return _instance;
-        }
-    }
+    public static ProfileService Instance => _instance ??= new ProfileService();
 
-    private ProfileType? _currentProfile;
+    private ProfileType _currentProfile = ProfileType.Pvp;
 
     public ProfileType CurrentProfile
     {
-        get
-        {
-            if (_currentProfile == null)
-            {
-                LoadProfileFromDb();
-            }
-            return _currentProfile ?? ProfileType.Pvp;
-        }
+        get => ProfileType.Pvp;
         set
         {
-            if (_currentProfile != value)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ProfileService] Profile Changing: {_currentProfile} -> {value}");
-                _currentProfile = value;
-                // 직접 DB에 마지막 프로필 상태 저장 (전역 영역 null)
-                UserDataDbService.Instance.SetSetting("app.lastProfileType", value.ToString(), null);
-                ProfileChanged?.Invoke(this, value);
-            }
+            var changed = _currentProfile != ProfileType.Pvp;
+            _currentProfile = ProfileType.Pvp;
+
+            // Normalize legacy installations that last used PVE.
+            UserDataDbService.Instance.SetSetting("app.lastProfileType", ProfileType.Pvp.ToString(), null);
+            HideLegacyProfileSelector();
+
+            // A legacy PVE click can still reach this setter from old code-behind.
+            // Re-emit PVP so the generated radio-button state is immediately corrected.
+            if (changed || value != ProfileType.Pvp)
+                ProfileChanged?.Invoke(this, ProfileType.Pvp);
         }
     }
 
-    /// <summary>
-    /// 프로필이 변경되었을 때 발생하는 이벤트.
-    /// </summary>
     public event EventHandler<ProfileType>? ProfileChanged;
 
-    private ProfileService() 
-    { 
+    private ProfileService()
+    {
         _instance = this;
+        HideLegacyProfileSelector();
     }
 
-    private void LoadProfileFromDb()
-    {
-        try
-        {
-            var lastProfile = UserDataDbService.Instance.GetSetting("app.lastProfileType", null);
-            System.Diagnostics.Debug.WriteLine($"[ProfileService] DB Load result: '{lastProfile}'");
+    public string GetProfileName(ProfileType type) => "PVP";
 
-            if (Enum.TryParse<ProfileType>(lastProfile, true, out var type))
-            {
-                _currentProfile = type;
-                System.Diagnostics.Debug.WriteLine($"[ProfileService] Loaded Profile: {type}");
-            }
-            else
-            {
-                _currentProfile = ProfileType.Pvp;
-                System.Diagnostics.Debug.WriteLine($"[ProfileService] Load failed or empty, fallback to PVP");
-            }
-        }
-        catch (Exception ex)
+    private static void HideLegacyProfileSelector()
+    {
+        var application = Application.Current;
+        if (application?.Dispatcher == null)
+            return;
+
+        application.Dispatcher.BeginInvoke(() =>
         {
-            System.Diagnostics.Debug.WriteLine($"[ProfileService] Load Fatal Error: {ex.Message}");
-            // 실패 시 별도 로그 파일에 기록 (PVP로 돌아가는 이유 확인)
-            try { 
-                var logPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "startup_error.log");
-                System.IO.File.AppendAllText(logPath, $"[{DateTime.Now}] Profile Load Error: {ex}\n");
-            } catch { }
-            
-            _currentProfile = ProfileType.Pvp;
-        }
+            var mainWindow = application.MainWindow
+                ?? application.Windows.OfType<Window>().FirstOrDefault(window => window.GetType().Name == "MainWindow");
+            if (mainWindow == null)
+                return;
+
+            if (mainWindow.FindName("RadioPvp") is RadioButton pvpButton)
+                pvpButton.IsChecked = true;
+
+            if (mainWindow.FindName("RadioPve") is RadioButton pveButton)
+            {
+                pveButton.IsEnabled = false;
+                pveButton.IsChecked = false;
+
+                // Hide the entire PVP/PVE switch container. The named controls are
+                // retained only to keep the existing generated code-behind binary-safe.
+                if (pveButton.Parent is FrameworkElement buttonPanel &&
+                    buttonPanel.Parent is FrameworkElement profileContainer)
+                {
+                    profileContainer.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    pveButton.Visibility = Visibility.Collapsed;
+                }
+            }
+        }, DispatcherPriority.Loaded);
     }
-
-    /// <summary>
-    /// 지정된 프로필 타입에 따라 표시용 텍스트를 반환합니다.
-    /// </summary>
-    public string GetProfileName(ProfileType type) => type switch
-    {
-        ProfileType.Pvp => "PVP",
-        ProfileType.Pve => "PVE",
-        _ => "UNKNOWN"
-    };
 }

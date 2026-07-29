@@ -1,7 +1,6 @@
 using System.IO;
 using System.Reflection;
 using System.Windows;
-using AutoUpdaterDotNET;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Logging;
 
@@ -13,8 +12,6 @@ namespace TarkovHelper
     public partial class App : Application
     {
         private static readonly ILogger _log = Log.For<App>();
-
-        private const string UpdateXmlUrl = "https://raw.githubusercontent.com/Zeliper/Tarkov-Item-Helper/main/update.xml";
 
         private static string DataDirectory => Path.Combine(
             AppDomain.CurrentDomain.BaseDirectory,
@@ -62,9 +59,22 @@ namespace TarkovHelper
 
             try
             {
-                // Stop background database updates
+                UpdateService.Instance.Dispose();
+                _log.Debug("UpdateService disposed");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Error disposing UpdateService", ex);
+            }
+
+            try
+            {
+                // Cancel a manual database rebuild. Do not synchronously wait on the
+                // dispatcher thread: the in-flight operation may need that dispatcher
+                // to finish its own cleanup. DatabaseUpdateService keeps its gate alive
+                // until the active operation releases it.
                 DatabaseUpdateService.Instance.Dispose();
-                _log.Debug("DatabaseUpdateService disposed");
+                _log.Debug("DatabaseUpdateService cancellation requested");
             }
             catch (Exception ex)
             {
@@ -73,7 +83,19 @@ namespace TarkovHelper
 
             try
             {
-                // Dispose overlay service (closes overlay window and unsubscribes events)
+                // Item changes are saved through a serialized queue. Flush it before
+                // logging and SQLite-related services are torn down.
+                ItemInventoryService.FlushExistingAsync().GetAwaiter().GetResult();
+                _log.Debug("ItemInventoryService pending saves flushed");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Error flushing ItemInventoryService", ex);
+            }
+
+            try
+            {
+                // Dispose overlay service (closes overlay window and flushes settings)
                 OverlayMiniMapService.Instance.Dispose();
                 _log.Debug("OverlayMiniMapService disposed");
             }
@@ -170,6 +192,9 @@ namespace TarkovHelper
         /// </summary>
         private void DeleteCacheDataFiles()
         {
+            if (!Directory.Exists(DataDirectory))
+                return;
+
             var ignoreFiles = new[]
             {
                 // 사용자 설정 파일

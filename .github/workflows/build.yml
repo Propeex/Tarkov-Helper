@@ -1,0 +1,195 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+      - agent/**
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore TarkovHelper.sln
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet build TarkovHelper.sln --configuration Release --no-restore -clp:ErrorsOnly *> build.log
+          $buildExit = $LASTEXITCODE
+          if ($buildExit -ne 0) {
+            exit $buildExit
+          }
+
+          $env:TARKOV_ICON_SELF_TEST = "1"
+          dotnet run --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj --configuration Release --no-build *>> build.log
+          exit $LASTEXITCODE
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: error
+
+      - name: Fail if build failed
+        if: steps.build.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
+
+  database-smoke:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Rebuild and validate tarkov_data.db
+        id: smoke
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release *> database-smoke.log
+          exit $LASTEXITCODE
+
+      - name: Upload database smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-smoke-log
+          path: database-smoke.log
+          if-no-files-found: error
+
+      - name: Upload smoke database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-smoke-db
+          path: TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
+          if-no-files-found: warn
+
+      - name: Fail if database smoke failed
+        if: steps.smoke.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
+
+  database-external-smoke:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 35
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Rebuild from live tarkov.dev data
+        id: external
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release -- --external *> database-external-smoke.log
+          exit $LASTEXITCODE
+
+      - name: Upload external smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-external-smoke-log
+          path: database-external-smoke.log
+          if-no-files-found: error
+
+      - name: Upload externally rebuilt database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-external-smoke-db
+          path: TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
+          if-no-files-found: warn
+
+      - name: Report external API outage
+        if: steps.external.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Write-Warning "Live tarkov.dev smoke failed. The deterministic build and outage-handling smoke remain authoritative; inspect the uploaded log for current service availability."
+
+  release-package:
+    if: github.event_name == 'pull_request'
+    needs:
+      - build
+      - database-smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish Windows release candidate
+        shell: pwsh
+        run: |
+          dotnet publish TarkovHelper/TarkovHelper.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained false `
+            --output publish `
+            -p:DebugType=None `
+            -p:DebugSymbols=false
+
+          $requiredFiles = @(
+            "publish/TarkovHelper_JH.exe",
+            "publish/Assets/tarkov_data.db"
+          )
+
+          foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Required release file is missing: $requiredFile"
+            }
+          }
+
+          Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
+          $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: TarkovHelper_JH-release-candidate
+          path: |
+            TarkovHelper_JH.zip
+            TarkovHelper_JH.zip.sha256
+          if-no-files-found: error

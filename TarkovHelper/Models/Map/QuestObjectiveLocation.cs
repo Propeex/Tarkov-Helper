@@ -96,7 +96,7 @@ public sealed class TaskObjectiveWithLocation
     public string ObjectiveId { get; set; } = string.Empty;
 
     /// <summary>
-    /// 목표 설명 (영문)
+    /// 화면에 표시할 목표 설명. 한국어가 있으면 한국어를 사용합니다.
     /// </summary>
     [JsonPropertyName("description")]
     public string Description { get; set; } = string.Empty;
@@ -114,28 +114,39 @@ public sealed class TaskObjectiveWithLocation
     public string Type { get; set; } = string.Empty;
 
     /// <summary>
-    /// 연결된 퀘스트 ID (tarkov.dev API의 Quest.id)
+    /// 연결된 퀘스트의 안정적인 DB ID.
     /// </summary>
     [JsonPropertyName("questId")]
     public string QuestId { get; set; } = string.Empty;
 
     /// <summary>
-    /// 연결된 퀘스트 normalized name
+    /// 연결된 퀘스트의 BSG/tarkov.dev ID. 지도 상태 판정은 이 값을 우선 사용합니다.
+    /// </summary>
+    [JsonPropertyName("questBsgId")]
+    public string? QuestBsgId { get; set; }
+
+    /// <summary>
+    /// 연결된 퀘스트 normalized name. 표시·그룹화 전용이며 상태 판정 fallback으로 사용하지 않습니다.
     /// </summary>
     [JsonPropertyName("taskNormalizedName")]
     public string TaskNormalizedName { get; set; } = string.Empty;
 
     /// <summary>
-    /// 연결된 퀘스트 이름 (영문)
+    /// 연결된 퀘스트 이름 (원문 영문)
     /// </summary>
     [JsonPropertyName("taskName")]
     public string TaskName { get; set; } = string.Empty;
 
     /// <summary>
-    /// 연결된 퀘스트 이름 (한국어)
+    /// 지도 화면에서는 퀘스트 고유명을 번역하지 않습니다. 기존 호출부와 JSON 호환을
+    /// 위해 속성은 유지하되 항상 null을 반환하여 TaskName 원문을 사용하게 합니다.
     /// </summary>
     [JsonPropertyName("taskNameKo")]
-    public string? TaskNameKo { get; set; }
+    public string? TaskNameKo
+    {
+        get => null;
+        set { }
+    }
 
     /// <summary>
     /// 이 목표의 위치들 (여러 맵/위치에 있을 수 있음)

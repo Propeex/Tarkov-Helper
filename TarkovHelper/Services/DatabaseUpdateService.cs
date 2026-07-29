@@ -1,14 +1,17 @@
 using System.IO;
 using System.Net.Http;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Services.Logging;
 
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// tarkov_data.db 업데이트를 관리하는 서비스.
-/// GitHub에서 버전을 확인하고 새 버전이 있으면 자동으로 다운로드.
-/// 5분마다 백그라운드에서 업데이트 체크.
+/// Rebuilds tarkov_data.db from the current tarkov.dev PVP data set.
+/// Automatic background replacement is intentionally disabled; rebuilding is
+/// only performed after the user presses the data update button.
 /// </summary>
 public sealed class DatabaseUpdateService : IDisposable
 {
@@ -16,398 +19,328 @@ public sealed class DatabaseUpdateService : IDisposable
     private static DatabaseUpdateService? _instance;
     public static DatabaseUpdateService Instance => _instance ??= new DatabaseUpdateService();
 
-    private const string TARKOV_DEV_API_URL = "https://api.tarkov.dev/graphql";
-    private const string VERSION_URL = "https://raw.githubusercontent.com/Zeliper/Tarkov-Item-Helper/refs/heads/main/TarkovHelper/Assets/db_version.txt";
-    private const string DATABASE_URL = "https://raw.githubusercontent.com/Zeliper/Tarkov-Item-Helper/refs/heads/main/TarkovHelper/Assets/tarkov_data.db";
-    private const string LOCAL_VERSION_FILE = "db_version.txt";
-    private const string DATABASE_FILE = "tarkov_data.db";
-    private const int UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5분
+    private const string LocalVersionFile = "db_version.txt";
+    private const string DatabaseFile = "tarkov_data.db";
+    private const string ProgressBarTag = "ApiDatabaseUpdateProgress";
+    private const double ProgressAreaMaxWidth = 340;
+    private const double ProgressBarMaxWidth = 320;
 
     private readonly string _assetsPath;
     private readonly string _databasePath;
     private readonly string _versionFilePath;
     private readonly HttpClient _httpClient;
-    private System.Threading.Timer _updateTimer;
-    private Task<UpdateCheckResult>? _currentUpdateTask;
-    private bool _isUpdating;
-    private bool _disposed;
+    private readonly SemaphoreSlim _buildGate = new(1, 1);
+    private readonly CancellationTokenSource _disposeCancellation = new();
+    private readonly object _lifecycleLock = new();
+    private volatile bool _isUpdating;
+    private volatile bool _disposed;
+    private int _resourcesDisposed;
 
-
-    /// <summary>
-    /// 데이터베이스 파일 경로
-    /// </summary>
     public string DatabasePath => _databasePath;
-
-    /// <summary>
-    /// 현재 로컬 버전
-    /// </summary>
     public string? LocalVersion { get; private set; }
-
-    /// <summary>
-    /// 최신 원격 버전
-    /// </summary>
     public string? RemoteVersion { get; private set; }
-
-    /// <summary>
-    /// 업데이트 진행 중 여부
-    /// </summary>
     public bool IsUpdating => _isUpdating;
 
-    /// <summary>
-    /// 데이터베이스가 업데이트되었을 때 발생하는 이벤트.
-    /// 모든 DB 서비스는 이 이벤트를 구독하여 데이터를 리로드해야 함.
-    /// </summary>
     public event EventHandler? DatabaseUpdated;
-
-    /// <summary>
-    /// 업데이트 체크 시작 시 발생
-    /// </summary>
     public event EventHandler? UpdateCheckStarted;
-
-    /// <summary>
-    /// 업데이트 체크 완료 시 발생 (업데이트 여부와 관계없이)
-    /// </summary>
     public event EventHandler<UpdateCheckResult>? UpdateCheckCompleted;
+    public event EventHandler<DatabaseBuildProgress>? ProgressChanged;
 
     private DatabaseUpdateService()
     {
-        var appDir = AppDomain.CurrentDomain.BaseDirectory;
-        _assetsPath = Path.Combine(appDir, "Assets");
-        _databasePath = Path.Combine(_assetsPath, DATABASE_FILE);
-        _versionFilePath = Path.Combine(_assetsPath, LOCAL_VERSION_FILE);
+        var appDirectory = AppDomain.CurrentDomain.BaseDirectory;
+        _assetsPath = Path.Combine(appDirectory, "Assets");
+        _databasePath = Path.Combine(_assetsPath, DatabaseFile);
+        _versionFilePath = Path.Combine(_assetsPath, LocalVersionFile);
 
-        _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("TarkovHelper/1.0");
-        _httpClient.Timeout = TimeSpan.FromSeconds(30);
+        _httpClient = new HttpClient(
+            new TarkovJsonObjectiveIdProtectionHandler(new HttpClientHandler()))
+        {
+            Timeout = TimeSpan.FromMinutes(15)
+        };
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("TarkovHelper/1.5.7 database-builder");
 
-        // 로컬 버전 로드
+        EnsureUiResources();
         LoadLocalVersion();
-
-        // 5분마다 업데이트 체크 타이머 설정
-        _updateTimer = new System.Threading.Timer(
-            OnUpdateTimerElapsed,
-            null,
-            Timeout.Infinite,
-            Timeout.Infinite);
     }
 
-    /// <summary>
-    /// 로컬 버전 파일에서 버전 정보 로드
-    /// </summary>
     private void LoadLocalVersion()
     {
         try
         {
-            if (File.Exists(_versionFilePath))
-            {
-                LocalVersion = File.ReadAllText(_versionFilePath).Trim();
-                _log.Debug($"Local version: {LocalVersion}");
-            }
-            else
-            {
-                LocalVersion = null;
-                _log.Debug("No local version file found");
-            }
+            LocalVersion = File.Exists(_versionFilePath)
+                ? File.ReadAllText(_versionFilePath).Trim()
+                : null;
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            _log.Error($"Error loading local version: {ex.Message}");
+            _log.Warning($"Failed to read local database version: {exception.Message}");
             LocalVersion = null;
         }
     }
 
-    /// <summary>
-    /// 백그라운드 업데이트 체크 시작
-    /// </summary>
     public void StartBackgroundUpdates()
     {
-        _log.Info("Starting background update checks (every 5 minutes)");
-        _updateTimer.Change(0, UPDATE_INTERVAL_MS); // 즉시 시작 후 5분마다 반복
+        _log.Info("Automatic database rebuild is disabled; waiting for manual update request.");
     }
 
-    /// <summary>
-    /// 백그라운드 업데이트 체크 중지
-    /// </summary>
     public void StopBackgroundUpdates()
     {
-        _log.Info("Stopping background update checks");
-        _updateTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        // Manual-only service. Nothing to stop.
     }
 
     /// <summary>
-    /// 타이머 콜백
-    /// </summary>
-    private async void OnUpdateTimerElapsed(object? state)
-    {
-        await CheckAndUpdateAsync();
-    }
-
-    /// <summary>
-    /// 업데이트 확인 및 필요시 다운로드
+    /// Creates a new validated database from tarkov.dev PVP data.
+    /// The existing file remains untouched unless all API, write, and
+    /// referential-integrity checks have succeeded.
     /// </summary>
     public async Task<UpdateCheckResult> CheckAndUpdateAsync()
     {
-        _log.Info("Update check disabled by user request");
-        return new UpdateCheckResult(true, false, "업데이트 기능이 비활성화되었습니다");
-    }
+        ThrowIfDisposed();
+        EnsureUiResources();
 
-    /// <summary>
-    /// 실제 업데이트 확인 및 필요시 다운로드 수행
-    /// </summary>
-    private async Task<UpdateCheckResult> DoCheckAndUpdateAsync()
-    {
+        if (!await _buildGate.WaitAsync(0))
+            return new UpdateCheckResult(false, false, "데이터베이스 생성이 이미 진행 중입니다.");
+
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+            {
+                _buildGate.Release();
+                throw new ObjectDisposedException(nameof(DatabaseUpdateService));
+            }
+
+            _isUpdating = true;
+        }
+
         UpdateCheckStarted?.Invoke(this, EventArgs.Empty);
 
         try
         {
+            Directory.CreateDirectory(_assetsPath);
+            ReportProgress(new DatabaseBuildProgress(
+                "준비",
+                "PVP 데이터베이스 생성을 준비하는 중",
+                0,
+                0,
+                null,
+                TimeSpan.Zero,
+                null));
 
-            // 1. 원격 버전 확인
-            _log.Debug("Checking remote version...");
-            var remoteVersion = await GetRemoteVersionAsync();
+            var builder = new TarkovDataDatabaseBuilder(_httpClient, ReportProgress);
+            var cancellationToken = _disposeCancellation.Token;
 
-            if (string.IsNullOrEmpty(remoteVersion))
+            // SQLite table rewriting performs substantial synchronous work between
+            // awaits. Run the complete build off the dispatcher thread so progress
+            // text and the rest of the window remain responsive.
+            var result = await Task.Run(
+                () => builder.BuildPreferredAsync(_databasePath, cancellationToken),
+                cancellationToken);
+
+            var version = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            try
             {
-                var result = new UpdateCheckResult(false, false, "원격 버전을 가져오지 못했습니다");
-                UpdateCheckCompleted?.Invoke(this, result);
-                return result;
+                await File.WriteAllTextAsync(_versionFilePath, version, cancellationToken);
+                LocalVersion = version;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _log.Warning($"Database was rebuilt but version file could not be written: {exception.Message}");
             }
 
-            RemoteVersion = remoteVersion;
-            _log.Debug($"Remote version: {remoteVersion}, Local version: {LocalVersion}");
+            cancellationToken.ThrowIfCancellationRequested();
 
-            // 2. 버전 비교
-            if (LocalVersion == remoteVersion)
-            {
-                _log.Debug("Database is up to date");
-                var result = new UpdateCheckResult(true, false, "데이터베이스가 최신 버전입니다");
-                UpdateCheckCompleted?.Invoke(this, result);
-                return result;
-            }
+            // Progress services aggregate quest and hideout data. Recreate their
+            // PVP snapshots after the reference database has been replaced. Complete
+            // this reload before publishing DatabaseUpdated so subscribers cannot race
+            // the main-window refresh against the same SQLite file.
+            if (Application.Current?.MainWindow is TarkovHelper.MainWindow mainWindow)
+                await mainWindow.ReloadAfterDatabaseRebuildAsync();
 
-            // 3. 새 버전 다운로드
-            _log.Info($"New version available: {remoteVersion}");
-            var downloadSuccess = await DownloadDatabaseAsync();
-
-            if (!downloadSuccess)
-            {
-                var result = new UpdateCheckResult(false, false, "데이터베이스 다운로드에 실패했습니다");
-                UpdateCheckCompleted?.Invoke(this, result);
-                return result;
-            }
-
-            // 4. 버전 파일 업데이트
-            await UpdateLocalVersionAsync(remoteVersion);
-
-            // 5. 업데이트 완료 이벤트 발생
-            _log.Info("Database updated successfully, notifying services...");
             OnDatabaseUpdated();
 
-            var successResult = new UpdateCheckResult(true, true, $"버전 {remoteVersion}(으)로 업데이트되었습니다");
-            UpdateCheckCompleted?.Invoke(this, successResult);
-            return successResult;
+            var message = $"데이터베이스 생성 완료: 아이템 {result.ItemCount:N0}개, " +
+                          $"퀘스트 {result.QuestCount:N0}개, 은신처 {result.HideoutStationCount:N0}개";
+            UpdateUiStatus(message, 100, false);
+            var success = new UpdateCheckResult(true, true, message);
+            UpdateCheckCompleted?.Invoke(this, success);
+            return success;
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            _log.Error($"Error during update check: {ex.Message}");
-            var result = new UpdateCheckResult(false, false, ex.Message);
-            UpdateCheckCompleted?.Invoke(this, result);
-            return result;
+            const string message = "데이터베이스 생성이 취소되었습니다. 기존 데이터베이스는 유지됩니다.";
+            _log.Warning(message);
+            if (!_disposed)
+            {
+                EnsureUiResources();
+                UpdateUiStatus(message, 0, false);
+                var result = new UpdateCheckResult(false, false, message);
+                UpdateCheckCompleted?.Invoke(this, result);
+                return result;
+            }
+
+            return new UpdateCheckResult(false, false, message);
+        }
+        catch (Exception exception)
+        {
+            _log.Error("Database rebuild failed", exception);
+            var message = $"데이터베이스 생성 실패: {exception.Message} 기존 데이터베이스는 유지됩니다.";
+            if (!_disposed)
+            {
+                EnsureUiResources();
+                UpdateUiStatus(message, 0, false);
+                var result = new UpdateCheckResult(false, false, message);
+                UpdateCheckCompleted?.Invoke(this, result);
+                return result;
+            }
+
+            return new UpdateCheckResult(false, false, message);
         }
         finally
         {
+            var disposeResources = false;
+            lock (_lifecycleLock)
+            {
+                _isUpdating = false;
+                disposeResources = _disposed;
+            }
+
+            if (!_disposed)
+                SetUpdateButtonEnabled(true);
+
+            _buildGate.Release();
+
+            if (disposeResources)
+                DisposeResources();
         }
     }
 
-
-    /// <summary>
-    /// 원격 버전 정보 가져오기 (tarkov.dev API 우선)
-    /// </summary>
-    private async Task<string?> GetRemoteVersionAsync()
+    public Task<UpdateCheckResult> ForceUpdateCheckAsync()
     {
-        try
-        {
-            // 1. tarkov.dev API에서 최신 데이터 상태 확인
-            var tarkovDevVersion = await GetTarkovDevStatusAsync();
-            if (!string.IsNullOrEmpty(tarkovDevVersion))
-            {
-                _log.Debug($"Latest tarkov.dev updated at: {tarkovDevVersion}");
-                return tarkovDevVersion;
-            }
-            
-            // 2. 실패 시 GitHub의 정적 버전 파일 확인 (폴백)
-            _log.Debug("Falling back to GitHub version check...");
-            var response = await _httpClient.GetStringAsync(VERSION_URL);
-            return response.Trim();
-        }
-        catch (Exception ex)
-        {
-            _log.Warning($"Failed to get remote version: {ex.Message}");
-            return null;
-        }
+        return CheckAndUpdateAsync();
     }
 
-    /// <summary>
-    /// tarkov.dev GraphQL API를 사용하여 최신 데이터 업데이트 시각 가져오기
-    /// </summary>
-    private async Task<string?> GetTarkovDevStatusAsync()
+    private void ReportProgress(DatabaseBuildProgress progress)
     {
-        try
-        {
-            var query = "{ \"query\": \"{ tarkovDataStatus { updated } }\" }";
-            var content = new StringContent(query, System.Text.Encoding.UTF8, "application/json");
+        if (_disposed)
+            return;
 
-            var response = await _httpClient.PostAsync(TARKOV_DEV_API_URL, content);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync();
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            
-            if (doc.RootElement.TryGetProperty("data", out var data) &&
-                data.TryGetProperty("tarkovDataStatus", out var status) &&
-                status.TryGetProperty("updated", out var updated))
-            {
-                return updated.GetString();
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.Warning($"Tarkov.dev status check failed: {ex.Message}");
-        }
-
-        return null;
+        ProgressChanged?.Invoke(this, progress);
+        UpdateUiStatus(
+            progress.ToDisplayText(),
+            progress.Percent,
+            progress.Percent < 100);
+        _log.Debug($"Database rebuild: {progress.Percent:F1}% - {progress.Message}");
     }
 
-    /// <summary>
-    /// 데이터베이스 파일 다운로드
-    /// </summary>
-    private async Task<bool> DownloadDatabaseAsync()
+    private static void UpdateUiStatus(
+        string text,
+        double? percent = null,
+        bool isActive = false)
     {
-        try
+        var application = Application.Current;
+        if (application?.Dispatcher == null)
+            return;
+
+        application.Dispatcher.BeginInvoke(() =>
         {
-            _log.Info("Downloading database...");
+            if (application.MainWindow?.FindName("TxtApiUpdateStatus") is not TextBlock statusText)
+                return;
 
-            // Assets 폴더가 없으면 생성
-            if (!Directory.Exists(_assetsPath))
+            statusText.Text = text;
+            statusText.TextWrapping = TextWrapping.Wrap;
+            statusText.HorizontalAlignment = HorizontalAlignment.Left;
+            statusText.VerticalAlignment = VerticalAlignment.Center;
+            statusText.Margin = new Thickness(0, 8, 0, 4);
+            statusText.MaxWidth = ProgressAreaMaxWidth;
+            statusText.ToolTip = text;
+
+            if (statusText.Parent is StackPanel statusPanel)
             {
-                Directory.CreateDirectory(_assetsPath);
-            }
+                statusPanel.Orientation = Orientation.Vertical;
+                statusPanel.HorizontalAlignment = HorizontalAlignment.Left;
+                statusPanel.MaxWidth = ProgressAreaMaxWidth;
 
-            // 임시 파일로 다운로드
-            var tempPath = _databasePath + ".tmp";
+                var progressBar = statusPanel.Children
+                    .OfType<ProgressBar>()
+                    .FirstOrDefault(value => Equals(value.Tag, ProgressBarTag));
 
-            using (var response = await _httpClient.GetAsync(DATABASE_URL, HttpCompletionOption.ResponseHeadersRead))
-            {
-                response.EnsureSuccessStatusCode();
-
-                var totalBytes = response.Content.Headers.ContentLength ?? -1;
-                _log.Debug($"Database size: {totalBytes} bytes");
-
-                await using var contentStream = await response.Content.ReadAsStreamAsync();
-                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
-
-                var buffer = new byte[81920];
-                long downloadedBytes = 0;
-                int bytesRead;
-
-                while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
+                if (progressBar == null)
                 {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                    downloadedBytes += bytesRead;
-
-                    if (totalBytes > 0)
+                    progressBar = new ProgressBar
                     {
-                        var progress = (double)downloadedBytes / totalBytes * 100;
-                        _log.Trace($"Download progress: {progress:F1}%");
-                    }
-                }
-            }
-
-            // 기존 파일 백업 및 교체
-            var backupPath = _databasePath + ".bak";
-            if (File.Exists(_databasePath))
-            {
-                // SQLite 연결 풀 클리어 - 파일 핸들 해제를 위해 필수
-                _log.Debug("Clearing SQLite connection pools...");
-                SqliteConnection.ClearAllPools();
-
-                // 연결 풀 클리어 후 파일 핸들이 해제될 시간 확보
-                await Task.Delay(100);
-
-                if (File.Exists(backupPath))
-                {
-                    File.Delete(backupPath);
+                        Tag = ProgressBarTag,
+                        Minimum = 0,
+                        Maximum = 100,
+                        Height = 10,
+                        Margin = new Thickness(0, 4, 0, 8),
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        MaxWidth = ProgressBarMaxWidth,
+                        Width = ProgressBarMaxWidth
+                    };
+                    statusPanel.Children.Add(progressBar);
                 }
 
-                // 파일 이동 재시도 로직 (연결 풀 해제 지연 대응)
-                const int maxRetries = 3;
-                for (int retry = 0; retry < maxRetries; retry++)
-                {
-                    try
-                    {
-                        File.Move(_databasePath, backupPath);
-                        break;
-                    }
-                    catch (IOException) when (retry < maxRetries - 1)
-                    {
-                        _log.Warning($"File move failed, retrying ({retry + 1}/{maxRetries})...");
-                        SqliteConnection.ClearAllPools();
-                        await Task.Delay(500 * (retry + 1));
-                    }
-                }
+                progressBar.MaxWidth = ProgressBarMaxWidth;
+                progressBar.Width = ProgressBarMaxWidth;
+                progressBar.IsIndeterminate = isActive && !percent.HasValue;
+                if (percent.HasValue)
+                    progressBar.Value = Math.Clamp(percent.Value, 0, 100);
+                progressBar.Visibility = Visibility.Visible;
             }
 
-            File.Move(tempPath, _databasePath);
-            _log.Info("Database downloaded successfully");
-
-            // 백업 파일 삭제
-            if (File.Exists(backupPath))
+            if (application.MainWindow.FindName("BtnUpdateApiData") is Button updateButton)
             {
-                File.Delete(backupPath);
+                updateButton.HorizontalAlignment = HorizontalAlignment.Left;
+                updateButton.Margin = new Thickness(0, 0, 0, 0);
+                updateButton.IsEnabled = !isActive;
             }
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _log.Error($"Failed to download database: {ex.Message}");
-
-            // 다운로드 실패 시 임시 파일 정리
-            var tempPath = _databasePath + ".tmp";
-            if (File.Exists(tempPath))
-            {
-                try { File.Delete(tempPath); } catch { }
-            }
-
-            return false;
-        }
+        });
     }
 
-    /// <summary>
-    /// 로컬 버전 파일 업데이트
-    /// </summary>
-    private async Task UpdateLocalVersionAsync(string version)
+    private static void EnsureUiResources()
     {
-        try
+        var application = Application.Current;
+        if (application == null)
+            return;
+
+        void Ensure()
         {
-            await File.WriteAllTextAsync(_versionFilePath, version);
-            LocalVersion = version;
-            _log.Debug($"Local version updated to: {version}");
+            if (application.Resources.Contains("ErrorBrush"))
+                return;
+
+            var brush = new SolidColorBrush(Color.FromRgb(0xEF, 0x53, 0x50));
+            brush.Freeze();
+            application.Resources["ErrorBrush"] = brush;
         }
-        catch (Exception ex)
-        {
-            _log.Warning($"Failed to update local version file: {ex.Message}");
-        }
+
+        if (application.Dispatcher.CheckAccess())
+            Ensure();
+        else
+            application.Dispatcher.Invoke(Ensure);
     }
 
-    /// <summary>
-    /// 데이터베이스 업데이트 완료 이벤트 발생
-    /// </summary>
+    private static void SetUpdateButtonEnabled(bool enabled)
+    {
+        var application = Application.Current;
+        if (application?.Dispatcher == null)
+            return;
+
+        application.Dispatcher.BeginInvoke(() =>
+        {
+            if (application.MainWindow?.FindName("BtnUpdateApiData") is Button updateButton)
+                updateButton.IsEnabled = enabled;
+        });
+    }
+
     private void OnDatabaseUpdated()
     {
-        // UI 스레드에서 이벤트 발생
-        if (System.Windows.Application.Current?.Dispatcher != null)
+        SqliteConnection.ClearAllPools();
+
+        var application = Application.Current;
+        if (application?.Dispatcher != null)
         {
-            System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+            application.Dispatcher.BeginInvoke(() =>
             {
                 DatabaseUpdated?.Invoke(this, EventArgs.Empty);
             });
@@ -418,29 +351,45 @@ public sealed class DatabaseUpdateService : IDisposable
         }
     }
 
-    /// <summary>
-    /// 수동 업데이트 체크 (UI에서 호출용)
-    /// </summary>
-    public async Task<UpdateCheckResult> ForceUpdateCheckAsync()
+    private void ThrowIfDisposed()
     {
-        _log.Info("Manual update check requested");
-        return await CheckAndUpdateAsync();
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DatabaseUpdateService));
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        var disposeResources = false;
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+                return;
 
-        _updateTimer.Dispose();
+            _disposed = true;
+            _disposeCancellation.Cancel();
+            disposeResources = !_isUpdating;
+        }
+
+        if (disposeResources)
+            DisposeResources();
+
+        GC.SuppressFinalize(this);
+    }
+
+    private void DisposeResources()
+    {
+        if (Interlocked.Exchange(ref _resourcesDisposed, 1) != 0)
+            return;
+
         _httpClient.Dispose();
+        _disposeCancellation.Dispose();
+
+        // _buildGate intentionally remains undisposed. A build that was already in
+        // its finally block must always be able to release the gate during shutdown.
     }
 }
 
-/// <summary>
-/// 업데이트 체크 결과
-/// </summary>
-public class UpdateCheckResult
+public sealed class UpdateCheckResult
 {
     public bool Success { get; }
     public bool WasUpdated { get; }

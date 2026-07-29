@@ -27,27 +27,16 @@ namespace TarkovHelper.Services
 
         private static readonly Dictionary<string, string> CategoryMapping = new(StringComparer.OrdinalIgnoreCase)
         {
-            // Provisions (Food & Drinks)
+            // Food and medicine
             { "Food", "Provisions" },
             { "Drinks", "Provisions" },
-            // Medical
             { "Medkits", "Medical" },
             { "Medical supplies", "Medical" },
             { "Injury treatment", "Medical" },
             { "Stimulants", "Medical" },
             { "Drugs", "Medical" },
-            // Gear
-            { "Armor vests", "Gear" },
-            { "Armor plates", "Gear" },
-            { "Chest rigs", "Gear" },
-            { "Backpacks", "Gear" },
-            { "Headwear", "Gear" },
-            { "Eyewear", "Gear" },
-            { "Face cover", "Gear" },
-            { "Earpieces", "Gear" },
-            { "Armbands", "Gear" },
-            { "Special equipment", "Gear" },
-            // Barter items
+
+            // Barter and construction materials
             { "Electronics", "Barter" },
             { "Building materials", "Barter" },
             { "Flammable materials", "Barter" },
@@ -56,58 +45,66 @@ namespace TarkovHelper.Services
             { "Tools", "Barter" },
             { "Valuables", "Barter" },
             { "Other", "Barter" },
-            // Info & Keys
-            { "Info items", "Info & Keys" },
-            { "Keys", "Info & Keys" },
-            { "Keycards", "Info & Keys" },
-            { "Maps", "Info & Keys" },
-            { "Extraction intel", "Info & Keys" },
-            // Containers
+
+            // Keys and information
+            { "Info items", "KeysIntel" },
+            { "Keys", "KeysIntel" },
+            { "Keycards", "KeysIntel" },
+            { "Maps", "KeysIntel" },
+            { "Extraction intel", "KeysIntel" },
+            { "Notes", "KeysIntel" },
+
+            // Weapons, ammunition and parts
+            { "Weapons", "Weapons" },
+            { "Rounds", "Ammunition" },
+            { "Ammo boxes", "Ammunition" },
+            { "Shrapnel", "Ammunition" },
+            { "Magazines", "Ammunition" },
+            { "Mounts", "WeaponParts" },
+            { "Stocks & chassis", "WeaponParts" },
+            { "Handguards", "WeaponParts" },
+            { "Barrels", "WeaponParts" },
+            { "Flash hiders & muzzle brakes", "WeaponParts" },
+            { "Suppressors", "WeaponParts" },
+            { "Muzzle adapters", "WeaponParts" },
+            { "Iron sights", "WeaponParts" },
+            { "Pistol grips", "WeaponParts" },
+            { "Receivers and slides", "WeaponParts" },
+            { "Charging handles", "WeaponParts" },
+            { "Gas blocks", "WeaponParts" },
+            { "Foregrips", "WeaponParts" },
+            { "Auxiliary parts", "WeaponParts" },
+            { "Bipods", "WeaponParts" },
+            { "Underbarrel grenade launchers", "WeaponParts" },
+            { "Scopes", "WeaponParts" },
+            { "Assault scopes", "WeaponParts" },
+            { "Reflex sights", "WeaponParts" },
+            { "Compact reflex sights", "WeaponParts" },
+            { "Night vision scopes", "WeaponParts" },
+            { "Thermal vision sights", "WeaponParts" },
+            { "Flashlights", "WeaponParts" },
+            { "Tactical combo devices", "WeaponParts" },
+
+            // Wearable equipment
+            { "Armor vests", "Equipment" },
+            { "Armor plates", "Equipment" },
+            { "Chest rigs", "Equipment" },
+            { "Backpacks", "Equipment" },
+            { "Headwear", "Equipment" },
+            { "Eyewear", "Equipment" },
+            { "Face cover", "Equipment" },
+            { "Earpieces", "Equipment" },
+            { "Armbands", "Equipment" },
+            { "Special equipment", "Equipment" },
+            { "Helmet mods", "Equipment" },
+
+            // Storage, money and special items
             { "Containers & cases", "Containers" },
             { "Secure containers", "Containers" },
-            // Money
-            { "Money", "Money" },
-            // Ammo
-            { "Rounds", "Ammo" },
-            { "Ammo boxes", "Ammo" },
-            { "Shrapnel", "Ammo" },
-            // Weapon mods
-            { "Mounts", "Weapon Mods" },
-            { "Stocks & chassis", "Weapon Mods" },
-            { "Handguards", "Weapon Mods" },
-            { "Barrels", "Weapon Mods" },
-            { "Magazines", "Weapon Mods" },
-            { "Flash hiders & muzzle brakes", "Weapon Mods" },
-            { "Suppressors", "Weapon Mods" },
-            { "Muzzle adapters", "Weapon Mods" },
-            { "Iron sights", "Weapon Mods" },
-            { "Pistol grips", "Weapon Mods" },
-            { "Receivers and slides", "Weapon Mods" },
-            { "Charging handles", "Weapon Mods" },
-            { "Gas blocks", "Weapon Mods" },
-            { "Foregrips", "Weapon Mods" },
-            { "Auxiliary parts", "Weapon Mods" },
-            { "Bipods", "Weapon Mods" },
-            { "Underbarrel grenade launchers", "Weapon Mods" },
-            // Optics
-            { "Scopes", "Optics" },
-            { "Assault scopes", "Optics" },
-            { "Reflex sights", "Optics" },
-            { "Compact reflex sights", "Optics" },
-            { "Night vision scopes", "Optics" },
-            { "Thermal vision sights", "Optics" },
-            // Tactical devices
-            { "Flashlights", "Tactical" },
-            { "Tactical combo devices", "Tactical" },
-            // Helmet mods
-            { "Helmet mods", "Helmet Mods" },
-            // Weapons
-            { "Weapons", "Weapons" },
-            // Quest items
-            { "Quest Items", "Quest Items" },
-            // Misc
-            { "Posters", "Misc" },
-            { "Dogtag", "Misc" },
+            { "Money", "Currency" },
+            { "Quest Items", "Quest" },
+            { "Dogtag", "Quest" },
+            { "Posters", "Other" },
         };
 
         public string GetParentCategory(string? category)
@@ -117,10 +114,9 @@ namespace TarkovHelper.Services
 
             var baseCategory = category.Contains('|') ? category.Split('|')[0] : category;
 
-            if (CategoryMapping.TryGetValue(baseCategory, out var parentCategory))
-                return parentCategory;
-
-            return baseCategory;
+            return CategoryMapping.TryGetValue(baseCategory, out var parentCategory)
+                ? parentCategory
+                : "Other";
         }
 
         public async Task<List<AggregatedItemViewModel>> GetAggregatedItemsAsync(Dictionary<string, TarkovItem>? itemLookup)
