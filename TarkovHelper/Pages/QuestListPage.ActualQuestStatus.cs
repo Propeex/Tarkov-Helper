@@ -29,8 +29,7 @@ public partial class QuestListPage
         if (_isUnloaded)
             return;
 
-        // Until the shared log scan completes, do not mislabel every eligible
-        // quest as actually in progress. The map consumes this same status source.
+        // 공유 로그 스캔이 끝나기 전에는 조건만 충족한 퀘스트를 진행 중으로 오인하지 않습니다.
         ApplyActualQuestStatuses();
         await ActualQuestStatusService.Instance.RefreshFromLogsAsync();
         ApplyActualQuestStatuses();
@@ -81,13 +80,13 @@ public partial class QuestListPage
     private static void ApplyQuestTitlePolicy(QuestViewModel viewModel)
     {
         var koreanTitle = viewModel.Task.NameKo;
-        var hasActualKoreanTitle = QuestContentTranslationService.ContainsHangul(koreanTitle);
+        var hasOfficialKoreanTitle = QuestKoreanSourcePolicy.ContainsHangul(koreanTitle);
 
-        viewModel.DisplayName = hasActualKoreanTitle
-            ? koreanTitle!.Trim()
-            : viewModel.Task.Name;
+        viewModel.DisplayName = QuestKoreanSourcePolicy.SelectQuestTitle(
+            viewModel.Task.Name,
+            koreanTitle);
 
-        var showEnglishSubtitle = hasActualKoreanTitle &&
+        var showEnglishSubtitle = hasOfficialKoreanTitle &&
             !string.Equals(viewModel.DisplayName, viewModel.Task.Name, StringComparison.Ordinal);
         viewModel.SubtitleName = showEnglishSubtitle ? viewModel.Task.Name : string.Empty;
         viewModel.SubtitleVisibility = showEnglishSubtitle
@@ -101,14 +100,14 @@ public partial class QuestListPage
             return;
 
         var koreanTitle = selected.Task.NameKo;
-        var hasActualKoreanTitle = QuestContentTranslationService.ContainsHangul(koreanTitle);
-        var displayedTitle = hasActualKoreanTitle
-            ? koreanTitle!.Trim()
-            : selected.Task.Name;
+        var hasOfficialKoreanTitle = QuestKoreanSourcePolicy.ContainsHangul(koreanTitle);
+        var displayedTitle = QuestKoreanSourcePolicy.SelectQuestTitle(
+            selected.Task.Name,
+            koreanTitle);
 
         TxtDetailName.Text = displayedTitle;
 
-        var showEnglishSubtitle = hasActualKoreanTitle &&
+        var showEnglishSubtitle = hasOfficialKoreanTitle &&
             !string.Equals(displayedTitle, selected.Task.Name, StringComparison.Ordinal);
         TxtDetailSubtitle.Text = showEnglishSubtitle ? selected.Task.Name : string.Empty;
         TxtDetailSubtitle.Visibility = showEnglishSubtitle
@@ -127,7 +126,7 @@ public partial class QuestListPage
 
         if (!alreadyExists)
         {
-            // Append to preserve the existing indices: Active=0 and All=1.
+            // 기존 인덱스 Active=0, All=1을 유지하기 위해 마지막에 추가합니다.
             CmbStatus.Items.Add(new ComboBoxItem
             {
                 Content = "수주 가능",
@@ -175,7 +174,7 @@ public partial class QuestListPage
         SettingsService.Instance.PrestigeLevelChanged += ActualStatus_IntSettingChanged;
         SettingsService.Instance.DspDecodeCountChanged += ActualStatus_IntSettingChanged;
         ActualQuestStatusService.Instance.StatusChanged += ActualStatus_ProgressChanged;
-        _loc.LanguageChanged += QuestTranslation_LanguageChanged;
+        _loc.LanguageChanged += QuestLocalization_LanguageChanged;
 
         TxtSearch.TextChanged += ActualStatus_FilterChanged;
         ChkKappaOnly.Checked += ActualStatus_FilterChanged;
@@ -189,7 +188,6 @@ public partial class QuestListPage
         RbBear.Unchecked += ActualStatus_FilterChanged;
         RbUsec.Checked += ActualStatus_FilterChanged;
         RbUsec.Unchecked += ActualStatus_FilterChanged;
-        LstQuests.SelectionChanged += QuestTranslation_SelectionChanged;
     }
 
     private void UnsubscribeActualStatusEvents()
@@ -207,7 +205,7 @@ public partial class QuestListPage
         SettingsService.Instance.PrestigeLevelChanged -= ActualStatus_IntSettingChanged;
         SettingsService.Instance.DspDecodeCountChanged -= ActualStatus_IntSettingChanged;
         ActualQuestStatusService.Instance.StatusChanged -= ActualStatus_ProgressChanged;
-        _loc.LanguageChanged -= QuestTranslation_LanguageChanged;
+        _loc.LanguageChanged -= QuestLocalization_LanguageChanged;
 
         TxtSearch.TextChanged -= ActualStatus_FilterChanged;
         ChkKappaOnly.Checked -= ActualStatus_FilterChanged;
@@ -221,27 +219,9 @@ public partial class QuestListPage
         RbBear.Unchecked -= ActualStatus_FilterChanged;
         RbUsec.Checked -= ActualStatus_FilterChanged;
         RbUsec.Unchecked -= ActualStatus_FilterChanged;
-        LstQuests.SelectionChanged -= QuestTranslation_SelectionChanged;
     }
 
-    private async void QuestTranslation_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isUnloaded || LstQuests.SelectedItem is not QuestViewModel selected)
-            return;
-
-        // 전체 퀘스트를 선행 번역하지 않고 사용자가 상세 화면을 연 퀘스트의
-        // 영어 목표 문장만 번역합니다. 제목은 어떤 경우에도 수정하지 않습니다.
-        await QuestContentTranslationService.Instance.TranslateMissingAsync(
-            new[] { selected.Task });
-
-        if (_isUnloaded || !ReferenceEquals(LstQuests.SelectedItem, selected))
-            return;
-
-        UpdateDetailPanel(selected);
-        ApplySelectedQuestDetailTitlePolicy();
-    }
-
-    private void QuestTranslation_LanguageChanged(object? sender, AppLanguage language)
+    private void QuestLocalization_LanguageChanged(object? sender, AppLanguage language)
     {
         ApplyActualQuestStatuses();
     }
