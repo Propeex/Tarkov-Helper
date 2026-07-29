@@ -332,9 +332,13 @@ public sealed class OverlayMiniMapService : IDisposable
         }
     }
 
-    private void FlushSettingsSaves()
+    private void FlushSettingsSaves(bool includeCurrentSnapshot)
     {
-        QueueSettingsSave();
+        // During an in-flight initialization, _settings can still be the temporary
+        // default object. Do not overwrite a persisted user configuration with that
+        // default merely because the application is closing.
+        if (includeCurrentSnapshot)
+            QueueSettingsSave();
 
         Task pending;
         lock (_settingsSaveLock)
@@ -416,7 +420,7 @@ public sealed class OverlayMiniMapService : IDisposable
 
         try
         {
-            FlushSettingsSaves();
+            FlushSettingsSaves(_isInitialized);
         }
         catch (Exception ex)
         {
