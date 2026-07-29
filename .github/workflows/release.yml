@@ -44,8 +44,16 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          $releaseExists = $LASTEXITCODE -eq 0
+          $existingTag = gh release list `
+            --repo $env:GITHUB_REPOSITORY `
+            --limit 100 `
+            --json tagName `
+            --jq ".[] | select(.tagName == `"$tag`") | .tagName"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to query existing releases."
+          }
+
+          $releaseExists = -not [string]::IsNullOrWhiteSpace($existingTag)
           "exists=$($releaseExists.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "version=$version tag=$tag releaseExists=$releaseExists"
 
