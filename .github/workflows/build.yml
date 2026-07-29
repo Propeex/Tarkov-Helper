@@ -171,7 +171,7 @@ jobs:
             -p:DebugSymbols=false
 
           $requiredFiles = @(
-            "publish/TarkovHelper.exe",
+            "publish/TarkovHelper_JH.exe",
             "publish/Assets/tarkov_data.db"
           )
 
@@ -181,15 +181,15 @@ jobs:
             }
           }
 
-          Compress-Archive -Path publish/* -DestinationPath TarkovHelper.zip -Force
-          $hash = (Get-FileHash TarkovHelper.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  TarkovHelper.zip" | Set-Content TarkovHelper.zip.sha256 -Encoding ascii
+          Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
+          $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
 
       - name: Upload release candidate
         uses: actions/upload-artifact@v4
         with:
-          name: TarkovHelper-release-candidate
+          name: TarkovHelper_JH-release-candidate
           path: |
-            TarkovHelper.zip
-            TarkovHelper.zip.sha256
+            TarkovHelper_JH.zip
+            TarkovHelper_JH.zip.sha256
           if-no-files-found: error
