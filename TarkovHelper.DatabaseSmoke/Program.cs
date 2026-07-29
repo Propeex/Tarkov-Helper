@@ -298,10 +298,7 @@ static async Task RunUserProgressResetSmokeAsync()
     await database.SaveHideoutProgressAsync("reset-smoke-hideout", 2, profile);
     await database.SaveItemInventoryAsync("reset-smoke-item", 3, 4, profile);
 
-    await database.ClearAllQuestProgressAsync(profile);
-    await database.ClearAllObjectiveProgressAsync();
-    await database.ClearAllHideoutProgressAsync(profile);
-    await database.ClearAllItemInventoryAsync(profile);
+    await UserProgressResetService.Instance.ResetCurrentProfileAsync();
 
     var counts = (
         Quests: (await database.LoadQuestProgressAsync(profile)).Count,
@@ -311,7 +308,7 @@ static async Task RunUserProgressResetSmokeAsync()
     if (counts != (0, 0, 0, 0))
     {
         throw new InvalidDataException(
-            $"User progress reset smoke failed: quests={counts.Quests}, " +
+            $"Integrated user progress reset smoke failed: quests={counts.Quests}, " +
             $"objectives={counts.Objectives}, hideout={counts.Hideout}, " +
             $"inventory={counts.Inventory}.");
     }
@@ -342,144 +339,135 @@ static async Task ForceDuplicateQuestNamesAsync(string databasePath)
 
 static async Task RunOutageHandlingSmokeAsync(string databasePath)
 {
-    var outageHandler = new TarkovApiOutageFixtureHandler();
-    using var httpClient = new HttpClient(
-        new TarkovJsonObjectiveIdProtectionHandler(outageHandler))
+    var originalBytes = await File.ReadAllBytesAsync(databasePath);
+    using var httpClient = new HttpClient(new AlwaysUnavailableTarkovApiHandler())
     {
-        Timeout = TimeSpan.FromMinutes(1)
+        Timeout = TimeSpan.FromSeconds(10)
     };
 
-    var progressMessages = new List<string>();
-    var builder = new TarkovDataDatabaseBuilder(
-        httpClient,
-        progress => progressMessages.Add(progress.ToDisplayText()));
+    var builder = new TarkovDataDatabaseBuilder(httpClient);
+    var failure = await builder.BuildPreferredAsync(databasePath);
 
-    var stopwatch = Stopwatch.StartNew();
-    string? failureMessage = null;
+    if (failure.Success)
+        throw new InvalidDataException("The rebuild unexpectedly succeeded while every tarkov.dev endpoint was unavailable.");
+    if (!failure.PreservedExistingDatabase)
+        throw new InvalidDataException("A failed rebuild did not report that the existing database was preserved.");
+    if (!File.Exists(databasePath))
+        throw new InvalidDataException("A failed rebuild removed the existing database.");
 
-    try
-    {
-        await builder.BuildPreferredAsync(databasePath);
-    }
-    catch (InvalidOperationException exception)
-    {
-        failureMessage = exception.Message;
-    }
-
-    stopwatch.Stop();
-
-    if (failureMessage == null ||
-        !failureMessage.Contains("정적 JSON API와 GraphQL API가 모두 응답하지 않았습니다", StringComparison.Ordinal))
-    {
-        throw new InvalidDataException(
-            $"Outage fixture did not return the expected combined API error: {failureMessage ?? "no error"}");
-    }
-
-    if (outageHandler.StaticRequestCount != 1 || outageHandler.GraphQlRequestCount != 1)
-    {
-        throw new InvalidDataException(
-            $"Outage handling retried unavailable endpoints: static={outageHandler.StaticRequestCount}, " +
-            $"graphql={outageHandler.GraphQlRequestCount}.");
-    }
-
-    if (stopwatch.Elapsed > TimeSpan.FromSeconds(5))
-        throw new InvalidDataException($"Outage handling was too slow: {stopwatch.Elapsed}.");
-
-    var misleadingEta = new DatabaseBuildProgress(
-        "API",
-        "서버 응답 확인 중",
-        1,
-        0,
-        null,
-        TimeSpan.FromMinutes(2),
-        TimeSpan.FromHours(3)).ToDisplayText();
-    if (misleadingEta.Contains("예상", StringComparison.Ordinal))
-        throw new InvalidDataException($"API progress still exposes a misleading ETA: {misleadingEta}");
-
-    if (File.Exists(databasePath + ".rebuild.tmp"))
-        throw new InvalidDataException("Outage handling left a temporary database behind.");
-
-    Console.WriteLine(
-        $"Outage handling smoke passed: elapsed={stopwatch.Elapsed.TotalMilliseconds:F0}ms, " +
-        $"static={outageHandler.StaticRequestCount}, graphql={outageHandler.GraphQlRequestCount}, etaHidden=true");
+    var currentBytes = await File.ReadAllBytesAsync(databasePath);
+    if (!originalBytes.AsSpan().SequenceEqual(currentBytes))
+        throw new InvalidDataException("A failed rebuild modified the existing database.");
 }
 
 static void RunApplicationBehaviorSmoke()
 {
-    const string inventoryKey = "__maintenance-consumption-smoke__";
-    var inventory = ItemInventoryService.Instance;
-    inventory.SetFirQuantity(inventoryKey, 3);
-    inventory.SetNonFirQuantity(inventoryKey, 5);
+    if (!QuestTextKoreanSourceSmoke.Run())
+        throw new InvalidDataException("Quest Korean source policy smoke failed.");
 
-    var generalResult = inventory.ConsumeBatch([
-        new InventoryConsumptionRequirement(inventoryKey, 4, FirOnly: false)
-    ]);
-    if (generalResult.Consumed != 4 ||
-        inventory.GetNonFirQuantity(inventoryKey) != 1 ||
-        inventory.GetFirQuantity(inventoryKey) != 3)
+    var localizedMapName = MapFloorConfig.GetLocalizedDisplayName("Basement 2", "basement2", -2);
+    if (!string.Equals(localizedMapName, "지하 2층", StringComparison.Ordinal))
+        throw new InvalidDataException($"Map floor localization failed: {localizedMapName}");
+
+    if (OverlayClickThroughPolicy.ShouldToggle(
+            isInitializing: true,
+            currentState: false,
+            requestedState: true))
     {
-        throw new InvalidDataException(
-            "General inventory consumption did not preserve FIR stock or subtract the expected quantity.");
+        throw new InvalidDataException("Overlay click-through must not toggle while settings initialize.");
     }
 
-    var firResult = inventory.ConsumeBatch([
-        new InventoryConsumptionRequirement(inventoryKey, 5, FirOnly: true)
-    ]);
-    if (firResult.Consumed != 3 || firResult.Missing != 2 ||
-        inventory.GetFirQuantity(inventoryKey) != 0 ||
-        inventory.GetNonFirQuantity(inventoryKey) != 1)
+    if (!OverlayClickThroughPolicy.ShouldToggle(
+            isInitializing: false,
+            currentState: true,
+            requestedState: false))
     {
-        throw new InvalidDataException(
-            "FIR-only inventory consumption did not clamp at the available FIR quantity.");
+        throw new InvalidDataException("Overlay click-through must toggle when the requested state changes.");
     }
 
-    inventory.SetNonFirQuantity(inventoryKey, 0);
-
-    var statusTask = new TarkovTask
+    if (OverlayClickThroughPolicy.ShouldToggle(
+            isInitializing: false,
+            currentState: false,
+            requestedState: false))
     {
-        Ids = ["actual-status-smoke"],
-        NormalizedName = "actual-status-smoke",
-        Name = "Actual Status Smoke"
-    };
-    var availableStatus = new ActualQuestStatusEvaluator(
-        QuestProgressService.Instance,
-        []).Evaluate(statusTask);
-    var activeStatus = new ActualQuestStatusEvaluator(
-        QuestProgressService.Instance,
-        ["actual-status-smoke"]).Evaluate(statusTask);
-    if (availableStatus != QuestStatus.Available || activeStatus != QuestStatus.Active)
-    {
-        throw new InvalidDataException(
-            $"Actual quest status separation failed: available={availableStatus}, active={activeStatus}.");
+        throw new InvalidDataException("Overlay click-through must not toggle when state is unchanged.");
     }
 
-    var categories = ItemsDataService.Instance;
-    if (categories.GetParentCategory("Scopes") != "WeaponParts" ||
-        categories.GetParentCategory("Magazines") != "Ammunition" ||
-        categories.GetParentCategory("unrecognized-category") != "Other")
-    {
-        throw new InvalidDataException("Practical item category grouping failed.");
-    }
+    var selector = new QuestStatusSelector();
+    selector.ApplyDefault();
+    if (!string.Equals(selector.SelectedStatus, "All", StringComparison.Ordinal))
+        throw new InvalidDataException($"Quest status default filter must be All, actual={selector.SelectedStatus}.");
 }
 
 static async Task<int> RunExternalApiSmokeAsync()
 {
-    var service = DatabaseUpdateService.Instance;
-    service.ProgressChanged += (_, progress) =>
+    var databasePath = Path.Combine(AppContext.BaseDirectory, "Assets", "tarkov_data.db");
+    using var httpClient = new HttpClient
     {
-        Console.WriteLine($"[{progress.Percent,6:F1}%] {progress.Message}");
+        Timeout = TimeSpan.FromMinutes(5)
     };
 
-    try
+    var builder = new TarkovDataDatabaseBuilder(
+        httpClient,
+        progress => Console.WriteLine($"[{progress.Percent,6:F1}%] {progress.Message}"));
+    var result = await builder.BuildPreferredAsync(databasePath);
+
+    if (!result.Success)
     {
-        var result = await service.CheckAndUpdateAsync();
-        Console.WriteLine(result.Message);
-        return result.Success && result.WasUpdated ? 0 : 1;
+        Console.Error.WriteLine(
+            $"Live tarkov.dev rebuild failed. Existing DB preserved={result.PreservedExistingDatabase}. " +
+            $"Reason={result.ErrorMessage}");
+        return 1;
     }
-    finally
+
+    if (result.ItemCount < 1000 || result.QuestCount < 300 || result.HideoutStationCount < 10)
     {
-        service.Dispose();
+        Console.Error.WriteLine(
+            $"Live tarkov.dev rebuild returned suspiciously small data: " +
+            $"items={result.ItemCount}, quests={result.QuestCount}, hideout={result.HideoutStationCount}.");
+        return 1;
     }
+
+    await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath,
+        Mode = SqliteOpenMode.ReadOnly,
+        Pooling = false
+    }.ConnectionString);
+    await connection.OpenAsync();
+
+    var integrity = Convert.ToString(await ExecuteScalarAsync(connection, "PRAGMA integrity_check;"));
+    var foreignKeyViolations = await CountRowsAsync(connection, "PRAGMA foreign_key_check;");
+    var acquisitionRequirements = Convert.ToInt32(await ExecuteScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequiredItems
+        WHERE LOWER(REPLACE(REPLACE(REPLACE(COALESCE(RequirementType, ''), '_', ''), '-', ''), ' ', ''))
+              IN ('finditem', 'collect', 'item', 'genericitem', 'sellitem');
+        """));
+    var requirementTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    await using (var command = connection.CreateCommand())
+    {
+        command.CommandText = "SELECT DISTINCT COALESCE(RequirementType, '') FROM QuestRequiredItems;";
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            requirementTypes.Add(reader.GetString(0));
+    }
+
+    if (!string.Equals(integrity, "ok", StringComparison.OrdinalIgnoreCase))
+        throw new InvalidDataException($"Live database integrity check failed: {integrity}");
+    if (foreignKeyViolations != 0)
+        throw new InvalidDataException($"Live database contains {foreignKeyViolations} foreign-key violations.");
+    if (acquisitionRequirements != 0)
+        throw new InvalidDataException($"Live database contains {acquisitionRequirements} non-consumable requirement rows.");
+    if (requirementTypes.Count != 1 || !requirementTypes.Contains("giveItem"))
+        throw new InvalidDataException(
+            $"Live database contains unexpected requirement types: {string.Join(", ", requirementTypes.OrderBy(x => x))}");
+
+    Console.WriteLine(
+        $"Live tarkov.dev rebuild passed: items={result.ItemCount}, quests={result.QuestCount}, " +
+        $"hideout={result.HideoutStationCount}, integrity={integrity}, foreignKeys={foreignKeyViolations}, " +
+        $"requirementTypes={string.Join(",", requirementTypes)}");
+    return 0;
 }
 
 static async Task<long> ScalarAsync(SqliteConnection connection, string sql)
@@ -487,4 +475,22 @@ static async Task<long> ScalarAsync(SqliteConnection connection, string sql)
     await using var command = connection.CreateCommand();
     command.CommandText = sql;
     return Convert.ToInt64(await command.ExecuteScalarAsync());
+}
+
+static async Task<object?> ExecuteScalarAsync(SqliteConnection connection, string sql)
+{
+    await using var command = connection.CreateCommand();
+    command.CommandText = sql;
+    return await command.ExecuteScalarAsync();
+}
+
+static async Task<int> CountRowsAsync(SqliteConnection connection, string sql)
+{
+    await using var command = connection.CreateCommand();
+    command.CommandText = sql;
+    await using var reader = await command.ExecuteReaderAsync();
+    var count = 0;
+    while (await reader.ReadAsync())
+        count++;
+    return count;
 }
