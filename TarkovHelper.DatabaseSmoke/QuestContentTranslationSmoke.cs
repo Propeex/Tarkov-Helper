@@ -1,35 +1,40 @@
 using System.Runtime.CompilerServices;
 using TarkovHelper.Services;
 
-internal static class QuestContentTranslationSmoke
+internal static class QuestKoreanSourceSmoke
 {
     [ModuleInitializer]
     internal static void Run()
     {
         AssertEqual(
             "한글 제목",
-            QuestContentTranslationService.SelectQuestTitle("English title", "한글 제목"),
-            "실제 한글 제목은 유지해야 합니다.");
+            QuestKoreanSourcePolicy.SelectQuestTitle("English title", "한글 제목"),
+            "공식 한국어 제목을 선택해야 합니다.");
 
         AssertEqual(
             "English title",
-            QuestContentTranslationService.SelectQuestTitle("English title", "English title"),
-            "NameKO의 영어 fallback을 한국어 제목으로 오인하면 안 됩니다.");
+            QuestKoreanSourcePolicy.SelectQuestTitle("English title", "English title"),
+            "NameKO의 영문 fallback을 한국어 원문으로 오인하면 안 됩니다.");
 
         AssertEqual(
             "한글 내용",
-            QuestContentTranslationService.SelectQuestContent("English content", "한글 내용"),
-            "실제 한글 내용은 유지해야 합니다.");
+            QuestKoreanSourcePolicy.SelectQuestContent("English content", "한글 내용"),
+            "공식 한국어 목표 내용을 선택해야 합니다.");
 
         AssertEqual(
             "English content",
-            QuestContentTranslationService.SelectQuestContent("English content", "English content"),
-            "DescriptionKO의 영어 fallback은 자동 번역 대상으로 남겨야 합니다.");
+            QuestKoreanSourcePolicy.SelectQuestContent("English content", "English content"),
+            "공식 한국어 내용이 없으면 영문 원문을 사용해야 합니다.");
 
-        if (!QuestContentTranslationService.ContainsHangul("A Helping Hand - 목표 완료") ||
-            QuestContentTranslationService.ContainsHangul("Shipping Delay - Part 1"))
+        AssertEqual(
+            "English content",
+            QuestKoreanSourcePolicy.SelectQuestContent("English content", null),
+            "한국어 필드가 없으면 영문 원문을 사용해야 합니다.");
+
+        if (!QuestKoreanSourcePolicy.ContainsHangul("A Helping Hand - 목표 완료") ||
+            QuestKoreanSourcePolicy.ContainsHangul("Shipping Delay - Part 1"))
         {
-            throw new InvalidOperationException("한글 감지 회귀 검사에 실패했습니다.");
+            throw new InvalidOperationException("한글 원문 감지 회귀 검사에 실패했습니다.");
         }
     }
 
