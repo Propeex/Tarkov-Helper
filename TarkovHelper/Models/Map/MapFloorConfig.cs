@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace TarkovHelper.Models.Map;
 
 /// <summary>
@@ -77,7 +79,11 @@ public sealed class MapFloorConfig
 
     private static int? ExtractFloorNumber(string value)
     {
-        var digits = new string(value.Where(char.IsDigit).ToArray());
-        return int.TryParse(digits, out var number) ? number : null;
+        // LayerId와 DisplayName을 함께 검사하므로 "level2level2"처럼 같은 번호가
+        // 두 번 나타날 수 있습니다. 모든 숫자를 이어 붙이지 말고 첫 번째 층 번호만 사용합니다.
+        var match = Regex.Match(value, @"(?:level|floor)(?<number>\d+)|(?<number>\d+)(?:f|층)?");
+        return match.Success && int.TryParse(match.Groups["number"].Value, out var number)
+            ? number
+            : null;
     }
 }
