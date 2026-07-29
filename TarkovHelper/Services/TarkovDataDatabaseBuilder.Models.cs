@@ -58,10 +58,32 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
     private sealed class ApiTaskObjective
     {
+        private string? _typeName;
+        private string? _type;
+
         [JsonPropertyName("__typename")]
-        public string? TypeName { get; set; }
+        public string? TypeName
+        {
+            // The legacy writer recognizes TaskObjectiveItem through this property.
+            // Expose it only for actual item-submission objectives so paired acquisition
+            // and handover objectives cannot both become inventory requirements.
+            get => QuestRequiredItemObjectivePolicy.IsConsumable(_type) ? _typeName : null;
+            set => _typeName = value;
+        }
+
         public string? Id { get; set; }
-        public string? Type { get; set; }
+
+        public string? Type
+        {
+            // A generic "item" value carries no spending semantics. Give it a neutral
+            // database label so the writer's legacy exact "item" check cannot treat it
+            // as a consumable requirement without an explicit HandOver/giveItem type.
+            get => string.Equals(_type, "item", StringComparison.OrdinalIgnoreCase)
+                ? "genericItem"
+                : _type;
+            set => _type = value;
+        }
+
         public string? Description { get; set; }
         public bool Optional { get; set; }
         public List<ApiNamedEntity> Maps { get; set; } = [];
