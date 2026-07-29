@@ -16,21 +16,16 @@ namespace TarkovHelper.Models
         public List<string>? Ids { get; set; } = new();
 
         /// <summary>
-        /// Original task name. Quest titles are always displayed from this field.
+        /// English task name
         /// </summary>
         [JsonPropertyName("name")]
         public string Name { get; set; } = string.Empty;
 
         /// <summary>
-        /// Legacy Korean task-name field retained for data compatibility.
-        /// Quest titles are intentionally not localized; only quest content is translated.
+        /// Korean task name (null if no translation available)
         /// </summary>
         [JsonPropertyName("nameKo")]
-        public string? NameKo
-        {
-            get => null;
-            set { }
-        }
+        public string? NameKo { get; set; }
 
         /// <summary>
         /// Japanese task name (null if no translation available)
