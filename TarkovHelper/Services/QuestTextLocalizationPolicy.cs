@@ -1,51 +1,24 @@
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// 퀘스트 제목과 목표 내용에 적용되는 표시 정책입니다.
-/// 제목은 원문을 유지하고, 목표 내용은 영어 원문에 대해서만 한국어 번역을 사용합니다.
+/// 기존 지도 모델과의 호환을 위한 퀘스트 텍스트 선택 정책입니다.
+/// 공식 한국어 원문이 있으면 사용하고, 없으면 영문 원문을 사용합니다.
 /// </summary>
 internal static class QuestTextLocalizationPolicy
 {
     public static string PreserveTitle(string? originalTitle)
     {
-        return originalTitle ?? string.Empty;
+        return originalTitle?.Trim() ?? string.Empty;
     }
 
     public static string? SelectContent(
-        string? originalContent,
-        string? koreanTranslation)
+        string? englishContent,
+        string? koreanContent)
     {
-        if (string.IsNullOrWhiteSpace(originalContent))
-        {
-            return string.IsNullOrWhiteSpace(koreanTranslation)
-                ? originalContent
-                : koreanTranslation;
-        }
+        var selected = QuestKoreanSourcePolicy.SelectQuestContent(
+            englishContent,
+            koreanContent);
 
-        // 이미 한글인 내용은 제목 언어와 관계없이 원문을 그대로 유지합니다.
-        if (ContainsHangul(originalContent))
-            return originalContent;
-
-        // 한글이 아닌 원문은 한국어 번역이 있을 때만 번역문을 사용합니다.
-        return string.IsNullOrWhiteSpace(koreanTranslation)
-            ? originalContent
-            : koreanTranslation;
-    }
-
-    private static bool ContainsHangul(string value)
-    {
-        foreach (var character in value)
-        {
-            if (character is >= '\u1100' and <= '\u11FF' ||
-                character is >= '\u3130' and <= '\u318F' ||
-                character is >= '\uA960' and <= '\uA97F' ||
-                character is >= '\uAC00' and <= '\uD7A3' ||
-                character is >= '\uD7B0' and <= '\uD7FF')
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return string.IsNullOrWhiteSpace(selected) ? null : selected;
     }
 }
