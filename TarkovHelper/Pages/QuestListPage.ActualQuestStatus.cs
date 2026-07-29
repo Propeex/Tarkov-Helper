@@ -56,6 +56,8 @@ public partial class QuestListPage
 
         foreach (var viewModel in _allQuestViewModels)
         {
+            ApplyQuestTitlePolicy(viewModel);
+
             var status = evaluator.Evaluate(viewModel.Task);
             viewModel.Status = status;
             viewModel.StatusText = status == QuestStatus.Available
@@ -73,6 +75,23 @@ public partial class QuestListPage
 
         ApplyFilters();
         UpdateActualQuestStatistics();
+    }
+
+    private static void ApplyQuestTitlePolicy(QuestViewModel viewModel)
+    {
+        var koreanTitle = viewModel.Task.NameKo;
+        var hasActualKoreanTitle = QuestContentTranslationService.ContainsHangul(koreanTitle);
+
+        viewModel.DisplayName = hasActualKoreanTitle
+            ? koreanTitle!.Trim()
+            : viewModel.Task.Name;
+
+        var showEnglishSubtitle = hasActualKoreanTitle &&
+            !string.Equals(viewModel.DisplayName, viewModel.Task.Name, StringComparison.Ordinal);
+        viewModel.SubtitleName = showEnglishSubtitle ? viewModel.Task.Name : string.Empty;
+        viewModel.SubtitleVisibility = showEnglishSubtitle
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void EnsureAvailableStatusFilter()
@@ -134,6 +153,7 @@ public partial class QuestListPage
         SettingsService.Instance.PrestigeLevelChanged += ActualStatus_IntSettingChanged;
         SettingsService.Instance.DspDecodeCountChanged += ActualStatus_IntSettingChanged;
         ActualQuestStatusService.Instance.StatusChanged += ActualStatus_ProgressChanged;
+        _loc.LanguageChanged += QuestTranslation_LanguageChanged;
 
         TxtSearch.TextChanged += ActualStatus_FilterChanged;
         ChkKappaOnly.Checked += ActualStatus_FilterChanged;
@@ -165,6 +185,7 @@ public partial class QuestListPage
         SettingsService.Instance.PrestigeLevelChanged -= ActualStatus_IntSettingChanged;
         SettingsService.Instance.DspDecodeCountChanged -= ActualStatus_IntSettingChanged;
         ActualQuestStatusService.Instance.StatusChanged -= ActualStatus_ProgressChanged;
+        _loc.LanguageChanged -= QuestTranslation_LanguageChanged;
 
         TxtSearch.TextChanged -= ActualStatus_FilterChanged;
         ChkKappaOnly.Checked -= ActualStatus_FilterChanged;
@@ -195,6 +216,11 @@ public partial class QuestListPage
             return;
 
         UpdateDetailPanel(selected);
+    }
+
+    private void QuestTranslation_LanguageChanged(object? sender, AppLanguage language)
+    {
+        ApplyActualQuestStatuses();
     }
 
     private void ActualStatus_ProgressChanged(object? sender, EventArgs e)
