@@ -161,7 +161,13 @@ public sealed class QuestObjectiveDbService
                     QuestId = reader.GetString(1),
                     QuestBsgId = reader.IsDBNull(10) ? null : reader.GetString(10),
                     Description = FirstNonEmpty(descriptionEn, legacyDescription),
-                    DescriptionKo = FirstNonEmpty(descriptionKo, legacyDescription),
+                    // 영어 fallback은 한국어 번역으로 취급하지 않습니다. 레거시 값이
+                    // 실제 한글일 때만 한국어 설명으로 보존하고 나머지는 자동 번역 대상입니다.
+                    DescriptionKo = QuestContentTranslationService.ContainsHangul(descriptionKo)
+                        ? descriptionKo
+                        : QuestContentTranslationService.ContainsHangul(legacyDescription)
+                            ? legacyDescription
+                            : null,
                     MapName = reader.IsDBNull(3) ? null : reader.GetString(3),
                     QuestLocation = reader.IsDBNull(5) ? null : reader.GetString(5),
                     QuestName = reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
@@ -201,7 +207,11 @@ public sealed class QuestObjectiveDbService
                 }
             }
 
-            // Atomic swap - 모든 데이터가 준비된 후 한 번에 교체
+            // 한국어가 누락된 목표 문장만 자동 번역합니다. 결과는 로컬 캐시를
+            // 사용하므로 같은 문장을 지도 탭을 열 때마다 다시 요청하지 않습니다.
+            await QuestContentTranslationService.Instance.TranslateMissingAsync(newObjectives);
+
+            // Atomic swap - 모든 데이터와 번역이 준비된 후 한 번에 교체
             _allObjectives = newObjectives;
             _isLoaded = true;
             System.Diagnostics.Debug.WriteLine($"[QuestObjectiveDbService] Loaded {_allObjectives.Count} objectives with exact quest identity and location data");
