@@ -30,8 +30,11 @@ public sealed class DatabaseUpdateService : IDisposable
     private readonly string _versionFilePath;
     private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _buildGate = new(1, 1);
-    private bool _isUpdating;
-    private bool _disposed;
+    private readonly CancellationTokenSource _disposeCancellation = new();
+    private readonly object _lifecycleLock = new();
+    private volatile bool _isUpdating;
+    private volatile bool _disposed;
+    private int _resourcesDisposed;
 
     public string DatabasePath => _databasePath;
     public string? LocalVersion { get; private set; }
@@ -76,10 +79,6 @@ public sealed class DatabaseUpdateService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Kept for compatibility with the existing startup path. API database
-    /// generation is manual because it rewrites the complete data set.
-    /// </summary>
     public void StartBackgroundUpdates()
     {
         _log.Info("Automatic database rebuild is disabled; waiting for manual update request.");
@@ -103,7 +102,17 @@ public sealed class DatabaseUpdateService : IDisposable
         if (!await _buildGate.WaitAsync(0))
             return new UpdateCheckResult(false, false, "데이터베이스 생성이 이미 진행 중입니다.");
 
-        _isUpdating = true;
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+            {
+                _buildGate.Release();
+                throw new ObjectDisposedException(nameof(DatabaseUpdateService));
+            }
+
+            _isUpdating = true;
+        }
+
         UpdateCheckStarted?.Invoke(this, EventArgs.Empty);
 
         try
@@ -119,29 +128,36 @@ public sealed class DatabaseUpdateService : IDisposable
                 null));
 
             var builder = new TarkovDataDatabaseBuilder(_httpClient, ReportProgress);
+            var cancellationToken = _disposeCancellation.Token;
 
             // SQLite table rewriting performs substantial synchronous work between
             // awaits. Run the complete build off the dispatcher thread so progress
             // text and the rest of the window remain responsive.
-            var result = await Task.Run(() => builder.BuildPreferredAsync(_databasePath));
+            var result = await Task.Run(
+                () => builder.BuildPreferredAsync(_databasePath, cancellationToken),
+                cancellationToken);
 
             var version = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
             try
             {
-                await File.WriteAllTextAsync(_versionFilePath, version);
+                await File.WriteAllTextAsync(_versionFilePath, version, cancellationToken);
                 LocalVersion = version;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 _log.Warning($"Database was rebuilt but version file could not be written: {exception.Message}");
             }
 
-            OnDatabaseUpdated();
+            cancellationToken.ThrowIfCancellationRequested();
 
             // Progress services aggregate quest and hideout data. Recreate their
-            // PVP snapshots after the reference database has been replaced.
+            // PVP snapshots after the reference database has been replaced. Complete
+            // this reload before publishing DatabaseUpdated so subscribers cannot race
+            // the main-window refresh against the same SQLite file.
             if (Application.Current?.MainWindow is TarkovHelper.MainWindow mainWindow)
                 await mainWindow.ReloadAfterDatabaseRebuildAsync();
+
+            OnDatabaseUpdated();
 
             var message = $"데이터베이스 생성 완료: 아이템 {result.ItemCount:N0}개, " +
                           $"퀘스트 {result.QuestCount:N0}개, 은신처 {result.HideoutStationCount:N0}개";
@@ -154,27 +170,48 @@ public sealed class DatabaseUpdateService : IDisposable
         {
             const string message = "데이터베이스 생성이 취소되었습니다. 기존 데이터베이스는 유지됩니다.";
             _log.Warning(message);
-            EnsureUiResources();
-            UpdateUiStatus(message, 0, false);
-            var result = new UpdateCheckResult(false, false, message);
-            UpdateCheckCompleted?.Invoke(this, result);
-            return result;
+            if (!_disposed)
+            {
+                EnsureUiResources();
+                UpdateUiStatus(message, 0, false);
+                var result = new UpdateCheckResult(false, false, message);
+                UpdateCheckCompleted?.Invoke(this, result);
+                return result;
+            }
+
+            return new UpdateCheckResult(false, false, message);
         }
         catch (Exception exception)
         {
             _log.Error("Database rebuild failed", exception);
             var message = $"데이터베이스 생성 실패: {exception.Message} 기존 데이터베이스는 유지됩니다.";
-            EnsureUiResources();
-            UpdateUiStatus(message, 0, false);
-            var result = new UpdateCheckResult(false, false, message);
-            UpdateCheckCompleted?.Invoke(this, result);
-            return result;
+            if (!_disposed)
+            {
+                EnsureUiResources();
+                UpdateUiStatus(message, 0, false);
+                var result = new UpdateCheckResult(false, false, message);
+                UpdateCheckCompleted?.Invoke(this, result);
+                return result;
+            }
+
+            return new UpdateCheckResult(false, false, message);
         }
         finally
         {
-            _isUpdating = false;
-            SetUpdateButtonEnabled(true);
+            var disposeResources = false;
+            lock (_lifecycleLock)
+            {
+                _isUpdating = false;
+                disposeResources = _disposed;
+            }
+
+            if (!_disposed)
+                SetUpdateButtonEnabled(true);
+
             _buildGate.Release();
+
+            if (disposeResources)
+                DisposeResources();
         }
     }
 
@@ -185,6 +222,9 @@ public sealed class DatabaseUpdateService : IDisposable
 
     private void ReportProgress(DatabaseBuildProgress progress)
     {
+        if (_disposed)
+            return;
+
         ProgressChanged?.Invoke(this, progress);
         UpdateUiStatus(
             progress.ToDisplayText(),
@@ -193,11 +233,6 @@ public sealed class DatabaseUpdateService : IDisposable
         _log.Debug($"Database rebuild: {progress.Percent:F1}% - {progress.Message}");
     }
 
-    /// <summary>
-    /// Reflows the existing settings status area vertically so long messages
-    /// wrap instead of being clipped, and adds a bounded progress bar without
-    /// requiring a large MainWindow code-behind dependency.
-    /// </summary>
     private static void UpdateUiStatus(
         string text,
         double? percent = null,
@@ -324,13 +359,33 @@ public sealed class DatabaseUpdateService : IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        var disposeResources = false;
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _disposeCancellation.Cancel();
+            disposeResources = !_isUpdating;
+        }
+
+        if (disposeResources)
+            DisposeResources();
+
+        GC.SuppressFinalize(this);
+    }
+
+    private void DisposeResources()
+    {
+        if (Interlocked.Exchange(ref _resourcesDisposed, 1) != 0)
             return;
 
-        _disposed = true;
         _httpClient.Dispose();
-        _buildGate.Dispose();
-        GC.SuppressFinalize(this);
+        _disposeCancellation.Dispose();
+
+        // _buildGate intentionally remains undisposed. A build that was already in
+        // its finally block must always be able to release the gate during shutdown.
     }
 }
 
