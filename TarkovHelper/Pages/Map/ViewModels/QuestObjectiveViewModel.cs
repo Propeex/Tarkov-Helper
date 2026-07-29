@@ -71,17 +71,14 @@ public class QuestObjectiveViewModel
         IsSelected = isSelected;
         ObjectiveId = objective.ObjectiveId;
 
-        // 제목은 번역을 강제하지 않습니다. 실제 한국어 제목이 있으면 사용하고,
-        // NameKO에 영어 fallback이 들어 있거나 번역이 없으면 기존 영문 제목을 유지합니다.
-        QuestName = QuestContentTranslationService.SelectQuestTitle(
-            objective.TaskName,
-            objective.TaskNameKo);
+        // 제목은 언어와 관계없이 원문 필드를 그대로 표시합니다.
+        QuestName = QuestTextLocalizationPolicy.PreserveTitle(objective.TaskName);
 
-        // 내용은 실제 한국어 번역을 우선 사용합니다. 영어 fallback은 한국어로
-        // 간주하지 않으며, 로드 단계에서 자동 번역된 결과가 이 필드에 들어옵니다.
-        Description = QuestContentTranslationService.SelectQuestContent(
+        // 원문 내용이 이미 한글이면 그대로 유지하고, 영어 등 비한글 내용일 때만
+        // 실제 한국어 번역값을 사용합니다.
+        Description = QuestTextLocalizationPolicy.SelectContent(
             objective.Description,
-            objective.DescriptionKo);
+            objective.DescriptionKo) ?? objective.Description;
 
         TypeDisplay = GetTypeDisplay(objective.Type);
         TypeBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(objective.MarkerColor));
