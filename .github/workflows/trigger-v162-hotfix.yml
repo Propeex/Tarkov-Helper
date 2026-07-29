@@ -32,21 +32,174 @@ jobs:
           start = workflow.index(start_marker) + len(start_marker)
           end = workflow.index(end_marker, start)
           block = workflow[start:end]
-          lines = []
-          for line in block.splitlines():
-              lines.append(line[10:] if line.startswith('          ') else line)
+          lines = [line[10:] if line.startswith('          ') else line for line in block.splitlines()]
           script = '\n'.join(lines) + '\n'
-          script = script.replace(
-              "return Path(path).read_text(encoding='utf-8-sig')",
-              "try:\n        return Path(path).read_text(encoding='utf-8-sig')\n    except UnicodeDecodeError:\n        return Path(path).read_text(encoding='cp949')")
+
+          # UserDataDbService.cs contains legacy mixed encodings. Do not rewrite it.
+          remove_start = script.index('# Objective DB clear accepts the profile used by the reset transaction.')
+          remove_end = script.index("write('TarkovHelper/Services/UserProgressResetService.cs'", remove_start)
+          script = script[:remove_start] + script[remove_end:]
+
           Path('/tmp/apply_v162.py').write_text(script, encoding='utf-8')
           subprocess.run(['python3', '/tmp/apply_v162.py'], check=True)
+
+          def read(path):
+              return Path(path).read_text(encoding='utf-8-sig')
+
+          def write(path, text):
+              Path(path).write_text(text, encoding='utf-8', newline='\n')
+
+          def replace_method(path, signature, replacement):
+              text = read(path)
+              start = text.find(signature)
+              if start < 0:
+                  raise RuntimeError(f'{path}: method signature not found: {signature}')
+              brace = text.find('{', start)
+              depth = 0
+              end = None
+              for index in range(brace, len(text)):
+                  if text[index] == '{':
+                      depth += 1
+                  elif text[index] == '}':
+                      depth -= 1
+                      if depth == 0:
+                          end = index + 1
+                          break
+              if end is None:
+                  raise RuntimeError(f'{path}: method end not found: {signature}')
+              write(path, text[:start] + replacement.rstrip() + text[end:])
+
+          objective_path = 'TarkovHelper/Services/ObjectiveProgressService.cs'
+          objective_text = read(objective_path).replace(
+              'await _userDataDb.ClearAllObjectiveProgressAsync(profileType);',
+              'await _userDataDb.ClearAllObjectiveProgressAsync();')
+          write(objective_path, objective_text)
+
+          write('TarkovHelper/Services/UserProgressResetService.cs', '''using TarkovHelper.Models;
+
+          namespace TarkovHelper.Services;
+
+          public sealed class UserProgressResetService
+          {
+              private static UserProgressResetService? _instance;
+              public static UserProgressResetService Instance => _instance ??= new UserProgressResetService();
+
+              private readonly SemaphoreSlim _resetGate = new(1, 1);
+
+              private UserProgressResetService()
+              {
+              }
+
+              public async Task ResetCurrentProfileAsync()
+              {
+                  await _resetGate.WaitAsync();
+                  try
+                  {
+                      var profile = ProfileService.Instance.CurrentProfile;
+
+                      await ItemInventoryService.Instance.ResetAllInventoryAsync(profile);
+                      await QuestProgressService.Instance.ResetAllProgressAsync(profile);
+                      await HideoutProgressService.Instance.ResetAllProgressAsync(profile);
+
+                      // Old fire-and-forget writes can finish shortly after the reset request.
+                      // Re-clear and verify until the database remains empty.
+                      for (var attempt = 0; attempt < 3; attempt++)
+                      {
+                          await ClearAllDatabaseRowsAsync(profile);
+                          ResetAllInMemoryServices();
+                          await Task.Delay(250);
+
+                          var counts = await GetRowCountsAsync(profile);
+                          if (counts == (0, 0, 0, 0))
+                              return;
+                      }
+
+                      var finalCounts = await GetRowCountsAsync(profile);
+                      throw new InvalidDataException(
+                          $"Reset verification failed: quests={finalCounts.Quests}, " +
+                          $"objectives={finalCounts.Objectives}, hideout={finalCounts.Hideout}, " +
+                          $"inventory={finalCounts.Inventory}.");
+                  }
+                  finally
+                  {
+                      _resetGate.Release();
+                  }
+              }
+
+              private static async Task ClearAllDatabaseRowsAsync(ProfileType profile)
+              {
+                  var database = UserDataDbService.Instance;
+                  await database.ClearAllQuestProgressAsync(profile);
+                  await database.ClearAllObjectiveProgressAsync();
+                  await database.ClearAllHideoutProgressAsync(profile);
+                  await database.ClearAllItemInventoryAsync(profile);
+              }
+
+              private static async Task<(int Quests, int Objectives, int Hideout, int Inventory)> GetRowCountsAsync(
+                  ProfileType profile)
+              {
+                  var database = UserDataDbService.Instance;
+                  var quests = await database.LoadQuestProgressAsync(profile);
+                  var objectives = await database.LoadObjectiveProgressAsync();
+                  var hideout = await database.LoadHideoutProgressAsync(profile);
+                  var inventory = await database.LoadItemInventoryAsync(profile);
+                  return (quests.Count, objectives.Count, hideout.Count, inventory.Count);
+              }
+
+              private static void ResetAllInMemoryServices()
+              {
+                  QuestProgressService.Instance.ResetInMemoryProgress();
+                  ObjectiveProgressService.Instance.ResetInMemoryProgress();
+                  HideoutProgressService.Instance.ResetInMemoryProgress();
+                  ItemInventoryService.Instance.ResetInMemoryInventory();
+              }
+          }
+          ''')
+
+          replace_method(
+              'TarkovHelper.DatabaseSmoke/Program.cs',
+              'static async Task RunUserProgressResetSmokeAsync()',
+          '''static async Task RunUserProgressResetSmokeAsync()
+          {
+              var database = UserDataDbService.Instance;
+              var profile = ProfileType.Pvp;
+
+              await database.SaveQuestProgressAsync(
+                  "reset-smoke-quest",
+                  "reset-smoke-quest",
+                  QuestStatus.Done,
+                  profile);
+              await database.SaveObjectiveProgressAsync(
+                  "reset-smoke-quest:0",
+                  "reset-smoke-quest",
+                  true);
+              await database.SaveHideoutProgressAsync("reset-smoke-hideout", 2, profile);
+              await database.SaveItemInventoryAsync("reset-smoke-item", 3, 4, profile);
+
+              await database.ClearAllQuestProgressAsync(profile);
+              await database.ClearAllObjectiveProgressAsync();
+              await database.ClearAllHideoutProgressAsync(profile);
+              await database.ClearAllItemInventoryAsync(profile);
+
+              var counts = (
+                  Quests: (await database.LoadQuestProgressAsync(profile)).Count,
+                  Objectives: (await database.LoadObjectiveProgressAsync()).Count,
+                  Hideout: (await database.LoadHideoutProgressAsync(profile)).Count,
+                  Inventory: (await database.LoadItemInventoryAsync(profile)).Count);
+              if (counts != (0, 0, 0, 0))
+              {
+                  throw new InvalidDataException(
+                      $"User progress reset smoke failed: quests={counts.Quests}, " +
+                      $"objectives={counts.Objectives}, hideout={counts.Hideout}, " +
+                      $"inventory={counts.Inventory}.");
+              }
+          }''')
           PY
 
       - name: Commit patched source
         shell: bash
         run: |
-          rm -f .github/workflows/trigger-v162-hotfix.yml
+          rm -f .github/workflows/trigger-v162-hotfix.yml .github/workflows/apply-v162-hotfix.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
