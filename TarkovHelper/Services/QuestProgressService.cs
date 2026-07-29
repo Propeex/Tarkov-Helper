@@ -643,6 +643,8 @@ namespace TarkovHelper.Services
             // Save and notify only once after all recursive completions
             if (changedQuests.Count > 0)
             {
+                ConsumeItemsForCompletedQuests(changedQuests);
+
                 // PVE/PVP 격리를 위해 로드된 프로필 정보를 명시적으로 전달
                 _ = SaveProgressBatchAsync(changedQuests, _loadedProfile);
                 System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Progress save initiated for {_loadedProfile}");
@@ -721,6 +723,29 @@ namespace TarkovHelper.Services
             changedQuests.Add((taskId ?? taskKey, task.NormalizedName, QuestStatus.Done));
         }
 
+        private void ConsumeItemsForCompletedQuests(
+            IEnumerable<(string Id, string? NormalizedName, QuestStatus Status)> changes)
+        {
+            var consumedQuestKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var change in changes.Where(change => change.Status == QuestStatus.Done))
+            {
+                var task = GetTaskById(change.Id);
+                task ??= !string.IsNullOrWhiteSpace(change.NormalizedName)
+                    ? GetTask(change.NormalizedName)
+                    : null;
+                if (task == null)
+                    continue;
+
+                var key = task.Ids?.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
+                          ?? task.NormalizedName;
+                if (string.IsNullOrWhiteSpace(key) || !consumedQuestKeys.Add(key))
+                    continue;
+
+                InventoryConsumptionService.Instance.ConsumeQuestRequirements(task);
+            }
+        }
+
         /// <summary>
         /// Save changed quests in batch (fire-and-forget, doesn't block UI)
         /// </summary>
@@ -776,6 +801,7 @@ namespace TarkovHelper.Services
 
             if (changedQuests.Count > 0)
             {
+                ConsumeItemsForCompletedQuests(changedQuests);
                 System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Batch completing {changedQuests.Count} quests for {_loadedProfile}");
                 _ = SaveProgressBatchAsync(changedQuests, _loadedProfile);
                 ProgressChanged?.Invoke(this, EventArgs.Empty);
@@ -891,6 +917,8 @@ namespace TarkovHelper.Services
 
             if (changedItems.Count > 0)
             {
+                ConsumeItemsForCompletedQuests(changedItems);
+
                 // Save all changes in one batch transaction
                 await _userDataDb.SaveQuestProgressBatchAsync(changedItems);
                 System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Batch saved {changedItems.Count} quest changes");

@@ -35,6 +35,7 @@ public partial class MapPage : UserControl
     private readonly QuestProgressService _progressService = QuestProgressService.Instance;
     private readonly LocalizationService _loc = LocalizationService.Instance;
     private readonly OverlayMiniMapService _overlayService = OverlayMiniMapService.Instance;
+    private static string? _sessionSelectedMapKey;
     private string? _currentMapKey;
     private double _zoomLevel = 1.0;
     private const double MinZoom = 0.1;
@@ -304,6 +305,7 @@ public partial class MapPage : UserControl
 
             // 퀘스트 진행 상태 변경 이벤트 구독
             _progressService.ProgressChanged += OnQuestProgressChanged;
+            ActualQuestStatusService.Instance.StatusChanged += OnQuestProgressChanged;
             ObjectiveProgressService.Instance.ObjectiveProgressChanged += OnObjectiveProgressChanged;
 
             // Global Keyboard Hook 시작 (NumPad 키로 층 변경)
@@ -351,6 +353,7 @@ public partial class MapPage : UserControl
 
         // 이벤트 구독 해제
         _progressService.ProgressChanged -= OnQuestProgressChanged;
+        ActualQuestStatusService.Instance.StatusChanged -= OnQuestProgressChanged;
         ObjectiveProgressService.Instance.ObjectiveProgressChanged -= OnObjectiveProgressChanged;
         MapMarkerDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
         QuestObjectiveDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
@@ -683,8 +686,29 @@ public partial class MapPage : UserControl
             });
         }
 
-        if (CmbMapSelect.Items.Count > 0 && CmbMapSelect.SelectedIndex < 0)
-            CmbMapSelect.SelectedIndex = 0;
+        if (CmbMapSelect.Items.Count == 0 || CmbMapSelect.SelectedIndex >= 0)
+            return;
+
+        // A newly-created map page used to select index 0 (Woods) before state
+        // restoration, which overwrote the previous tab's selection. Prefer the
+        // process-lifetime selection, then the persisted setting, and only then
+        // fall back to the first map.
+        var preferredMap = _sessionSelectedMapKey ?? SettingsService.Instance.MapLastSelectedMap;
+        var preferredIndex = -1;
+        if (!string.IsNullOrWhiteSpace(preferredMap))
+        {
+            for (var index = 0; index < CmbMapSelect.Items.Count; index++)
+            {
+                if (CmbMapSelect.Items[index] is ComboBoxItem item &&
+                    string.Equals(item.Tag as string, preferredMap, StringComparison.OrdinalIgnoreCase))
+                {
+                    preferredIndex = index;
+                    break;
+                }
+            }
+        }
+
+        CmbMapSelect.SelectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
     }
 
     private void UpdateUI()
@@ -1191,6 +1215,8 @@ public partial class MapPage : UserControl
             {
                 var ct = GetNewCancellationToken();
                 _currentMapKey = mapKey;
+                _sessionSelectedMapKey = mapKey;
+                SettingsService.Instance.MapLastSelectedMap = mapKey;
                 _trackerService?.SetCurrentMap(mapKey);
 
                 // 줌 초기화 및 위치 리셋 (새 지도가 튀는 현상 방지)
@@ -2202,6 +2228,12 @@ public partial class MapPage : UserControl
 
     private async void OnQuestProgressChanged(object? sender, EventArgs e)
     {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => OnQuestProgressChanged(sender, e)));
+            return;
+        }
+
         try
         {
             var ct = GetNewCancellationToken();

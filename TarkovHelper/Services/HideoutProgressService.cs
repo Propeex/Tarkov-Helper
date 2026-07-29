@@ -113,8 +113,12 @@ namespace TarkovHelper.Services
             if (string.IsNullOrEmpty(module.NormalizedName))
                 return;
 
+            var previousLevel = GetCurrentLevel(module);
+
             // Clamp level between 0 and max level
             level = Math.Max(0, Math.Min(level, module.MaxLevel));
+            if (level == previousLevel)
+                return;
 
             if (level == 0)
             {
@@ -123,6 +127,16 @@ namespace TarkovHelper.Services
             else
             {
                 _progress.Modules[module.NormalizedName] = level;
+            }
+
+            // Materials are spent only when advancing. Lowering a level is treated as
+            // progress correction and does not refund already consumed inventory.
+            if (level > previousLevel)
+            {
+                InventoryConsumptionService.Instance.ConsumeHideoutLevels(
+                    module,
+                    previousLevel,
+                    level);
             }
 
             _progress.LastUpdated = DateTime.UtcNow;

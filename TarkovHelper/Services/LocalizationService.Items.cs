@@ -67,23 +67,19 @@ public partial class LocalizationService
     private static string GetCategoryNameKO(string key) => key switch
     {
         "All Categories" => "전체 카테고리",
-        "Provisions" => "식량",
+        "Provisions" => "식량·음료",
         "Medical" => "의료품",
-        "Gear" => "장비",
-        "Barter" => "물물교환",
-        "Info & Keys" => "정보 & 열쇠",
-        "Containers" => "컨테이너",
-        "Money" => "화폐",
-        "Ammo" => "탄약",
-        "Weapon Mods" => "무기 부품",
-        "Optics" => "광학장비",
-        "Tactical" => "전술장비",
-        "Helmet Mods" => "헬멧 부품",
+        "Barter" => "물물교환·제작 재료",
+        "KeysIntel" => "열쇠·정보",
         "Weapons" => "무기",
-        "Quest Items" => "퀘스트 아이템",
-        "Misc" => "기타",
+        "Ammunition" => "탄약·탄창",
+        "WeaponParts" => "무기 부품",
+        "Equipment" => "방어구·장비",
+        "Containers" => "보관함",
+        "Currency" => "화폐",
+        "Quest" => "퀘스트 아이템",
         "Other" => "기타",
-        _ => key // Fallback to English
+        _ => "기타"
     };
 
     #endregion

@@ -129,6 +129,12 @@ public class MapQuestMarkerManager
         if (string.IsNullOrEmpty(_currentMapKey)) return;
         if (!_objectiveService.IsLoaded) return;
 
+        // The map must use the same calculated status as the quest tab. Eligibility
+        // alone is not enough; only quests confirmed as started by the game log are
+        // allowed to create markers.
+        await ActualQuestStatusService.Instance.EnsureInitializedAsync();
+        ct.ThrowIfCancellationRequested();
+
         // 기존 마커 제거
         ClearMarkers();
 

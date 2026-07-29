@@ -198,6 +198,85 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
+        /// Consume several item requirements atomically in memory and persist each
+        /// affected item through the existing debounce queue. General requirements
+        /// consume non-FIR stock first; FIR-only requirements consume FIR stock only.
+        /// Quantities never become negative.
+        /// </summary>
+        public InventoryConsumptionResult ConsumeBatch(
+            IEnumerable<InventoryConsumptionRequirement> requirements)
+        {
+            var requested = 0;
+            var consumed = 0;
+            var changed = false;
+
+            lock (_lock)
+            {
+                foreach (var requirement in requirements)
+                {
+                    if (string.IsNullOrWhiteSpace(requirement.ItemNormalizedName) ||
+                        requirement.Quantity <= 0)
+                    {
+                        continue;
+                    }
+
+                    requested += requirement.Quantity;
+                    if (!_inventoryData.Items.TryGetValue(
+                            requirement.ItemNormalizedName,
+                            out var inventory))
+                    {
+                        continue;
+                    }
+
+                    var remaining = requirement.Quantity;
+                    if (requirement.FirOnly)
+                    {
+                        var fromFir = Math.Min(inventory.FirQuantity, remaining);
+                        inventory.FirQuantity -= fromFir;
+                        remaining -= fromFir;
+                        consumed += fromFir;
+                    }
+                    else
+                    {
+                        // Preserve FIR items where possible because later quests may
+                        // explicitly require FIR status.
+                        var fromNonFir = Math.Min(inventory.NonFirQuantity, remaining);
+                        inventory.NonFirQuantity -= fromNonFir;
+                        remaining -= fromNonFir;
+                        consumed += fromNonFir;
+
+                        var fromFir = Math.Min(inventory.FirQuantity, remaining);
+                        inventory.FirQuantity -= fromFir;
+                        remaining -= fromFir;
+                        consumed += fromFir;
+                    }
+
+                    if (remaining != requirement.Quantity)
+                    {
+                        changed = true;
+                        CleanupEmptyInventory(requirement.ItemNormalizedName);
+                        _pendingSaves.Add(requirement.ItemNormalizedName);
+                    }
+                }
+
+                if (changed)
+                {
+                    _inventoryData.LastUpdated = DateTime.UtcNow;
+                    _saveTimer?.Stop();
+                    _saveTimer?.Start();
+                }
+            }
+
+            if (changed)
+                InventoryChanged?.Invoke(this, EventArgs.Empty);
+
+            return new InventoryConsumptionResult(
+                requested,
+                consumed,
+                Math.Max(0, requested - consumed));
+        }
+
+        /// <summary>
         /// Remove inventory entry if both quantities are 0
         /// </summary>
         private void CleanupEmptyInventory(string itemNormalizedName)

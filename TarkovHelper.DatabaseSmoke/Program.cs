@@ -255,6 +255,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     if (invalidMaxLevels != 0)
         throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
 
+    RunApplicationBehaviorSmoke();
+
     Console.WriteLine(
         $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
@@ -432,6 +434,64 @@ static async Task RunOutageHandlingSmokeAsync(string databasePath)
     Console.WriteLine(
         $"Outage handling smoke passed: elapsed={stopwatch.Elapsed.TotalMilliseconds:F0}ms, " +
         $"static={outageHandler.StaticRequestCount}, graphql={outageHandler.GraphQlRequestCount}, etaHidden=true");
+}
+
+static void RunApplicationBehaviorSmoke()
+{
+    const string inventoryKey = "__maintenance-consumption-smoke__";
+    var inventory = ItemInventoryService.Instance;
+    inventory.SetFirQuantity(inventoryKey, 3);
+    inventory.SetNonFirQuantity(inventoryKey, 5);
+
+    var generalResult = inventory.ConsumeBatch([
+        new InventoryConsumptionRequirement(inventoryKey, 4, FirOnly: false)
+    ]);
+    if (generalResult.Consumed != 4 ||
+        inventory.GetNonFirQuantity(inventoryKey) != 1 ||
+        inventory.GetFirQuantity(inventoryKey) != 3)
+    {
+        throw new InvalidDataException(
+            "General inventory consumption did not preserve FIR stock or subtract the expected quantity.");
+    }
+
+    var firResult = inventory.ConsumeBatch([
+        new InventoryConsumptionRequirement(inventoryKey, 5, FirOnly: true)
+    ]);
+    if (firResult.Consumed != 3 || firResult.Missing != 2 ||
+        inventory.GetFirQuantity(inventoryKey) != 0 ||
+        inventory.GetNonFirQuantity(inventoryKey) != 1)
+    {
+        throw new InvalidDataException(
+            "FIR-only inventory consumption did not clamp at the available FIR quantity.");
+    }
+
+    inventory.SetNonFirQuantity(inventoryKey, 0);
+
+    var statusTask = new TarkovTask
+    {
+        Ids = ["actual-status-smoke"],
+        NormalizedName = "actual-status-smoke",
+        Name = "Actual Status Smoke"
+    };
+    var availableStatus = new ActualQuestStatusEvaluator(
+        QuestProgressService.Instance,
+        []).Evaluate(statusTask);
+    var activeStatus = new ActualQuestStatusEvaluator(
+        QuestProgressService.Instance,
+        ["actual-status-smoke"]).Evaluate(statusTask);
+    if (availableStatus != QuestStatus.Available || activeStatus != QuestStatus.Active)
+    {
+        throw new InvalidDataException(
+            $"Actual quest status separation failed: available={availableStatus}, active={activeStatus}.");
+    }
+
+    var categories = ItemsDataService.Instance;
+    if (categories.GetParentCategory("Scopes") != "WeaponParts" ||
+        categories.GetParentCategory("Magazines") != "Ammunition" ||
+        categories.GetParentCategory("unrecognized-category") != "Other")
+    {
+        throw new InvalidDataException("Practical item category grouping failed.");
+    }
 }
 
 static async Task<int> RunExternalApiSmokeAsync()

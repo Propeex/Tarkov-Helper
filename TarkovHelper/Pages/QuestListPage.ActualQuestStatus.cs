@@ -1,25 +1,18 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
-using TarkovHelper.Services.Logging;
 
 namespace TarkovHelper.Pages;
 
 public partial class QuestListPage
 {
-    private static readonly ILogger _actualStatusLog = Log.For<QuestListPage>();
     private static readonly Brush AvailableBrush =
         new SolidColorBrush(Color.FromRgb(0x00, 0x96, 0x88));
 
-    private readonly HashSet<string> _actuallyStartedQuestKeys =
-        new(StringComparer.OrdinalIgnoreCase);
-
     private bool _actualStatusEventsSubscribed;
-    private bool _actualStatusRefreshRunning;
 
     private void InitializeActualQuestStatusTracking()
     {
@@ -36,10 +29,11 @@ public partial class QuestListPage
         if (_isUnloaded)
             return;
 
-        // Until the log scan completes, do not mislabel every eligible quest as
-        // actually in progress.
+        // Until the shared log scan completes, do not mislabel every eligible
+        // quest as actually in progress. The map consumes this same status source.
         ApplyActualQuestStatuses();
-        await RefreshActuallyStartedQuestsAsync();
+        await ActualQuestStatusService.Instance.RefreshFromLogsAsync();
+        ApplyActualQuestStatuses();
     }
 
     private void ActualQuestStatus_Unloaded(object sender, RoutedEventArgs e)
@@ -53,57 +47,12 @@ public partial class QuestListPage
             await Task.Delay(50);
     }
 
-    private async Task RefreshActuallyStartedQuestsAsync()
-    {
-        if (_actualStatusRefreshRunning)
-            return;
-
-        _actualStatusRefreshRunning = true;
-        try
-        {
-            var logFolder = SettingsService.Instance.LogFolderPath;
-            if (string.IsNullOrWhiteSpace(logFolder) || !Directory.Exists(logFolder))
-            {
-                _actuallyStartedQuestKeys.Clear();
-                ApplyActualQuestStatuses();
-                _actualStatusLog.Warning(
-                    "Quest log folder is unavailable; eligible quests are shown as Available rather than Active.");
-                return;
-            }
-
-            var result = await LogSyncService.Instance.SyncFromLogsAsync(
-                logFolder,
-                progress: null,
-                daysRange: 0);
-
-            _actuallyStartedQuestKeys.Clear();
-            foreach (var task in result.InProgressQuests)
-                AddStartedQuestKeys(task);
-
-            ApplyActualQuestStatuses();
-            _actualStatusLog.Info(
-                $"Actual quest status scan found {result.InProgressQuests.Count} in-progress quests " +
-                $"from {result.TotalEventsFound} log events.");
-        }
-        catch (Exception exception)
-        {
-            _actualStatusLog.Error("Failed to calculate actual in-progress quests from logs.", exception);
-            ApplyActualQuestStatuses();
-        }
-        finally
-        {
-            _actualStatusRefreshRunning = false;
-        }
-    }
-
     private void ApplyActualQuestStatuses()
     {
         if (_isUnloaded || !_isDataLoaded)
             return;
 
-        var evaluator = new ActualQuestStatusEvaluator(
-            _progressService,
-            _actuallyStartedQuestKeys);
+        var evaluator = ActualQuestStatusService.Instance.CreateEvaluator();
 
         foreach (var viewModel in _allQuestViewModels)
         {
@@ -170,30 +119,6 @@ public partial class QuestListPage
             $"완료: {done} | 실패: {failed} | 불가: {unavailable}";
     }
 
-    private void AddStartedQuestKeys(TarkovTask task)
-    {
-        if (!string.IsNullOrWhiteSpace(task.NormalizedName))
-            _actuallyStartedQuestKeys.Add(task.NormalizedName);
-
-        foreach (var id in task.Ids ?? [])
-        {
-            if (!string.IsNullOrWhiteSpace(id))
-                _actuallyStartedQuestKeys.Add(id);
-        }
-    }
-
-    private void RemoveStartedQuestKeys(TarkovTask task)
-    {
-        if (!string.IsNullOrWhiteSpace(task.NormalizedName))
-            _actuallyStartedQuestKeys.Remove(task.NormalizedName);
-
-        foreach (var id in task.Ids ?? [])
-        {
-            if (!string.IsNullOrWhiteSpace(id))
-                _actuallyStartedQuestKeys.Remove(id);
-        }
-    }
-
     private void SubscribeActualStatusEvents()
     {
         if (_actualStatusEventsSubscribed)
@@ -208,7 +133,7 @@ public partial class QuestListPage
         SettingsService.Instance.HasUnheardEditionChanged += ActualStatus_BoolSettingChanged;
         SettingsService.Instance.PrestigeLevelChanged += ActualStatus_IntSettingChanged;
         SettingsService.Instance.DspDecodeCountChanged += ActualStatus_IntSettingChanged;
-        LogSyncService.Instance.QuestEventDetected += ActualStatus_QuestEventDetected;
+        ActualQuestStatusService.Instance.StatusChanged += ActualStatus_ProgressChanged;
 
         TxtSearch.TextChanged += ActualStatus_FilterChanged;
         ChkKappaOnly.Checked += ActualStatus_FilterChanged;
@@ -238,7 +163,7 @@ public partial class QuestListPage
         SettingsService.Instance.HasUnheardEditionChanged -= ActualStatus_BoolSettingChanged;
         SettingsService.Instance.PrestigeLevelChanged -= ActualStatus_IntSettingChanged;
         SettingsService.Instance.DspDecodeCountChanged -= ActualStatus_IntSettingChanged;
-        LogSyncService.Instance.QuestEventDetected -= ActualStatus_QuestEventDetected;
+        ActualQuestStatusService.Instance.StatusChanged -= ActualStatus_ProgressChanged;
 
         TxtSearch.TextChanged -= ActualStatus_FilterChanged;
         ChkKappaOnly.Checked -= ActualStatus_FilterChanged;
@@ -290,21 +215,4 @@ public partial class QuestListPage
             DispatcherPriority.ContextIdle);
     }
 
-    private void ActualStatus_QuestEventDetected(object? sender, QuestLogEvent e)
-    {
-        Dispatcher.BeginInvoke(() =>
-        {
-            var task = _progressService.GetTaskByBsgId(e.QuestId) ??
-                       _progressService.GetTaskById(e.QuestId);
-            if (task == null)
-                return;
-
-            if (e.EventType == QuestEventType.Started)
-                AddStartedQuestKeys(task);
-            else
-                RemoveStartedQuestKeys(task);
-
-            ApplyActualQuestStatuses();
-        });
-    }
 }

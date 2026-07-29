@@ -134,7 +134,7 @@ public sealed class QuestObjectiveService
                 ?? progressService.GetTask(obj.TaskNormalizedName);
             if (task != null)
             {
-                var status = progressService.GetStatus(task);
+                var status = ActualQuestStatusService.Instance.GetStatus(task);
                 if (status == QuestStatus.Active)
                 {
                     // 목표 완료 상태 확인
