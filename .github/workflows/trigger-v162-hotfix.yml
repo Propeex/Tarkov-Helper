@@ -36,6 +36,9 @@ jobs:
           for line in block.splitlines():
               lines.append(line[10:] if line.startswith('          ') else line)
           script = '\n'.join(lines) + '\n'
+          script = script.replace(
+              "return Path(path).read_text(encoding='utf-8-sig')",
+              "try:\n        return Path(path).read_text(encoding='utf-8-sig')\n    except UnicodeDecodeError:\n        return Path(path).read_text(encoding='cp949')")
           Path('/tmp/apply_v162.py').write_text(script, encoding='utf-8')
           subprocess.run(['python3', '/tmp/apply_v162.py'], check=True)
           PY
