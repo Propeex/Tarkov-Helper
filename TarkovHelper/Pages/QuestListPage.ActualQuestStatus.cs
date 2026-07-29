@@ -74,6 +74,7 @@ public partial class QuestListPage
         }
 
         ApplyFilters();
+        ApplySelectedQuestDetailTitlePolicy();
         UpdateActualQuestStatistics();
     }
 
@@ -90,6 +91,27 @@ public partial class QuestListPage
             !string.Equals(viewModel.DisplayName, viewModel.Task.Name, StringComparison.Ordinal);
         viewModel.SubtitleName = showEnglishSubtitle ? viewModel.Task.Name : string.Empty;
         viewModel.SubtitleVisibility = showEnglishSubtitle
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void ApplySelectedQuestDetailTitlePolicy()
+    {
+        if (LstQuests.SelectedItem is not QuestViewModel selected)
+            return;
+
+        var koreanTitle = selected.Task.NameKo;
+        var hasActualKoreanTitle = QuestContentTranslationService.ContainsHangul(koreanTitle);
+        var displayedTitle = hasActualKoreanTitle
+            ? koreanTitle!.Trim()
+            : selected.Task.Name;
+
+        TxtDetailName.Text = displayedTitle;
+
+        var showEnglishSubtitle = hasActualKoreanTitle &&
+            !string.Equals(displayedTitle, selected.Task.Name, StringComparison.Ordinal);
+        TxtDetailSubtitle.Text = showEnglishSubtitle ? selected.Task.Name : string.Empty;
+        TxtDetailSubtitle.Visibility = showEnglishSubtitle
             ? Visibility.Visible
             : Visibility.Collapsed;
     }
@@ -216,6 +238,7 @@ public partial class QuestListPage
             return;
 
         UpdateDetailPanel(selected);
+        ApplySelectedQuestDetailTitlePolicy();
     }
 
     private void QuestTranslation_LanguageChanged(object? sender, AppLanguage language)
