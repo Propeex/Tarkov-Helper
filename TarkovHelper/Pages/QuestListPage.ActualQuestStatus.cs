@@ -29,13 +29,6 @@ public partial class QuestListPage
         if (_isUnloaded)
             return;
 
-        // 퀘스트 제목은 변경하지 않고 영어로 남은 목표 문장만 한국어로
-        // 보완합니다. 기존 한국어 문장은 그대로 유지하며 결과는 로컬 캐시됩니다.
-        await QuestContentTranslationService.Instance.TranslateMissingAsync(
-            _allQuestViewModels.Select(viewModel => viewModel.Task));
-        if (_isUnloaded)
-            return;
-
         // Until the shared log scan completes, do not mislabel every eligible
         // quest as actually in progress. The map consumes this same status source.
         ApplyActualQuestStatuses();
@@ -154,6 +147,7 @@ public partial class QuestListPage
         RbBear.Unchecked += ActualStatus_FilterChanged;
         RbUsec.Checked += ActualStatus_FilterChanged;
         RbUsec.Unchecked += ActualStatus_FilterChanged;
+        LstQuests.SelectionChanged += QuestTranslation_SelectionChanged;
     }
 
     private void UnsubscribeActualStatusEvents()
@@ -184,6 +178,23 @@ public partial class QuestListPage
         RbBear.Unchecked -= ActualStatus_FilterChanged;
         RbUsec.Checked -= ActualStatus_FilterChanged;
         RbUsec.Unchecked -= ActualStatus_FilterChanged;
+        LstQuests.SelectionChanged -= QuestTranslation_SelectionChanged;
+    }
+
+    private async void QuestTranslation_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isUnloaded || LstQuests.SelectedItem is not QuestViewModel selected)
+            return;
+
+        // 전체 퀘스트를 선행 번역하지 않고 사용자가 상세 화면을 연 퀘스트의
+        // 영어 목표 문장만 번역합니다. 제목은 어떤 경우에도 수정하지 않습니다.
+        await QuestContentTranslationService.Instance.TranslateMissingAsync(
+            new[] { selected.Task });
+
+        if (_isUnloaded || !ReferenceEquals(LstQuests.SelectedItem, selected))
+            return;
+
+        UpdateDetailPanel(selected);
     }
 
     private void ActualStatus_ProgressChanged(object? sender, EventArgs e)
