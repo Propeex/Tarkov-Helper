@@ -24,14 +24,21 @@ public sealed class UserProgressResetService
             await QuestProgressService.Instance.ResetAllProgressAsync(profile);
             await HideoutProgressService.Instance.ResetAllProgressAsync(profile);
 
-            for (var attempt = 0; attempt < 3; attempt++)
+            for (var attempt = 0; attempt < 4; attempt++)
             {
                 await ClearAllDatabaseRowsAsync(profile);
                 ResetAllInMemoryServices();
                 await Task.Delay(250);
 
-                var counts = await GetRowCountsAsync(profile);
-                if (counts == (0, 0, 0, 0))
+                var firstCheck = await GetRowCountsAsync(profile);
+                if (!IsEmpty(firstCheck))
+                    continue;
+
+                // A previously queued save can arrive just after the first empty read.
+                // Require a second empty read after a stability window before reporting success.
+                await Task.Delay(350);
+                var stabilityCheck = await GetRowCountsAsync(profile);
+                if (IsEmpty(stabilityCheck))
                     return;
             }
 
@@ -46,6 +53,9 @@ public sealed class UserProgressResetService
             _resetGate.Release();
         }
     }
+
+    private static bool IsEmpty((int Quests, int Objectives, int Hideout, int Inventory) counts)
+        => counts == (0, 0, 0, 0);
 
     private static async Task ClearAllDatabaseRowsAsync(ProfileType profile)
     {
