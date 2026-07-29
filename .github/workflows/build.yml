@@ -147,8 +147,9 @@ jobs:
     needs:
       - build
       - database-smoke
+      - database-external-smoke
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -158,6 +159,27 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+
+      - name: Download verified live database
+        uses: actions/download-artifact@v4
+        with:
+          name: database-external-smoke-db
+          path: rebuilt-db
+
+      - name: Inject verified live database
+        shell: pwsh
+        run: |
+          $databasePath = "rebuilt-db/tarkov_data.db"
+          if (-not (Test-Path $databasePath)) {
+            throw "The externally rebuilt database artifact is missing."
+          }
+
+          $databaseSize = (Get-Item $databasePath).Length
+          if ($databaseSize -lt 1MB) {
+            throw "The externally rebuilt database is unexpectedly small: $databaseSize bytes."
+          }
+
+          Copy-Item $databasePath "TarkovHelper/Assets/tarkov_data.db" -Force
 
       - name: Publish Windows release candidate
         shell: pwsh
@@ -179,6 +201,11 @@ jobs:
             if (-not (Test-Path $requiredFile)) {
               throw "Required release file is missing: $requiredFile"
             }
+          }
+
+          $publishedDatabaseSize = (Get-Item "publish/Assets/tarkov_data.db").Length
+          if ($publishedDatabaseSize -lt 1MB) {
+            throw "The published database is unexpectedly small: $publishedDatabaseSize bytes."
           }
 
           Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
