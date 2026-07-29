@@ -71,17 +71,12 @@ public class QuestObjectiveViewModel
         IsSelected = isSelected;
         ObjectiveId = objective.ObjectiveId;
 
-        // 기존 표시 규칙으로 선택된 한글/영문 제목은 그대로 유지합니다.
-        // 자동 번역은 제목에 적용하지 않습니다.
-        QuestName = QuestContentTranslationService.SelectQuestTitle(
+        QuestName = QuestKoreanSourcePolicy.SelectQuestTitle(
             objective.TaskName,
             objective.TaskNameKo);
-
-        // 원문 내용이 이미 한글이면 그대로 유지하고, 영어 등 비한글 내용일 때만
-        // 실제 한국어 번역값을 사용합니다.
-        Description = QuestTextLocalizationPolicy.SelectContent(
+        Description = QuestKoreanSourcePolicy.SelectQuestContent(
             objective.Description,
-            objective.DescriptionKo) ?? objective.Description;
+            objective.DescriptionKo);
 
         TypeDisplay = GetTypeDisplay(objective.Type);
         TypeBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(objective.MarkerColor));
