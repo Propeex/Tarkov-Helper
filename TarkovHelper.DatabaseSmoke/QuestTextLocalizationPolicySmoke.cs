@@ -31,8 +31,23 @@ internal static class QuestTextLocalizationPolicySmoke
             expected: "No translation available",
             caseName: "Missing Korean translation falls back to original");
 
-        AssertTitle("English Quest", "번역된 제목");
-        AssertTitle("한글 퀘스트", "다른 한글 제목");
+        AssertTitleUnchanged(
+            sourceTitle: "English Quest",
+            koreanTitle: null,
+            sourceContent: "Complete the objective",
+            koreanContent: "목표를 완료하십시오");
+
+        AssertTitleUnchanged(
+            sourceTitle: "한글 퀘스트",
+            koreanTitle: null,
+            sourceContent: "Complete the objective",
+            koreanContent: "목표를 완료하십시오");
+
+        AssertTitleUnchanged(
+            sourceTitle: "English Source Quest",
+            koreanTitle: "표시 중인 한글 퀘스트",
+            sourceContent: "이미 한글인 목표 내용",
+            koreanContent: "다시 번역된 목표 내용");
     }
 
     private static void AssertContent(
@@ -50,18 +65,29 @@ internal static class QuestTextLocalizationPolicySmoke
         }
     }
 
-    private static void AssertTitle(string original, string translated)
+    private static void AssertTitleUnchanged(
+        string sourceTitle,
+        string? koreanTitle,
+        string sourceContent,
+        string? koreanContent)
     {
         var task = new TarkovTask
         {
-            Name = original,
-            NameKo = translated
+            Name = sourceTitle,
+            NameKo = koreanTitle,
+            Objectives = [sourceContent]
         };
 
-        if (!string.Equals(task.Name, original, StringComparison.Ordinal) || task.NameKo != null)
+        var titleBefore = QuestContentTranslationService.SelectQuestTitle(task.Name, task.NameKo);
+        task.Objectives[0] = QuestTextLocalizationPolicy.SelectContent(
+            task.Objectives[0],
+            koreanContent) ?? task.Objectives[0];
+        var titleAfter = QuestContentTranslationService.SelectQuestTitle(task.Name, task.NameKo);
+
+        if (!string.Equals(titleAfter, titleBefore, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                $"Quest title localization policy failed: original='{original}', NameKo='{task.NameKo}'.");
+                $"Quest content translation changed the title: before='{titleBefore}', after='{titleAfter}'.");
         }
     }
 }
