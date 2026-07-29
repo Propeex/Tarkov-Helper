@@ -10,9 +10,10 @@ public partial class MainWindow
     /// </summary>
     internal async Task ReloadAfterDatabaseRebuildAsync()
     {
-        // DatabaseUpdated is dispatched asynchronously. Load the newly replaced
-        // quest database explicitly before rebuilding profile-bound services so
-        // QuestProgressService cannot retain the pre-update empty snapshot.
+        // DatabaseUpdated is dispatched only after this method completes. Reload the
+        // reference-data caches first so newly constructed pages cannot capture the
+        // pre-rebuild item lookup or an empty quest snapshot.
+        await ItemDbService.Instance.LoadItemsAsync();
         await QuestDbService.Instance.LoadQuestsAsync();
         await RefreshCurrentProfileDataAsync();
     }
