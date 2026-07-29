@@ -83,6 +83,18 @@ namespace TarkovHelper
 
             try
             {
+                // Completion-triggered deductions wait until quest/hideout progress is
+                // durably stored. Finish those checks before flushing inventory writes.
+                InventoryConsumptionService.FlushExistingAsync().GetAwaiter().GetResult();
+                _log.Debug("InventoryConsumptionService pending operations flushed");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Error flushing InventoryConsumptionService", ex);
+            }
+
+            try
+            {
                 // Item changes are saved through a serialized queue. Flush it before
                 // logging and SQLite-related services are torn down.
                 ItemInventoryService.FlushExistingAsync().GetAwaiter().GetResult();
