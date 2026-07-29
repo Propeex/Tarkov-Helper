@@ -1,0 +1,138 @@
+name: Publish Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Read release version
+        id: version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [xml]$project = Get-Content "TarkovHelper/TarkovHelper.csproj"
+          $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Project version could not be read."
+          }
+
+          $tag = "v$version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "Release $tag already exists; publishing is skipped."
+          }
+          else {
+            "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      - name: Publish Windows application
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          dotnet publish TarkovHelper/TarkovHelper.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained false `
+            --output publish `
+            -p:DebugType=None `
+            -p:DebugSymbols=false
+
+          $requiredFiles = @(
+            "publish/TarkovHelper_JH.exe",
+            "publish/Assets/tarkov_data.db"
+          )
+
+          foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Required release file is missing: $requiredFile"
+            }
+          }
+
+          if (Get-ChildItem publish -Recurse -File | Where-Object {
+              $_.Name -eq "user_data.db" -or
+              $_.Extension -eq ".pdb" -or
+              $_.Name -match "progress|settings"
+          }) {
+            throw "A user-data or debug file was included in the release directory."
+          }
+
+      - name: Create release package
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
+          $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
+
+          @'
+          ## 타르코프헬퍼_JH 1.6.0
+
+          Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
+
+          ### 주요 변경
+          - PVP 전용 데이터 구조와 tarkov.dev 기반 데이터베이스 재생성
+          - 실제 게임 로그 기반 퀘스트 진행 상태 계산
+          - 퀘스트 및 은신처 완료 시 요구 아이템 자동 차감
+          - 공식 한국어 원문 우선 표시와 영문 fallback
+          - 지도 탭 퀘스트 기능 제거 및 미니맵 안정화
+          - 사용자 데이터 저장, DB 교체, 프로그램 종료 수명주기 보강
+          - 자체 업데이트 피드와 릴리즈 패키지 검증 추가
+
+          ### 설치
+          1. `TarkovHelper_JH.zip`을 원하는 폴더에 압축 해제합니다.
+          2. `TarkovHelper_JH.exe`를 실행합니다.
+          3. .NET 8 Windows Desktop Runtime이 필요합니다.
+
+          기존 사용자 데이터인 `user_data.db`는 릴리즈 ZIP에 포함되지 않으며 프로그램 업데이트 시 유지됩니다.
+          '@ | Set-Content RELEASE_NOTES.md -Encoding utf8
+
+      - name: Upload verified workflow artifact
+        if: steps.version.outputs.exists != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TarkovHelper_JH-${{ steps.version.outputs.version }}
+          path: |
+            TarkovHelper_JH.zip
+            TarkovHelper_JH.zip.sha256
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" `
+            TarkovHelper_JH.zip `
+            TarkovHelper_JH.zip.sha256 `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title "타르코프헬퍼_JH v${{ steps.version.outputs.version }}" `
+            --notes-file RELEASE_NOTES.md `
+            --latest
