@@ -1,5 +1,4 @@
 using System.Windows;
-using System.Windows.Threading;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Pages.Map;
@@ -23,9 +22,26 @@ public partial class MapPage
         if (sender is not MapPage page)
             return;
 
-        page.Dispatcher.BeginInvoke(
-            new Action(page.RemoveMapQuestFeatures),
-            DispatcherPriority.ContextIdle);
+        // 첫 화면부터 퀘스트 UI가 보이지 않도록 즉시 숨깁니다.
+        page.HideMapQuestUi();
+
+        // 원래 MapPage의 async Loaded 처리에서 드로어를 다시 열고 이벤트를 다시
+        // 구독하므로, 초기화가 끝난 뒤 최종적으로 한 번 더 제거합니다.
+        _ = page.RemoveMapQuestFeaturesAfterInitializationAsync();
+    }
+
+    private async Task RemoveMapQuestFeaturesAfterInitializationAsync()
+    {
+        await Task.Delay(100);
+
+        for (var attempt = 0; attempt < 200 && IsLoaded && _isInitializing; attempt++)
+        {
+            HideMapQuestUi();
+            await Task.Delay(50);
+        }
+
+        if (IsLoaded)
+            RemoveMapQuestFeatures();
     }
 
     private void RemoveMapQuestFeatures()
@@ -46,7 +62,12 @@ public partial class MapPage
 
         _currentMapObjectives.Clear();
         _selectedObjective = null;
+        HideMapQuestUi();
+        SettingsService.Instance.MapShowQuests = false;
+    }
 
+    private void HideMapQuestUi()
+    {
         QuestObjectivesList.ItemsSource = null;
         QuestMarkersContainer.Children.Clear();
         QuestMarkersContainer.Visibility = Visibility.Collapsed;
@@ -64,8 +85,6 @@ public partial class MapPage
         CollapseNamedElement("DrawerSplitter");
         CollapseNamedElement("BtnToggleDrawer");
         CollapseNamedElement("TxtDrawerToggleIcon");
-
-        SettingsService.Instance.MapShowQuests = false;
 
         // 지도 설정 패널의 퀘스트 전용 항목을 제거합니다.
         CollapseNamedElement("ChkHideCompletedObjectives");
