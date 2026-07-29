@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using TarkovHelper.Services;
 
+// 공식 한국어 원문 선택과 영문 fallback만 검증합니다.
 internal static class QuestKoreanSourceSmoke
 {
     [ModuleInitializer]
