@@ -16,40 +16,46 @@ public sealed class UserProgressResetService
     public async Task ResetCurrentProfileAsync()
     {
         await _resetGate.WaitAsync();
+
+        var questProgress = QuestProgressService.Instance;
+        var objectiveProgress = ObjectiveProgressService.Instance;
+        var hideoutProgress = HideoutProgressService.Instance;
+        var inventory = ItemInventoryService.Instance;
+
         try
         {
             var profile = ProfileService.Instance.CurrentProfile;
 
-            await ItemInventoryService.Instance.ResetAllInventoryAsync(profile);
-            await QuestProgressService.Instance.ResetAllProgressAsync(profile);
-            await HideoutProgressService.Instance.ResetAllProgressAsync(profile);
+            // Hold every persistence queue for the entire reset transaction. This is
+            // deliberately wider than the individual table clears: no service can
+            // reopen its queue while another table is still being cleared or verified.
+            await Task.WhenAll(
+                questProgress.BeginPersistenceResetAsync(),
+                objectiveProgress.BeginPersistenceResetAsync(),
+                hideoutProgress.BeginPersistenceResetAsync(),
+                inventory.BeginPersistenceResetAsync());
 
-            for (var attempt = 0; attempt < 4; attempt++)
+            ResetAllInMemoryServices();
+            await ClearAllDatabaseRowsAsync(profile);
+
+            var counts = await GetRowCountsAsync(profile);
+            if (!IsEmpty(counts))
             {
-                await ClearAllDatabaseRowsAsync(profile);
-                ResetAllInMemoryServices();
-                await Task.Delay(250);
-
-                var firstCheck = await GetRowCountsAsync(profile);
-                if (!IsEmpty(firstCheck))
-                    continue;
-
-                // A previously queued save can arrive just after the first empty read.
-                // Require a second empty read after a stability window before reporting success.
-                await Task.Delay(350);
-                var stabilityCheck = await GetRowCountsAsync(profile);
-                if (IsEmpty(stabilityCheck))
-                    return;
+                throw new InvalidDataException(
+                    $"Reset verification failed: quests={counts.Quests}, " +
+                    $"objectives={counts.Objectives}, hideout={counts.Hideout}, " +
+                    $"inventory={counts.Inventory}.");
             }
-
-            var finalCounts = await GetRowCountsAsync(profile);
-            throw new InvalidDataException(
-                $"Reset verification failed: quests={finalCounts.Quests}, " +
-                $"objectives={finalCounts.Objectives}, hideout={finalCounts.Hideout}, " +
-                $"inventory={finalCounts.Inventory}.");
         }
         finally
         {
+            // Discard any in-memory mutations raised while persistence was paused,
+            // then reopen all queues together without an asynchronous gap.
+            ResetAllInMemoryServices();
+            questProgress.EndPersistenceReset();
+            objectiveProgress.EndPersistenceReset();
+            hideoutProgress.EndPersistenceReset();
+            inventory.EndPersistenceReset();
             _resetGate.Release();
         }
     }
@@ -61,7 +67,7 @@ public sealed class UserProgressResetService
     {
         var database = UserDataDbService.Instance;
         await database.ClearAllQuestProgressAsync(profile);
-        await database.ClearAllObjectiveProgressAsync();
+        await ProfileScopedObjectiveProgressStore.Instance.ClearAllAsync(profile);
         await database.ClearAllHideoutProgressAsync(profile);
         await database.ClearAllItemInventoryAsync(profile);
     }
@@ -71,7 +77,7 @@ public sealed class UserProgressResetService
     {
         var database = UserDataDbService.Instance;
         var quests = await database.LoadQuestProgressAsync(profile);
-        var objectives = await database.LoadObjectiveProgressAsync();
+        var objectives = await ProfileScopedObjectiveProgressStore.Instance.LoadAsync(profile);
         var hideout = await database.LoadHideoutProgressAsync(profile);
         var inventory = await database.LoadItemInventoryAsync(profile);
         return (quests.Count, objectives.Count, hideout.Count, inventory.Count);

@@ -14,7 +14,10 @@ namespace TarkovHelper.Services
         private static ObjectiveProgressService? _instance;
         public static ObjectiveProgressService Instance => _instance ??= new ObjectiveProgressService();
 
-        private readonly UserDataDbService _userDataDb = UserDataDbService.Instance;
+        private readonly PersistenceWriteQueue _persistenceQueue = new();
+        private readonly ProfileScopedObjectiveProgressStore _store =
+            ProfileScopedObjectiveProgressStore.Instance;
+        private ProfileType _loadedProfile = ProfileType.Pvp;
 
         // Objective progress: key = "questNormalizedName:objectiveIndex" or "id:objectiveId", value = completed
         private Dictionary<string, bool> _objectiveProgress = new();
@@ -78,8 +81,11 @@ namespace TarkovHelper.Services
                 }
             }
 
-            // Fire-and-forget async save - don't block UI
-            _ = SaveObjectiveProgressBatchAsync(keysToSave);
+            // Capture the loaded profile at mutation time. The queued write may
+            // execute after the application profile has changed.
+            var targetProfile = _loadedProfile;
+            _ = _persistenceQueue.Enqueue(() =>
+                SaveObjectiveProgressBatchAsync(keysToSave, targetProfile));
             ObjectiveProgressChanged?.Invoke(this, new ObjectiveProgressChangedEventArgs(questNormalizedName, objectiveIndex, completed));
         }
 
@@ -115,8 +121,11 @@ namespace TarkovHelper.Services
                 }
             }
 
-            // Fire-and-forget async save - don't block UI
-            _ = SaveObjectiveProgressBatchAsync(keysToSave);
+            // Capture the loaded profile at mutation time. The queued write may
+            // execute after the application profile has changed.
+            var targetProfile = _loadedProfile;
+            _ = _persistenceQueue.Enqueue(() =>
+                SaveObjectiveProgressBatchAsync(keysToSave, targetProfile));
             ObjectiveProgressChanged?.Invoke(this, new ObjectiveProgressChangedEventArgs(objectiveId, objectiveIndex, completed));
         }
 
@@ -180,8 +189,10 @@ namespace TarkovHelper.Services
         /// </summary>
         public async Task ClearAllProgressAsync(ProfileType? profileType = null)
         {
+            var targetProfile = profileType ?? _loadedProfile;
             ResetInMemoryProgress();
-            await _userDataDb.ClearAllObjectiveProgressAsync();
+            await _persistenceQueue.ResetAsync(() =>
+                _store.ClearAllAsync(targetProfile));
         }
 
         internal void ResetInMemoryProgress()
@@ -197,86 +208,85 @@ namespace TarkovHelper.Services
             ClearAllProgressAsync().GetAwaiter().GetResult();
         }
 
+        public Task FlushPersistenceAsync() => _persistenceQueue.FlushAsync();
+
+        internal Task BeginPersistenceResetAsync() => _persistenceQueue.BeginResetAsync();
+
+        internal void EndPersistenceReset() => _persistenceQueue.EndReset();
+
         #endregion
 
         #region Persistence
 
         public void SaveObjectiveProgress()
         {
-            _ = SaveObjectiveProgressToDbAsync();
+            var snapshot = _objectiveProgress
+                .Select(pair => (Key: pair.Key, QuestId: GetQuestId(pair.Key), IsCompleted: pair.Value))
+                .ToList();
+            var targetProfile = _loadedProfile;
+            _ = _persistenceQueue.Enqueue(() =>
+                SaveObjectiveProgressBatchAsync(snapshot, targetProfile));
         }
 
-        private async Task SaveObjectiveProgressToDbAsync()
+        private static string? GetQuestId(string key)
         {
-            try
-            {
-                foreach (var kvp in _objectiveProgress)
-                {
-                    string? questId = null;
-                    if (kvp.Key.Contains(':'))
-                    {
-                        var parts = kvp.Key.Split(':');
-                        if (parts[0] != "id")
-                        {
-                            questId = parts[0];
-                        }
-                    }
-                    await _userDataDb.SaveObjectiveProgressAsync(kvp.Key, questId, kvp.Value);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ObjectiveProgressService] Save failed: {ex.Message}");
-            }
+            var separator = key.IndexOf(':');
+            if (separator <= 0)
+                return null;
+
+            var prefix = key[..separator];
+            return string.Equals(prefix, "id", StringComparison.Ordinal) ? null : prefix;
         }
 
-        private async Task SaveObjectiveProgressBatchAsync(List<(string Key, string? QuestId, bool IsCompleted)> items)
+        private async Task SaveObjectiveProgressBatchAsync(
+            IReadOnlyCollection<(string Key, string? QuestId, bool IsCompleted)> items,
+            ProfileType profile)
         {
             try
             {
                 foreach (var item in items)
                 {
                     if (item.IsCompleted)
-                    {
-                        await _userDataDb.SaveObjectiveProgressAsync(item.Key, item.QuestId, true);
-                    }
+                        await _store.SaveAsync(item.Key, item.QuestId, true, profile);
                     else
-                    {
-                        await _userDataDb.DeleteObjectiveProgressAsync(item.Key);
-                    }
+                        await _store.DeleteAsync(item.Key, profile);
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ObjectiveProgressService] Batch save failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(
+                    $"[ObjectiveProgressService] Batch save failed: {ex.Message}");
             }
         }
 
-        public async Task LoadObjectiveProgressAsync()
+        public async Task LoadObjectiveProgressAsync(ProfileType? profileType = null)
         {
-            await LoadObjectiveProgressFromDbAsync();
+            _loadedProfile = profileType ?? ProfileService.Instance.CurrentProfile;
+            await LoadObjectiveProgressFromDbAsync(_loadedProfile);
         }
 
         private void LoadObjectiveProgress()
         {
-            _ = LoadObjectiveProgressFromDbAsync();
+            _loadedProfile = ProfileService.Instance.CurrentProfile;
+            _ = LoadObjectiveProgressFromDbAsync(_loadedProfile);
         }
 
-        private async Task LoadObjectiveProgressFromDbAsync()
+        private async Task LoadObjectiveProgressFromDbAsync(ProfileType profile)
         {
             try
             {
-                var dbProgress = await _userDataDb.LoadObjectiveProgressAsync();
+                var dbProgress = await _store.LoadAsync(profile);
                 _objectiveProgress.Clear();
                 foreach (var kvp in dbProgress)
-                {
                     _objectiveProgress[kvp.Key] = kvp.Value;
-                }
-                System.Diagnostics.Debug.WriteLine($"[ObjectiveProgressService] Loaded {_objectiveProgress.Count} objective progress from DB");
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"[ObjectiveProgressService] Loaded {_objectiveProgress.Count} objective progress from DB for {profile}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ObjectiveProgressService] Load failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(
+                    $"[ObjectiveProgressService] Load failed: {ex.Message}");
                 _objectiveProgress.Clear();
             }
         }

@@ -53,8 +53,7 @@ namespace TarkovHelper.Services
 
         private System.Timers.Timer? _saveTimer;
         private readonly HashSet<string> _pendingSaves = new(StringComparer.OrdinalIgnoreCase);
-        private readonly object _saveTaskLock = new();
-        private Task _saveTask = Task.CompletedTask;
+        private readonly PersistenceWriteQueue _persistenceQueue = new();
         private bool _disposed;
 
         public event EventHandler? InventoryChanged;
@@ -112,27 +111,17 @@ namespace TarkovHelper.Services
 
         private void QueuePersistence(Func<Task> operation)
         {
-            lock (_saveTaskLock)
+            _ = _persistenceQueue.Enqueue(async () =>
             {
-                _saveTask = _saveTask.ContinueWith(
-                    async previous =>
-                    {
-                        if (previous.IsFaulted)
-                            _log.Error("Previous inventory persistence operation failed", previous.Exception!);
-
-                        try
-                        {
-                            await operation().ConfigureAwait(false);
-                        }
-                        catch (Exception ex)
-                        {
-                            _log.Error("Inventory persistence operation failed", ex);
-                        }
-                    },
-                    CancellationToken.None,
-                    TaskContinuationOptions.None,
-                    TaskScheduler.Default).Unwrap();
-            }
+                try
+                {
+                    await operation().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _log.Error("Inventory persistence operation failed", ex);
+                }
+            });
         }
 
         private async Task SaveItemsAsync(
@@ -178,11 +167,7 @@ namespace TarkovHelper.Services
                 if (pendingItems.Count > 0)
                     QueueSaveBatch(pendingItems, _loadedProfile);
 
-                Task pendingTask;
-                lock (_saveTaskLock)
-                    pendingTask = _saveTask;
-
-                await pendingTask.ConfigureAwait(false);
+                await _persistenceQueue.FlushAsync().ConfigureAwait(false);
 
                 lock (_lock)
                 {
@@ -425,8 +410,6 @@ namespace TarkovHelper.Services
         public async Task ResetAllInventoryAsync(ProfileType? profileType = null)
         {
             ProfileType actualProfile;
-            Task pendingSave;
-
             lock (_lock)
             {
                 if (_disposed)
@@ -438,13 +421,34 @@ namespace TarkovHelper.Services
                 _inventoryData = new ItemInventoryData();
             }
 
-            lock (_saveTaskLock)
-                pendingSave = _saveTask;
-
-            await pendingSave.ConfigureAwait(false);
-            await _userDataDb.ClearAllItemInventoryAsync(actualProfile).ConfigureAwait(false);
+            await _persistenceQueue.ResetAsync(() =>
+                _userDataDb.ClearAllItemInventoryAsync(actualProfile)).ConfigureAwait(false);
             InventoryChanged?.Invoke(this, EventArgs.Empty);
         }
+
+        internal async Task BeginPersistenceResetAsync()
+        {
+            var barrier = _persistenceQueue.BeginResetAsync();
+            lock (_lock)
+            {
+                if (_disposed)
+                    return;
+
+                _saveTimer?.Stop();
+                _pendingSaves.Clear();
+            }
+
+            await barrier.ConfigureAwait(false);
+
+            // Catch item changes or a timer callback that raced with reset entry.
+            lock (_lock)
+            {
+                _saveTimer?.Stop();
+                _pendingSaves.Clear();
+            }
+        }
+
+        internal void EndPersistenceReset() => _persistenceQueue.EndReset();
 
         internal void ResetInMemoryInventory()
         {
