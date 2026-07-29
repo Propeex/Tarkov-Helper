@@ -14,12 +14,16 @@ internal static class MapUiRegressionSmoke
 
         var objective = new TaskObjectiveWithLocation
         {
+            QuestId = "shipping-delay-db-id",
+            QuestBsgId = "673f348dd3346c21670217e7",
             TaskName = "Shipping Delay - Part 1",
             TaskNameKo = "배송 지연 - 파트 1",
             Description = "Hand over the package",
             DescriptionKo = "화물을 건네주십시오"
         };
 
+        AssertEqual("shipping-delay-db-id", objective.QuestId);
+        AssertEqual("673f348dd3346c21670217e7", objective.QuestBsgId);
         AssertEqual("Shipping Delay - Part 1", objective.TaskName);
         if (objective.TaskNameKo != null)
             throw new InvalidDataException("Map quest title localization must remain disabled.");
