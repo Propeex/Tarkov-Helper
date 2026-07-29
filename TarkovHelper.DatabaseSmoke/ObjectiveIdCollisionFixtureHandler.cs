@@ -7,6 +7,8 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
     internal const string SharedObjectiveId = "fixture-shared-objective";
     internal const string ScopedSecondObjectiveId =
         SharedObjectiveId + ":task:fixture-quest-second:objective:0";
+    internal const string FirstHandOverObjectiveId = "fixture-bolts-handover-first";
+    internal const string SecondHandOverObjectiveId = "fixture-bolts-handover-second";
     internal const string DogtagObjectiveId = "fixture-dogtag-objective";
     internal const string DogtagStandardItemId = "fixture-dogtag-usec-standard";
     internal const string DogtagPrestigeItemId = "fixture-dogtag-usec-prestige";
@@ -71,7 +73,10 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
         firstTask["factionName"] = "Any Target";
         secondTask["factionName"] = "Any";
 
+        // Keep paired acquisition objectives for display and objective-ID collision
+        // coverage. They must not be written into QuestRequiredItems.
         firstObjective["id"] = SharedObjectiveId;
+        firstObjective["type"] = "findItem";
         firstObjective["description"] = SharedObjectiveId;
 
         var secondObjective = firstObjective.DeepClone().AsObject();
@@ -79,10 +84,23 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
         secondObjective["description"] = SharedObjectiveId;
         secondObjectives.Add(secondObjective);
 
+        // Add the actual submission side of each pair. Exactly these rows should
+        // become consumable quest requirements.
+        var firstHandOverObjective = firstObjective.DeepClone().AsObject();
+        firstHandOverObjective["id"] = FirstHandOverObjectiveId;
+        firstHandOverObjective["type"] = "giveItem";
+        firstHandOverObjective["description"] = FirstHandOverObjectiveId + " Description";
+        firstObjectives.Add(firstHandOverObjective);
+
+        var secondHandOverObjective = firstHandOverObjective.DeepClone().AsObject();
+        secondHandOverObjective["id"] = SecondHandOverObjectiveId;
+        secondHandOverObjective["description"] = SecondHandOverObjectiveId + " Description";
+        secondObjectives.Add(secondHandOverObjective);
+
         secondObjectives.Add(new JsonObject
         {
             ["id"] = DogtagObjectiveId,
-            ["type"] = "findItem",
+            ["type"] = "giveItem",
             ["description"] = DogtagObjectiveId + " Description",
             ["optional"] = false,
             ["maps"] = new JsonArray(),
@@ -145,6 +163,12 @@ internal sealed class ObjectiveIdCollisionFixtureHandler : DelegatingHandler
             throw new InvalidDataException("Objective collision fixture translation payload is invalid.");
 
         translations[SharedObjectiveId] = translatedDescription;
+        translations[FirstHandOverObjectiveId + " Description"] = korean
+            ? "볼트를 건네주기"
+            : "Hand over bolts";
+        translations[SecondHandOverObjectiveId + " Description"] = korean
+            ? "볼트를 다시 건네주기"
+            : "Hand over bolts again";
         translations["fixture-sell-objective Description"] = korean
             ? "판매 목록 테스트"
             : "Sell catalogue fixture";
