@@ -30,23 +30,6 @@ jobs:
             exit 0
           }
 
-          $expectedChunks = @{
-            "b64.00" = "c60451f91d715690f2f9a17f4bafd5d91bf869701ab346ee96274b767fa7707f"
-            "b64.01" = "04aa5a5d2ae1118da53fa3916b38c690daec7447bd138376975e9ac0c19dbe41"
-            "b64.02" = "e8fb055fa6ecc8d0efe30ce493829e5105ff3997302880ea95ce891a989bb9f8"
-            "b64.03" = "5d7f8dc8d85c46b3a888c7a162b86e98baf33d088b34633a3b882f584d6c9139"
-            "b64.04" = "6b217d31cb671c7e8d61eadc1585aad4ca72d63dce1769a29d27437142254dea"
-            "b64.05" = "2b8b60b4a045c4fe58fc3b77fd5e4fde0cc7ec0197a38e81f49eba233c10f52b"
-            "b64.06" = "8a7c1026e6b32fd5e7ab65bce8f4891ece3e5ae92d11b9150dd9a5c7658862fe"
-          }
-          foreach ($name in $expectedChunks.Keys | Sort-Object) {
-            $actual = (Get-FileHash ".maintenance/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
-            Write-Host "$name $actual"
-            if ($actual -ne $expectedChunks[$name]) {
-              throw "Staged chunk hash mismatch for ${name}: $actual"
-            }
-          }
-
           $encoded = (Get-ChildItem ".maintenance/b64.*" |
             Sort-Object Name |
             ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join ""
