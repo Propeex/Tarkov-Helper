@@ -71,11 +71,11 @@ public class QuestObjectiveViewModel
         IsSelected = isSelected;
         ObjectiveId = objective.ObjectiveId;
 
-        QuestName = loc.CurrentLanguage == AppLanguage.KO && !string.IsNullOrEmpty(objective.TaskNameKo)
-            ? objective.TaskNameKo
-            : objective.TaskName;
+        // 퀘스트 고유명은 번역하지 않고 원문 영문을 유지합니다.
+        QuestName = objective.TaskName;
 
-        Description = loc.CurrentLanguage == AppLanguage.KO && !string.IsNullOrEmpty(objective.DescriptionKo)
+        // 퀘스트 내용과 목표 설명만 한국어를 우선 사용합니다.
+        Description = !string.IsNullOrWhiteSpace(objective.DescriptionKo)
             ? objective.DescriptionKo
             : objective.Description;
 
@@ -104,15 +104,15 @@ public class QuestObjectiveViewModel
         // 현재 맵에 있는 목표인지 확인 (공백/하이픈 차이 무시)
         if (!string.IsNullOrEmpty(currentMapKey))
         {
-            IsOnCurrentMap = objective.Locations.Any(loc =>
-                MatchesMapKey(loc.MapName, currentMapKey) ||
-                MatchesMapKey(loc.MapNormalizedName, currentMapKey));
+            IsOnCurrentMap = objective.Locations.Any(location =>
+                MatchesMapKey(location.MapName, currentMapKey) ||
+                MatchesMapKey(location.MapNormalizedName, currentMapKey));
 
             if (!IsOnCurrentMap && objective.Locations.Count > 0)
             {
                 // 다른 맵 이름 표시
                 var otherLocation = objective.Locations.FirstOrDefault();
-                OtherMapName = otherLocation?.MapName ?? "Other Map";
+                OtherMapName = otherLocation?.MapName ?? "다른 지도";
                 OtherMapBadgeVisibility = Visibility.Visible;
                 IsEnabled = false;
             }
@@ -160,22 +160,21 @@ public class QuestObjectiveViewModel
     }
 
     /// <summary>
-    /// FloorId를 표시용 텍스트로 변환합니다.
-    /// B = basement (main보다 아래), G = Ground (main), 2F, 3F 등
+    /// FloorId를 한국어 표시용 텍스트로 변환합니다.
     /// </summary>
     public static string GetFloorDisplayText(string floorId)
     {
-        // FloorId 패턴: "basement", "main", "first", "second", "third", "roof" 등
         return floorId.ToLowerInvariant() switch
         {
-            "basement" or "basement1" or "basement-1" or "b1" => "B",
-            "basement2" or "basement-2" or "b2" => "B2",
-            "basement3" or "basement-3" or "b3" => "B3",
-            "main" or "ground" or "1" or "first" => "G",
-            "second" or "2" => "2F",
-            "third" or "3" => "3F",
-            "roof" or "rooftop" => "RF",
-            _ => floorId.Length <= 3 ? floorId.ToUpperInvariant() : floorId.Substring(0, 2).ToUpperInvariant()
+            "basement" or "basement1" or "basement-1" or "b1" => "지하 1층",
+            "basement2" or "basement-2" or "b2" => "지하 2층",
+            "basement3" or "basement-3" or "b3" => "지하 3층",
+            "main" or "ground" or "0" or "first" => "지상층",
+            "level1" or "floor1" or "1" => "1층",
+            "level2" or "floor2" or "second" or "2" => "2층",
+            "level3" or "floor3" or "third" or "3" => "3층",
+            "roof" or "rooftop" => "옥상",
+            _ => "다른 층"
         };
     }
 
@@ -197,7 +196,7 @@ public class QuestObjectiveViewModel
         {
             return Color.FromRgb(33, 150, 243); // 파란색
         }
-        if (lowerFloorId == "main" || lowerFloorId == "ground" || lowerFloorId == "1" || lowerFloorId == "first")
+        if (lowerFloorId == "main" || lowerFloorId == "ground" || lowerFloorId == "0")
         {
             return Color.FromRgb(76, 175, 80); // 초록색
         }
@@ -206,12 +205,17 @@ public class QuestObjectiveViewModel
 
     private static string GetTypeDisplay(string type) => type switch
     {
-        "visit" => "Visit",
-        "mark" => "Mark",
-        "plantItem" => "Plant",
-        "extract" => "Extract",
-        "findItem" => "Find",
-        _ => type
+        "visit" => "방문",
+        "mark" => "표시",
+        "plantItem" => "설치",
+        "stash" => "숨기기",
+        "extract" => "탈출",
+        "findItem" => "획득",
+        "collect" => "수집",
+        "handover" => "제출",
+        "kill" => "처치",
+        "survive" => "생존",
+        _ => "기타"
     };
 
     /// <summary>
