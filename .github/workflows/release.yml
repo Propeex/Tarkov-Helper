@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: publish-release
@@ -385,6 +387,7 @@ jobs:
       - name: Report verified release
         if: success()
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          Write-Host "Release verified: ${{ steps.verify.outputs.url }}"
-          Write-Host "SHA-256: ${{ steps.verify.outputs.hash }}"
+          gh pr comment 3 --repo $env:GITHUB_REPOSITORY --body "릴리즈 검증 성공: 타르코프헬퍼_JH v${{ steps.version.outputs.version }}, SHA-256 ${{ steps.verify.outputs.hash }}, ${{ steps.verify.outputs.url }}"
