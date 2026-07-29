@@ -62,9 +62,22 @@ namespace TarkovHelper
 
             try
             {
-                // Stop background database updates
+                UpdateService.Instance.StopAutoCheck();
+                _log.Debug("UpdateService stopped");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Error stopping UpdateService", ex);
+            }
+
+            try
+            {
+                // Cancel a manual database rebuild. Do not synchronously wait on the
+                // dispatcher thread: the in-flight operation may need that dispatcher
+                // to finish its own cleanup. DatabaseUpdateService keeps its gate alive
+                // until the active operation releases it.
                 DatabaseUpdateService.Instance.Dispose();
-                _log.Debug("DatabaseUpdateService disposed");
+                _log.Debug("DatabaseUpdateService cancellation requested");
             }
             catch (Exception ex)
             {
@@ -73,7 +86,19 @@ namespace TarkovHelper
 
             try
             {
-                // Dispose overlay service (closes overlay window and unsubscribes events)
+                // Item changes are saved through a serialized queue. Flush it before
+                // logging and SQLite-related services are torn down.
+                ItemInventoryService.FlushExistingAsync().GetAwaiter().GetResult();
+                _log.Debug("ItemInventoryService pending saves flushed");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Error flushing ItemInventoryService", ex);
+            }
+
+            try
+            {
+                // Dispose overlay service (closes overlay window and flushes settings)
                 OverlayMiniMapService.Instance.Dispose();
                 _log.Debug("OverlayMiniMapService disposed");
             }
@@ -170,6 +195,9 @@ namespace TarkovHelper
         /// </summary>
         private void DeleteCacheDataFiles()
         {
+            if (!Directory.Exists(DataDirectory))
+                return;
+
             var ignoreFiles = new[]
             {
                 // 사용자 설정 파일
