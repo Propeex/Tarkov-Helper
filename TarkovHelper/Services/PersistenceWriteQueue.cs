@@ -11,7 +11,7 @@ public sealed class PersistenceWriteQueue
     private readonly object _sync = new();
     private Task _tail = Task.CompletedTask;
     private long _generation;
-    private bool _resetInProgress;
+    private int _resetDepth;
 
     public Task Enqueue(Func<Task> operation)
     {
@@ -19,7 +19,7 @@ public sealed class PersistenceWriteQueue
 
         lock (_sync)
         {
-            if (_resetInProgress)
+            if (_resetDepth > 0)
                 return Task.CompletedTask;
 
             var generation = _generation;
@@ -32,11 +32,11 @@ public sealed class PersistenceWriteQueue
     {
         lock (_sync)
         {
-            if (_resetInProgress)
+            _resetDepth++;
+            if (_resetDepth > 1)
                 return _tail;
 
             _generation++;
-            _resetInProgress = true;
             _tail = ObservePreviousAsync(_tail);
             return _tail;
         }
@@ -45,7 +45,12 @@ public sealed class PersistenceWriteQueue
     public void EndReset()
     {
         lock (_sync)
-            _resetInProgress = false;
+        {
+            if (_resetDepth == 0)
+                return;
+
+            _resetDepth--;
+        }
     }
 
     public async Task ResetAsync(Func<Task> clearOperation)
@@ -75,7 +80,7 @@ public sealed class PersistenceWriteQueue
 
         lock (_sync)
         {
-            if (_resetInProgress || generation != _generation)
+            if (_resetDepth > 0 || generation != _generation)
                 return;
         }
 
