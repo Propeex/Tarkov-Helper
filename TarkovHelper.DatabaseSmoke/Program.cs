@@ -113,6 +113,20 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         "SELECT COUNT(*) FROM Quests WHERE NameKO IS NOT NULL AND NameKO != '' AND NameKO != NameEN;");
     var questItemLinks = await ScalarAsync(connection,
         "SELECT COUNT(*) FROM QuestRequiredItems q JOIN Items i ON q.ItemId = i.Id;");
+    var acquisitionRequirementRows = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequiredItems
+        WHERE LOWER(REPLACE(REPLACE(REPLACE(COALESCE(RequirementType, ''), '_', ''), '-', ''), ' ', ''))
+              IN ('finditem', 'collect', 'item', 'genericitem');
+        """);
+    var pairedBoltRequirementRows = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequiredItems r
+        JOIN Quests q ON q.Id = r.QuestId
+        JOIN Items i ON i.Id = r.ItemId
+        WHERE q.BsgId = 'fixture-quest-first'
+          AND i.BsgId = 'fixture-item-bolts';
+        """);
     var hideoutItemLinks = await ScalarAsync(connection,
         "SELECT COUNT(*) FROM HideoutItemRequirements h JOIN Items i ON h.ItemId = i.BsgId;");
     var iconLinks = await ScalarAsync(connection, """
@@ -205,8 +219,18 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
     if (koreanItems < 4 || koreanQuests < 2)
         throw new InvalidDataException("Korean localized names were not written correctly.");
-    if (questItemLinks < 3 || hideoutItemLinks < 1)
-        throw new InvalidDataException("Quest or hideout item links were not persisted correctly.");
+    if (questItemLinks != 3 || hideoutItemLinks < 1)
+    {
+        throw new InvalidDataException(
+            $"Quest or hideout item links were not persisted exactly: " +
+            $"quest={questItemLinks}, hideout={hideoutItemLinks}.");
+    }
+    if (acquisitionRequirementRows != 0 || pairedBoltRequirementRows != 1)
+    {
+        throw new InvalidDataException(
+            $"Acquisition objectives leaked into consumable requirements: " +
+            $"acquisition={acquisitionRequirementRows}, pairedBolts={pairedBoltRequirementRows}.");
+    }
     if (iconLinks != result.ItemCount)
         throw new InvalidDataException($"Item icon URLs were not persisted: {iconLinks}/{result.ItemCount}.");
     if (restrictedNeutralQuests != 0)
@@ -243,6 +267,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
+        $"acquisitionRows={acquisitionRequirementRows}, pairedBolts={pairedBoltRequirementRows}, " +
         $"iconLinks={iconLinks}, neutralRestrictions={restrictedNeutralQuests}, sellItemRows={sellItemRequirements}, " +
         $"dogtagRows={dogtagAlternativeRows}, canonicalDogtags={canonicalDogtagRows}, " +
         $"mapQuestObjectives={loadedMapQuestObjectives}, " +
