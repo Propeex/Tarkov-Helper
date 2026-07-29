@@ -8,10 +8,12 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: publish-release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   release:
@@ -21,6 +23,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Report release start
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment 1 --repo $env:GITHUB_REPOSITORY --body "릴리즈 자동화 실행 시작: run ${{ github.run_id }}, commit $env:GITHUB_SHA"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -150,3 +159,19 @@ jobs:
             --title "타르코프헬퍼_JH v${{ steps.version.outputs.version }}" `
             --notes-file RELEASE_NOTES.md `
             --latest
+
+      - name: Report release success
+        if: success()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment 1 --repo $env:GITHUB_REPOSITORY --body "릴리즈 자동화 성공: run ${{ github.run_id }}, tag ${{ steps.version.outputs.tag }}"
+
+      - name: Report release failure
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment 1 --repo $env:GITHUB_REPOSITORY --body "릴리즈 자동화 실패: run ${{ github.run_id }}. Actions 로그를 확인해 수정합니다."
