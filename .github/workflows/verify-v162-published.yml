@@ -1,3 +1,4 @@
+# One-time verification trigger
 name: Verify v1.6.2 Published Release
 
 on:
@@ -42,7 +43,6 @@ jobs:
 
           Expand-Archive $zipPath -DestinationPath verify/extracted -Force
           @'
-          import os
           import pathlib
           import sqlite3
           import sys
