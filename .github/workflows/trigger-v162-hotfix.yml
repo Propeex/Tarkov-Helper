@@ -22,6 +22,11 @@ jobs:
       - name: Execute embedded patch
         shell: bash
         run: |
+          if grep -q '<Version>1.6.2</Version>' TarkovHelper/TarkovHelper.csproj; then
+            echo "v1.6.2 source patch is already applied."
+            exit 0
+          fi
+
           python3 - <<'PY'
           from pathlib import Path
           import subprocess
@@ -35,7 +40,6 @@ jobs:
           lines = [line[10:] if line.startswith('          ') else line for line in block.splitlines()]
           script = '\n'.join(lines) + '\n'
 
-          # UserDataDbService.cs contains legacy mixed encodings. Do not rewrite it.
           remove_start = script.index('# Objective DB clear accepts the profile used by the reset transaction.')
           remove_end = script.index("write('TarkovHelper/Services/UserProgressResetService.cs'", remove_start)
           script = script[:remove_start] + script[remove_end:]
@@ -101,8 +105,6 @@ jobs:
                       await QuestProgressService.Instance.ResetAllProgressAsync(profile);
                       await HideoutProgressService.Instance.ResetAllProgressAsync(profile);
 
-                      // Old fire-and-forget writes can finish shortly after the reset request.
-                      // Re-clear and verify until the database remains empty.
                       for (var attempt = 0; attempt < 3; attempt++)
                       {
                           await ClearAllDatabaseRowsAsync(profile);
@@ -199,9 +201,14 @@ jobs:
       - name: Commit patched source
         shell: bash
         run: |
-          rm -f .github/workflows/trigger-v162-hotfix.yml .github/workflows/apply-v162-hotfix.yml
+          if git diff --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+
+          git checkout -- .github/workflows/release.yml || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add TarkovHelper TarkovHelper.DatabaseSmoke update.xml
           git commit -m "v1.6.2 실사용 회귀 수정 적용"
           git push origin HEAD:hotfix/v1.6.2-reset-quest-tab-freeze
