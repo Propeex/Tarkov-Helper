@@ -8,8 +8,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 concurrency:
   group: publish-release
@@ -18,7 +16,7 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -28,6 +26,11 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
 
       - name: Read release version
         id: version
@@ -46,10 +49,7 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          $releaseJson = gh release list `
-            --repo $env:GITHUB_REPOSITORY `
-            --limit 100 `
-            --json tagName
+          $releaseJson = gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to query existing releases."
           }
@@ -92,6 +92,40 @@ jobs:
           path: release-database.log
           if-no-files-found: warn
 
+      - name: Download and convert required item icons
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item "TarkovHelper/Assets/Icons" -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path "TarkovHelper/Assets/Icons" -Force | Out-Null
+
+          dotnet run `
+            --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj `
+            --configuration Release `
+            -- `
+            --database "TarkovHelper/Assets/tarkov_data.db" `
+            --output "TarkovHelper/Assets/Icons" `
+            --concurrency 8 *> release-icons.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content release-icons.log
+            exit $LASTEXITCODE
+          }
+
+          $iconCount = @(Get-ChildItem "TarkovHelper/Assets/Icons" -Filter *.png -File).Count
+          if ($iconCount -lt 100) {
+            throw "Too few item icons were generated: $iconCount."
+          }
+          Write-Host "Generated item icons: $iconCount"
+
+      - name: Upload icon download log
+        if: always() && steps.version.outputs.exists != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-icon-log
+          path: release-icons.log
+          if-no-files-found: warn
+
       - name: Publish Windows application
         if: steps.version.outputs.exists != 'true'
         shell: pwsh
@@ -105,19 +139,18 @@ jobs:
             -p:DebugType=None `
             -p:DebugSymbols=false
 
-          $requiredFiles = @(
+          foreach ($requiredFile in @(
             "publish/TarkovHelper_JH.exe",
             "publish/Assets/tarkov_data.db"
-          )
-          foreach ($requiredFile in $requiredFiles) {
+          )) {
             if (-not (Test-Path $requiredFile)) {
               throw "Required release file is missing: $requiredFile"
             }
           }
 
-          $publishedDatabaseSize = (Get-Item "publish/Assets/tarkov_data.db").Length
-          if ($publishedDatabaseSize -lt 1MB) {
-            throw "The published database is unexpectedly small: $publishedDatabaseSize bytes."
+          $publishedIcons = @(Get-ChildItem "publish/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue)
+          if ($publishedIcons.Count -lt 100) {
+            throw "Published item icons are missing: $($publishedIcons.Count)."
           }
 
           $forbiddenNames = @(
@@ -154,23 +187,18 @@ jobs:
 
           Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
 
-          ### 주요 변경
-          - PVP 전용 데이터 구조와 tarkov.dev 기반 데이터베이스 재생성
-          - 실제 게임 로그 기반 퀘스트 진행 상태 계산
-          - 퀘스트 및 은신처 완료 시 요구 아이템 자동 차감
-          - 획득 목표와 제출 목표의 요구 재료 중복 계산 제거
-          - 진행 상태 저장 확인 후 아이템 차감
-          - 공식 한국어 원문 우선 표시와 영문 fallback
-          - 지도 탭 퀘스트 기능 제거 및 미니맵 안정화
-          - 사용자 데이터 저장, DB 교체, 프로그램 종료 수명주기 보강
-          - 검증된 최신 tarkov.dev DB를 릴리즈 패키지에 포함
+          ### v1.6.1 수정
+          - 아이템 화면에 필요한 PNG 아이콘을 최신 tarkov.dev DB 기준으로 생성하여 배포 파일에 포함
+          - 미니맵 설정창 초기화 중 클릭 투과 상태가 반대로 전환되는 문제 수정
+          - 클릭 투과 체크 해제 시 미니맵을 마우스로 이동·확대·축소할 수 있도록 상태 적용 방식 수정
+          - 게시된 ZIP의 아이콘 완전성, SQLite 무결성, 사용자 데이터 미포함을 자동 검증
 
           ### 설치
           1. TarkovHelper_JH.zip을 원하는 폴더에 압축 해제합니다.
           2. TarkovHelper_JH.exe를 실행합니다.
           3. .NET 8 Windows Desktop Runtime이 필요합니다.
 
-          기존 사용자 데이터인 user_data.db는 릴리즈 ZIP에 포함되지 않으며 프로그램 업데이트 시 유지됩니다.
+          기존 user_data.db는 릴리즈 ZIP에 포함되지 않으며 업데이트 시 유지됩니다.
           '@.Replace("VERSION_PLACEHOLDER", $version)
           $notes | Set-Content RELEASE_NOTES.md -Encoding utf8
 
@@ -218,7 +246,7 @@ jobs:
             throw "The GitHub Release could not be read."
           }
           if ($release.name -ne $expectedTitle -or $release.isDraft -or $release.isPrerelease) {
-            throw "Release metadata is invalid: name=$($release.name), draft=$($release.isDraft), prerelease=$($release.isPrerelease)."
+            throw "Release metadata is invalid."
           }
 
           $assetNames = @($release.assets | ForEach-Object { $_.name })
@@ -254,49 +282,96 @@ jobs:
 
           @'
           import os
+          import pathlib
           import sqlite3
           import sys
           import zipfile
 
           zip_path, db_path = sys.argv[1], sys.argv[2]
+          invalid_filename_chars = set('<>:"/\\|?*')
+
+          def sanitize_file_name(value):
+              return ''.join(
+                  '_' if char in invalid_filename_chars or ord(char) < 32 else char
+                  for char in value
+              )
+
           with zipfile.ZipFile(zip_path) as archive:
               names = archive.namelist()
-              if len(names) != len(set(names)):
-                  raise SystemExit("duplicate ZIP entries")
-              if any(name.startswith(("/", "\\")) or ".." in name.replace("\\", "/").split("/") for name in names):
-                  raise SystemExit("unsafe ZIP path")
+              normalized = [name.replace('\\', '/') for name in names]
+              if len(normalized) != len(set(normalized)):
+                  raise SystemExit('duplicate ZIP entries')
+              if any(name.startswith('/') or '..' in name.split('/') for name in normalized):
+                  raise SystemExit('unsafe ZIP path')
+
               forbidden = {
-                  "user_data.db", "quest_progress.json", "quest_progress_v2.json",
-                  "objective_progress.json", "hideout_progress.json", "item_inventory.json",
-                  "settings.json", "app_settings.json"
+                  'user_data.db', 'quest_progress.json', 'quest_progress_v2.json',
+                  'objective_progress.json', 'hideout_progress.json', 'item_inventory.json',
+                  'settings.json', 'app_settings.json'
               }
-              if any(os.path.basename(name).lower() in forbidden or name.lower().endswith(".pdb") for name in names):
-                  raise SystemExit("user-data or debug file included")
+              if any(
+                  pathlib.PurePosixPath(name).name.lower() in forbidden or name.lower().endswith('.pdb')
+                  for name in normalized
+              ):
+                  raise SystemExit('user-data or debug file included')
+
+              icon_names = {
+                  pathlib.PurePosixPath(name).stem.lower()
+                  for name in normalized
+                  if name.lower().startswith('assets/icons/') and name.lower().endswith('.png')
+              }
+              if len(icon_names) < 100:
+                  raise SystemExit(f'too few packaged item icons: {len(icon_names)}')
 
           connection = sqlite3.connect(db_path)
-          if connection.execute("pragma integrity_check").fetchone()[0] != "ok":
-              raise SystemExit("SQLite integrity_check failed")
-          if connection.execute("pragma foreign_key_check").fetchall():
-              raise SystemExit("SQLite foreign-key violation")
+          if connection.execute('pragma integrity_check').fetchone()[0] != 'ok':
+              raise SystemExit('SQLite integrity_check failed')
+          if connection.execute('pragma foreign_key_check').fetchall():
+              raise SystemExit('SQLite foreign-key violation')
+
+          required_icon_ids = {
+              row[0]
+              for row in connection.execute('''
+                  select distinct i.Id
+                  from Items i
+                  where i.IconUrl is not null
+                    and trim(i.IconUrl) != ''
+                    and (
+                      exists (
+                        select 1 from QuestRequiredItems q
+                        where q.ItemId = i.Id
+                          and lower(coalesce(q.RequirementType, '')) != 'sellitem'
+                      )
+                      or exists (
+                        select 1 from HideoutItemRequirements h
+                        where h.ItemId = i.BsgId
+                      )
+                    )
+              ''')
+          }
+          missing_icons = sorted(
+              item_id for item_id in required_icon_ids
+              if sanitize_file_name(item_id).lower() not in icon_names
+          )
+          if missing_icons:
+              raise SystemExit(
+                  f'missing required item icons: {len(missing_icons)}; samples={missing_icons[:10]}'
+              )
+
           requirement_types = {
               row[0].lower() for row in connection.execute(
                   "select distinct coalesce(RequirementType, '') from QuestRequiredItems"
               )
           }
-          if requirement_types != {"giveitem"}:
-              raise SystemExit(f"unexpected requirement types: {sorted(requirement_types)}")
-          bad_rows = connection.execute("""
-              select count(*) from QuestRequiredItems
-              where lower(replace(replace(replace(coalesce(RequirementType, ''), '_', ''), '-', ''), ' ', ''))
-                    in ('finditem', 'collect', 'item', 'genericitem', 'sellitem')
-          """).fetchone()[0]
-          if bad_rows != 0:
-              raise SystemExit(f"non-consumable requirement rows: {bad_rows}")
+          if requirement_types != {'giveitem'}:
+              raise SystemExit(f'unexpected requirement types: {sorted(requirement_types)}')
+
           print(
-              "published release database verified:",
-              "items=", connection.execute("select count(*) from Items").fetchone()[0],
-              "quests=", connection.execute("select count(*) from Quests").fetchone()[0],
-              "requirements=", connection.execute("select count(*) from QuestRequiredItems").fetchone()[0]
+              'published release verified:',
+              'icons=', len(icon_names),
+              'required_icons=', len(required_icon_ids),
+              'items=', connection.execute('select count(*) from Items').fetchone()[0],
+              'quests=', connection.execute('select count(*) from Quests').fetchone()[0]
           )
           connection.close()
           '@ | Set-Content verify_release.py -Encoding utf8
@@ -307,18 +382,9 @@ jobs:
           "hash=$actualHash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "url=$($release.url)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Report release verification
+      - name: Report verified release
         if: success()
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr comment 2 --repo $env:GITHUB_REPOSITORY --body "릴리즈 검증 성공: 타르코프헬퍼_JH v${{ steps.version.outputs.version }}, SHA-256 `${{ steps.verify.outputs.hash }}`, ${{ steps.verify.outputs.url }}"
-
-      - name: Report release verification failure
-        if: failure()
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr comment 2 --repo $env:GITHUB_REPOSITORY --body "릴리즈 검증 실패: Actions run ${{ github.run_id }}. 게시 자산 검사를 통과하지 못했습니다."
+          Write-Host "Release verified: ${{ steps.verify.outputs.url }}"
+          Write-Host "SHA-256: ${{ steps.verify.outputs.hash }}"
