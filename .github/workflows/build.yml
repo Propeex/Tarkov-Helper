@@ -47,14 +47,6 @@ jobs:
           path: build.log
           if-no-files-found: error
 
-      - name: Upload smoke source for maintenance
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-smoke-source
-          path: TarkovHelper.DatabaseSmoke/Program.cs
-          if-no-files-found: error
-
       - name: Fail if build failed
         if: steps.build.outcome == 'failure'
         shell: pwsh
