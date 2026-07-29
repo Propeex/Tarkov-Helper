@@ -117,7 +117,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release -- --external *> database-external-smoke.log
+          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release *> database-external-smoke.log -- --external
           exit $LASTEXITCODE
 
       - name: Upload external smoke log
@@ -141,3 +141,55 @@ jobs:
         shell: pwsh
         run: |
           Write-Warning "Live tarkov.dev smoke failed. The deterministic build and outage-handling smoke remain authoritative; inspect the uploaded log for current service availability."
+
+  release-package:
+    if: github.event_name == 'pull_request'
+    needs:
+      - build
+      - database-smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish Windows release candidate
+        shell: pwsh
+        run: |
+          dotnet publish TarkovHelper/TarkovHelper.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained false `
+            --output publish `
+            -p:DebugType=None `
+            -p:DebugSymbols=false
+
+          $requiredFiles = @(
+            "publish/TarkovHelper.exe",
+            "publish/Assets/tarkov_data.db"
+          )
+
+          foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Required release file is missing: $requiredFile"
+            }
+          }
+
+          Compress-Archive -Path publish/* -DestinationPath TarkovHelper.zip -Force
+          $hash = (Get-FileHash TarkovHelper.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  TarkovHelper.zip" | Set-Content TarkovHelper.zip.sha256 -Encoding ascii
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: TarkovHelper-release-candidate
+          path: |
+            TarkovHelper.zip
+            TarkovHelper.zip.sha256
+          if-no-files-found: error
