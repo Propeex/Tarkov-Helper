@@ -67,7 +67,7 @@ public sealed class UserProgressResetService
     {
         var database = UserDataDbService.Instance;
         await database.ClearAllQuestProgressAsync(profile);
-        await database.ClearAllObjectiveProgressAsync();
+        await ProfileScopedObjectiveProgressStore.Instance.ClearAllAsync(profile);
         await database.ClearAllHideoutProgressAsync(profile);
         await database.ClearAllItemInventoryAsync(profile);
     }
@@ -77,7 +77,7 @@ public sealed class UserProgressResetService
     {
         var database = UserDataDbService.Instance;
         var quests = await database.LoadQuestProgressAsync(profile);
-        var objectives = await database.LoadObjectiveProgressAsync();
+        var objectives = await ProfileScopedObjectiveProgressStore.Instance.LoadAsync(profile);
         var hideout = await database.LoadHideoutProgressAsync(profile);
         var inventory = await database.LoadItemInventoryAsync(profile);
         return (quests.Count, objectives.Count, hideout.Count, inventory.Count);

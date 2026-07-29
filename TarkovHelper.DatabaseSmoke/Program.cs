@@ -262,6 +262,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
 
     await RunPersistenceWriteQueueSmokeAsync();
+    await RunObjectiveProfileIsolationSmokeAsync();
     await RunUserProgressResetSmokeAsync();
     RunApplicationBehaviorSmoke();
 
@@ -325,6 +326,27 @@ static async Task RunPersistenceWriteQueueSmokeAsync()
     });
     if (state != 3)
         throw new InvalidDataException("Persistence queue did not resume after reset.");
+}
+
+static async Task RunObjectiveProfileIsolationSmokeAsync()
+{
+    const string key = "objective-profile-isolation-smoke";
+    var store = ProfileScopedObjectiveProgressStore.Instance;
+
+    await store.ClearAllAsync(ProfileType.Pvp);
+    await store.ClearAllAsync(ProfileType.Pve);
+    await store.SaveAsync(key, "objective-profile-isolation-quest", true, ProfileType.Pvp);
+
+    var pvp = await store.LoadAsync(ProfileType.Pvp);
+    var pve = await store.LoadAsync(ProfileType.Pve);
+    if (!pvp.TryGetValue(key, out var completed) || !completed || pve.ContainsKey(key))
+    {
+        throw new InvalidDataException(
+            $"Objective profile isolation failed: pvp={pvp.ContainsKey(key)}, pve={pve.ContainsKey(key)}.");
+    }
+
+    await store.ClearAllAsync(ProfileType.Pvp);
+    await store.ClearAllAsync(ProfileType.Pve);
 }
 
 static async Task RunUserProgressResetSmokeAsync()
