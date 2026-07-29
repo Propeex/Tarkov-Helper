@@ -8,6 +8,9 @@ on:
       - hotfix/**
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -16,6 +19,36 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Apply one-time final reset barrier patch
+        if: github.event_name == 'pull_request' && github.head_ref == 'hotfix/v1.6.3-reset-persistence-queues'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q "internal Task BeginPersistenceResetAsync" TarkovHelper/Services/QuestProgressService.cs \
+             && grep -q "internal async Task BeginPersistenceResetAsync" TarkovHelper/Services/ItemInventoryService.cs; then
+            echo "Final reset barrier patch is already applied."
+            exit 0
+          fi
+
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow_path = Path('.github/workflows/apply-v163-final-reset-barrier.yml')
+          text = workflow_path.read_text(encoding='utf-8')
+          marker = "      - name: Apply coordinated persistence reset barrier\n        shell: python\n        run: |\n"
+          start = text.index(marker) + len(marker)
+          end = text.index("\n      - name: Commit patched sources", start)
+          script = textwrap.dedent(text[start:end])
+          exec(compile(script, str(workflow_path), 'exec'))
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TarkovHelper TarkovHelper.DatabaseSmoke .github/workflows/release.yml
+          git commit -m "fix: hold all persistence queues through reset verification"
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
