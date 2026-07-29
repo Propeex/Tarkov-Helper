@@ -37,8 +37,6 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         await cleanupCommand.ExecuteNonQueryAsync();
     }
 
-    await PrepareLegacyQuestCoordinateFixtureAsync(databasePath);
-
     var fixtureHandler = new FixtureTarkovApiHandler();
     using var httpClient = new HttpClient(
         new TarkovJsonObjectiveIdProtectionHandler(
@@ -58,13 +56,13 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     if (fixtureHandler.GraphQlRequestCount != 0)
         throw new InvalidDataException("The deterministic static JSON test unexpectedly used GraphQL fallback.");
 
-    var objectiveLoaderSucceeded = await QuestObjectiveDbService.Instance.LoadObjectivesAsync();
-    var loadedCoordinateObjectives = QuestObjectiveDbService.Instance.AllObjectives.Count;
-    if (!objectiveLoaderSucceeded || loadedCoordinateObjectives == 0)
+    var mapQuestLoaderSucceeded = await QuestObjectiveDbService.Instance.LoadObjectivesAsync();
+    var loadedMapQuestObjectives = QuestObjectiveDbService.Instance.AllObjectives.Count;
+    if (!mapQuestLoaderSucceeded || loadedMapQuestObjectives != 0)
     {
         throw new InvalidDataException(
-            $"Quest marker coordinates were not loadable after rebuild: " +
-            $"success={objectiveLoaderSucceeded}, coordinates={loadedCoordinateObjectives}.");
+            $"Map quest data must remain disabled: " +
+            $"success={mapQuestLoaderSucceeded}, objectives={loadedMapQuestObjectives}.");
     }
 
     // Real tarkov.dev data contains distinct quests with the same English title
@@ -146,16 +144,6 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
           AND r.Count = 7
           AND r.DogtagMinLevel = 50;
         """);
-    var preservedCoordinateRows = await ScalarAsync(connection, """
-        SELECT COUNT(*)
-        FROM QuestObjectives o
-        JOIN Quests q ON q.Id = o.QuestId
-        WHERE q.BsgId = 'fixture-quest-first'
-          AND (
-              (o.LocationPoints IS NOT NULL AND o.LocationPoints != '')
-              OR (o.OptionalPoints IS NOT NULL AND o.OptionalPoints != '')
-          );
-        """);
     var duplicateDisplayNames = await ScalarAsync(connection, """
         SELECT COUNT(*)
         FROM (
@@ -231,12 +219,6 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
             $"Dogtag alternatives were not collapsed into one faction requirement: " +
             $"rows={dogtagAlternativeRows}, canonical={canonicalDogtagRows}.");
     }
-    if (preservedCoordinateRows < 1 || loadedCoordinateObjectives < 1)
-    {
-        throw new InvalidDataException(
-            $"Legacy quest marker coordinates were not preserved: " +
-            $"database={preservedCoordinateRows}, loader={loadedCoordinateObjectives}.");
-    }
     if (duplicateDisplayNames != 1)
         throw new InvalidDataException($"Duplicate-name loader fixture was not created: groups={duplicateDisplayNames}.");
     if (protectedObjectiveIds != 2 || correctlyScopedObjectives != 2 || duplicateObjectiveIds != 0)
@@ -263,7 +245,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"iconLinks={iconLinks}, neutralRestrictions={restrictedNeutralQuests}, sellItemRows={sellItemRequirements}, " +
         $"dogtagRows={dogtagAlternativeRows}, canonicalDogtags={canonicalDogtagRows}, " +
-        $"markerRows={preservedCoordinateRows}, markerLoader={loadedCoordinateObjectives}, " +
+        $"mapQuestObjectives={loadedMapQuestObjectives}, " +
         $"duplicateDisplayNames={duplicateDisplayNames}, questLoader={loadedQuests.Count}, " +
         $"uniqueQuestKeys={uniqueQuestKeys}, disambiguatedQuestKeys={disambiguatedQuestKeys}, " +
         $"objectiveIds={protectedObjectiveIds}, scopedObjectives={correctlyScopedObjectives}, " +
@@ -271,82 +253,6 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
-}
-
-static async Task PrepareLegacyQuestCoordinateFixtureAsync(string databasePath)
-{
-    var connectionString = new SqliteConnectionStringBuilder
-    {
-        DataSource = databasePath,
-        Mode = SqliteOpenMode.ReadWrite,
-        Pooling = false
-    }.ConnectionString;
-
-    await using var connection = new SqliteConnection(connectionString);
-    await connection.OpenAsync();
-
-    string? questId;
-    await using (var questCommand = connection.CreateCommand())
-    {
-        questCommand.CommandText = "SELECT Id FROM Quests ORDER BY Id LIMIT 1;";
-        questId = (await questCommand.ExecuteScalarAsync())?.ToString();
-    }
-
-    if (string.IsNullOrWhiteSpace(questId))
-        throw new InvalidDataException("Could not locate a quest row for the marker preservation fixture.");
-
-    long coordinateRowId;
-    await using (var objectiveCommand = connection.CreateCommand())
-    {
-        objectiveCommand.CommandText = """
-            SELECT rowid
-            FROM QuestObjectives
-            WHERE (LocationPoints IS NOT NULL AND LocationPoints != '')
-               OR (OptionalPoints IS NOT NULL AND OptionalPoints != '')
-            ORDER BY rowid
-            LIMIT 1;
-            """;
-        coordinateRowId = Convert.ToInt64(await objectiveCommand.ExecuteScalarAsync() ?? 0);
-    }
-
-    if (coordinateRowId <= 0)
-        throw new InvalidDataException("The bundled database has no quest marker coordinate row for the fixture.");
-
-    await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
-
-    await using (var questUpdate = connection.CreateCommand())
-    {
-        questUpdate.Transaction = transaction;
-        questUpdate.CommandText = """
-            UPDATE Quests
-            SET BsgId = 'fixture-quest-first'
-            WHERE Id = @questId;
-            """;
-        questUpdate.Parameters.AddWithValue("@questId", questId);
-        if (await questUpdate.ExecuteNonQueryAsync() != 1)
-            throw new InvalidDataException("Could not prepare the fixture quest ID mapping.");
-    }
-
-    await using (var objectiveUpdate = connection.CreateCommand())
-    {
-        objectiveUpdate.Transaction = transaction;
-        objectiveUpdate.CommandText = """
-            UPDATE QuestObjectives
-            SET Id = 'legacy-fixture-coordinate',
-                QuestId = @questId,
-                Description = 'Hand over syringe',
-                DescriptionEN = 'Hand over syringe',
-                DescriptionKO = '주사기 건네주기',
-                ObjectiveType = 'findItem'
-            WHERE rowid = @rowId;
-            """;
-        objectiveUpdate.Parameters.AddWithValue("@questId", questId);
-        objectiveUpdate.Parameters.AddWithValue("@rowId", coordinateRowId);
-        if (await objectiveUpdate.ExecuteNonQueryAsync() != 1)
-            throw new InvalidDataException("Could not prepare the marker coordinate fixture.");
-    }
-
-    await transaction.CommitAsync();
 }
 
 static async Task ForceDuplicateQuestNamesAsync(string databasePath)
