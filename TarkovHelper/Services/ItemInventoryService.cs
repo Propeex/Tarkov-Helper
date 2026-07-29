@@ -422,24 +422,48 @@ namespace TarkovHelper.Services
             }
         }
 
-        public void ResetAllInventory()
+        public async Task ResetAllInventoryAsync(ProfileType? profileType = null)
         {
-            ProfileType profile;
+            ProfileType actualProfile;
+            Task pendingSave;
+
             lock (_lock)
             {
                 if (_disposed)
                     return;
 
-                profile = _loadedProfile;
+                actualProfile = profileType ?? _loadedProfile;
                 _saveTimer?.Stop();
                 _pendingSaves.Clear();
                 _inventoryData = new ItemInventoryData();
             }
 
-            // Serialize the clear operation with ordinary item saves so a delayed save
-            // cannot repopulate rows after the reset transaction has completed.
-            QueuePersistence(() => _userDataDb.ClearAllItemInventoryAsync(profile));
+            lock (_saveTaskLock)
+                pendingSave = _saveTask;
+
+            await pendingSave.ConfigureAwait(false);
+            await _userDataDb.ClearAllItemInventoryAsync(actualProfile).ConfigureAwait(false);
             InventoryChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        internal void ResetInMemoryInventory()
+        {
+            lock (_lock)
+            {
+                if (_disposed)
+                    return;
+
+                _saveTimer?.Stop();
+                _pendingSaves.Clear();
+                _inventoryData = new ItemInventoryData();
+            }
+
+            InventoryChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public void ResetAllInventory()
+        {
+            ResetAllInventoryAsync().GetAwaiter().GetResult();
         }
 
         public async Task ReloadInventoryAsync()

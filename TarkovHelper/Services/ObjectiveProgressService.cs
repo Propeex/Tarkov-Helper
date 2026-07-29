@@ -178,20 +178,23 @@ namespace TarkovHelper.Services
         /// <summary>
         /// Clear all objective progress across all quests
         /// </summary>
-        public void ClearAllProgress()
+        public async Task ClearAllProgressAsync(ProfileType? profileType = null)
+        {
+            ResetInMemoryProgress();
+            await _userDataDb.ClearAllObjectiveProgressAsync();
+        }
+
+        internal void ResetInMemoryProgress()
         {
             _objectiveProgress.Clear();
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await _userDataDb.ClearAllObjectiveProgressAsync();
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[ObjectiveProgressService] ClearAll failed: {ex.Message}");
-                }
-            });
+            ObjectiveProgressChanged?.Invoke(
+                this,
+                new ObjectiveProgressChangedEventArgs(string.Empty, -1, false));
+        }
+
+        public void ClearAllProgress()
+        {
+            ClearAllProgressAsync().GetAwaiter().GetResult();
         }
 
         #endregion

@@ -1200,27 +1200,42 @@ public partial class MainWindow : Window
     private async void BtnResetProgress_Click(object sender, RoutedEventArgs e)
     {
         var result = MessageBox.Show(
-            "정말 진행도를 초기화 하시겠습니까?",
+            "퀘스트·목표·은신처 진행도와 보유 아이템을 모두 초기화하시겠습니까?",
             "진행도 초기화",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
 
-        if (result == MessageBoxResult.Yes)
+        if (result != MessageBoxResult.Yes)
+            return;
+
+        BtnResetProgress.IsEnabled = false;
+        ShowLoadingOverlay("사용자 진행도와 보유 아이템을 초기화하는 중...");
+
+        try
         {
-            // Reset quest progress
-            QuestProgressService.Instance.ResetAllProgress();
-
-            // Reset hideout progress
-            _hideoutProgressService.ResetAllProgress();
-
-            // Reload pages
-            await LoadAndShowQuestListAsync();
+            await UserProgressResetService.Instance.ResetCurrentProfileAsync();
+            await RefreshCurrentProfileDataAsync();
+            _questListPage?.ShowAllQuests();
 
             MessageBox.Show(
-            "진행도가 초기화되었습니다.",
-            "초기화 완료",
+                "퀘스트·은신처 진행도와 보유 아이템이 초기화되었습니다.",
+                "초기화 완료",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("User progress reset failed", ex);
+            MessageBox.Show(
+                $"초기화에 실패했습니다. 사용자 데이터는 변경 전 상태로 남아 있을 수 있습니다.\n\n{ex.Message}",
+                "초기화 실패",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            BtnResetProgress.IsEnabled = true;
+            HideLoadingOverlay();
         }
     }
 

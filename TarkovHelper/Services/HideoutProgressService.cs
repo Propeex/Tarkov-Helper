@@ -327,21 +327,22 @@ namespace TarkovHelper.Services
         /// <summary>
         /// Reset all hideout progress
         /// </summary>
-        public void ResetAllProgress()
+        public async Task ResetAllProgressAsync(ProfileType? profileType = null)
+        {
+            var actualProfile = profileType ?? _loadedProfile;
+            ResetInMemoryProgress();
+            await _userDataDb.ClearAllHideoutProgressAsync(actualProfile);
+        }
+
+        internal void ResetInMemoryProgress()
         {
             _progress = new HideoutProgress();
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await _userDataDb.ClearAllHideoutProgressAsync(_loadedProfile);
-                }
-                catch (Exception ex)
-                {
-                    _log.Error($"Reset failed: {ex.Message}");
-                }
-            });
             ProgressChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public void ResetAllProgress()
+        {
+            ResetAllProgressAsync().GetAwaiter().GetResult();
         }
 
         /// <summary>

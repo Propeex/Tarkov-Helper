@@ -261,6 +261,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     if (invalidMaxLevels != 0)
         throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
 
+    await RunUserProgressResetSmokeAsync();
     RunApplicationBehaviorSmoke();
 
     Console.WriteLine(
@@ -278,6 +279,42 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
+}
+
+static async Task RunUserProgressResetSmokeAsync()
+{
+    var database = UserDataDbService.Instance;
+    var profile = ProfileType.Pvp;
+
+    await database.SaveQuestProgressAsync(
+        "reset-smoke-quest",
+        "reset-smoke-quest",
+        QuestStatus.Done,
+        profile);
+    await database.SaveObjectiveProgressAsync(
+        "reset-smoke-quest:0",
+        "reset-smoke-quest",
+        true);
+    await database.SaveHideoutProgressAsync("reset-smoke-hideout", 2, profile);
+    await database.SaveItemInventoryAsync("reset-smoke-item", 3, 4, profile);
+
+    await database.ClearAllQuestProgressAsync(profile);
+    await database.ClearAllObjectiveProgressAsync();
+    await database.ClearAllHideoutProgressAsync(profile);
+    await database.ClearAllItemInventoryAsync(profile);
+
+    var counts = (
+        Quests: (await database.LoadQuestProgressAsync(profile)).Count,
+        Objectives: (await database.LoadObjectiveProgressAsync()).Count,
+        Hideout: (await database.LoadHideoutProgressAsync(profile)).Count,
+        Inventory: (await database.LoadItemInventoryAsync(profile)).Count);
+    if (counts != (0, 0, 0, 0))
+    {
+        throw new InvalidDataException(
+            $"User progress reset smoke failed: quests={counts.Quests}, " +
+            $"objectives={counts.Objectives}, hideout={counts.Hideout}, " +
+            $"inventory={counts.Inventory}.");
+    }
 }
 
 static async Task ForceDuplicateQuestNamesAsync(string databasePath)

@@ -111,6 +111,10 @@ public partial class MapPage : UserControl
     private Point _lastRightClickPosition;
     private CancellationTokenSource? _loadingCts;
     private bool _isInitializing;
+    private readonly SemaphoreSlim _mapLoadGate = new(1, 1);
+    private bool _mapPageActive;
+    private bool _componentsInitialized;
+    private bool _staticMapDataLoaded;
 
     public MapPage()
     {
@@ -156,7 +160,10 @@ public partial class MapPage : UserControl
     /// </summary>
     private void InitializeComponents()
     {
-        if (_trackerService == null) return;
+        if (_componentsInitialized || _trackerService == null)
+            return;
+
+        _componentsInitialized = true;
 
         // MapQuestMarkerManager 초기화
         _questMarkerManager = new MapQuestMarkerManager(
@@ -167,7 +174,7 @@ public partial class MapPage : UserControl
             _loc);
         _questMarkerManager.ObjectiveSelected += OnObjectiveSelectedFromManager;
         _questMarkerManager.FloorChangeRequested += OnFloorChangeRequestedFromManager;
-        _questMarkerManager.StatusUpdated += msg => Dispatcher.Invoke(() => TxtStatus.Text = msg);
+        _questMarkerManager.StatusUpdated += msg => DispatchUi(() => TxtStatus.Text = msg);
 
         // MapExtractMarkerManager 초기화
         _extractMarkerManager = new MapExtractMarkerManager(
@@ -182,7 +189,7 @@ public partial class MapPage : UserControl
             ExtractMarkersContainer,
             _trackerService,
             _calibrationService);
-        _calibrationController.StatusUpdated += msg => Dispatcher.Invoke(() => TxtStatus.Text = msg);
+        _calibrationController.StatusUpdated += msg => DispatchUi(() => TxtStatus.Text = msg);
         _calibrationController.CalibrationCompleted += OnCalibrationCompleted;
 
         // MapMarkersManager 초기화
@@ -198,7 +205,7 @@ public partial class MapPage : UserControl
             _trackerService,
             _trackerService.Transformer,
             _loc);
-        _customMarkerManager.StatusUpdated += msg => Dispatcher.Invoke(() => TxtStatus.Text = msg);
+        _customMarkerManager.StatusUpdated += msg => DispatchUi(() => TxtStatus.Text = msg);
         
         // 마커 목록 바인딩
         LstCustomMarkers.ItemsSource = _customMarkerManager.Markers;
@@ -252,126 +259,121 @@ public partial class MapPage : UserControl
 
     private async void MapTrackerPage_Loaded(object sender, RoutedEventArgs e)
     {
+        _mapPageActive = true;
+        var enteredGate = false;
+
         try
         {
-            // 초기화 시작 (GetNewCancellationToken이 기존 작업을 취소하도록 하되, 
-            // 이후 RestoreMapState 등이 이 토큰을 취소하지 못하게 함)
+            await _mapLoadGate.WaitAsync();
+            enteredGate = true;
+            if (!_mapPageActive)
+                return;
+
             _loadingCts?.Cancel();
             _loadingCts?.Dispose();
             _loadingCts = new CancellationTokenSource();
             var ct = _loadingCts.Token;
-
             _isInitializing = true;
 
-            // 페이지 로드 시 Trail 초기화
-            _trackerService?.ClearTrail();
-            TrailPath.Points.Clear();
-
-            LoadSettings();
-
-            // 리팩터링된 컴포넌트 초기화
             InitializeComponents();
 
-            PopulateMapComboBox();
+            MapMarkerDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+            MapMarkerDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
 
-            // 레이드 이벤트 모니터링 시작 (자동 맵 전환 및 레이드 감지용)
+            if (!_staticMapDataLoaded)
+            {
+                _trackerService?.ClearTrail();
+                TrailPath.Points.Clear();
+                LoadSettings();
+                PopulateMapComboBox();
+                RestoreMapState();
+                UpdateUI();
+
+                await System.Windows.Threading.Dispatcher.Yield(
+                    System.Windows.Threading.DispatcherPriority.Loaded);
+
+                await LoadExtractsAsync(ct);
+                await LoadMapMarkersAsync(ct);
+
+                try
+                {
+                    await FloorDetectionService.Instance
+                        .LoadFloorRangesAsync()
+                        .WaitAsync(TimeSpan.FromSeconds(10), ct);
+                }
+                catch (TimeoutException)
+                {
+                    _log.Warning("Floor detection initialization timed out; map UI remains available.");
+                }
+
+                _staticMapDataLoaded = true;
+            }
+            else
+            {
+                UpdateUI();
+            }
+
             StartRaidEventMonitoring();
 
-            // 로그에서 맵이 감지되지 않은 경우에만 저장된 맵 상태 복원
-            RestoreMapState();
-
-            UpdateUI();
-
-            // [v1.1.37] 무거운 작업 전에 UI가 렌더링될 기회를 줌
-            await Task.Delay(50, ct);
-
-            // 퀘스트 목표 데이터 로드
-            await LoadQuestObjectivesAsync(ct);
-            await Task.Delay(20, ct);
-
-            // 탈출구 데이터 로드
-            await LoadExtractsAsync(ct);
-            await Task.Delay(20, ct);
-
-            // Map Markers 데이터 로드
-            await LoadMapMarkersAsync(ct);
-            await Task.Delay(20, ct);
-
-            // 층 감지 데이터 로드 (자동 층 전환용)
-            await FloorDetectionService.Instance.LoadFloorRangesAsync().WaitAsync(ct);
-
-            // Drawer 기본 열기 및 내용 새로고침
-            OpenQuestDrawer();
-
-            // 퀘스트 진행 상태 변경 이벤트 구독
-            _progressService.ProgressChanged += OnQuestProgressChanged;
-            ActualQuestStatusService.Instance.StatusChanged += OnQuestProgressChanged;
-            ObjectiveProgressService.Instance.ObjectiveProgressChanged += OnObjectiveProgressChanged;
-
-            // Global Keyboard Hook 시작 (NumPad 키로 층 변경)
+            GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
             GlobalKeyboardHookService.Instance.FloorKeyPressed += OnFloorKeyPressed;
             GlobalKeyboardHookService.Instance.IsEnabled = true;
 
-            // 오버레이 미니맵 서비스 초기화
-            await InitializeOverlayServiceAsync().WaitAsync(ct);
+            try
+            {
+                await InitializeOverlayServiceAsync()
+                    .WaitAsync(TimeSpan.FromSeconds(10), ct);
+            }
+            catch (TimeoutException)
+            {
+                _log.Warning("Minimap service initialization timed out; map tab remains usable.");
+            }
 
-            // 오버레이 가시성 변경 이벤트 구독
+            _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
             _overlayService.OverlayVisibilityChanged += OnOverlayVisibilityChanged;
             UpdateMinimapButtonState(_overlayService.IsOverlayVisible);
-
-            // 자동 Tracking 시작 (Map 탭 활성화 시)
             StartAutoTracking();
+        }
+        catch (Exception ex) when (
+            ex is OperationCanceledException or TaskCanceledException ||
+            (_loadingCts?.IsCancellationRequested ?? false))
+        {
+            _log.Debug("Map loading task was cancelled.");
         }
         catch (Exception ex)
         {
-            // 취소 관련 예외이거나 토큰이 이미 취소된 경우 무시 (가장 확실한 방법)
-            if (ex is OperationCanceledException || 
-                ex is TaskCanceledException || 
-                (_loadingCts?.IsCancellationRequested ?? false) ||
-                ex.Message.Contains("canceled", StringComparison.OrdinalIgnoreCase))
-            {
-                _log.Debug("Map loading task was cancelled, ignoring exception.");
-                return;
-            }
-
             _log.Error("Critical error loading map page", ex);
-            MessageBox.Show($"지도 추적 페이지 로드 오류: {ex.Message}", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(
+                $"지도 페이지 로드 오류: {ex.Message}",
+                "오류",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
         finally
         {
             _isInitializing = false;
+            if (enteredGate)
+                _mapLoadGate.Release();
         }
     }
 
     private void MapTrackerPage_Unloaded(object sender, RoutedEventArgs e)
     {
-        // 로딩 작업 취소
+        _mapPageActive = false;
         _loadingCts?.Cancel();
-
-        // 현재 맵 상태 저장
         SaveMapState();
 
-        // 이벤트 구독 해제
         _progressService.ProgressChanged -= OnQuestProgressChanged;
         ActualQuestStatusService.Instance.StatusChanged -= OnQuestProgressChanged;
         ObjectiveProgressService.Instance.ObjectiveProgressChanged -= OnObjectiveProgressChanged;
         MapMarkerDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
         QuestObjectiveDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
 
-        // Global Keyboard Hook 중지
         GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
         GlobalKeyboardHookService.Instance.IsEnabled = false;
-
-        // 오버레이 가시성 변경 이벤트 구독 해제
         _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
-
-        // 오버레이 숨기기 (Map 탭 이탈 시)
         _overlayService.HideOverlay();
-
-        // 자동 Tracking 중지 (다른 탭으로 이동 시)
         StopAutoTracking();
-
-        // 레이드 이벤트 모니터링 중지
         StopRaidEventMonitoring();
     }
 
@@ -386,22 +388,36 @@ public partial class MapPage : UserControl
         settingsService.MapLastTranslateY = MapTranslate.Y;
     }
 
-    private async void OnDatabaseRefreshed(object? sender, EventArgs e)
+    private void OnDatabaseRefreshed(object? sender, EventArgs e)
     {
-        // DB 업데이트 후 마커 데이터 다시 로드
-        try
+        _staticMapDataLoaded = false;
+        if (!_mapPageActive)
+            return;
+
+        DispatchUi(async () =>
         {
-            var ct = GetNewCancellationToken();
-            // 퀘스트 목표 데이터 다시 로드
-            await LoadQuestObjectivesAsync(ct);
+            if (!_mapPageActive)
+                return;
 
-            // 탈출구 데이터 다시 로드
-            await LoadExtractsAsync(ct);
-
-            // 퀘스트 마커 갱신
-            await RefreshQuestMarkers(ct);
-        }
-        catch (OperationCanceledException) { }
+            var enteredGate = false;
+            try
+            {
+                var ct = GetNewCancellationToken();
+                await _mapLoadGate.WaitAsync(ct);
+                enteredGate = true;
+                await LoadExtractsAsync(ct);
+                await LoadMapMarkersAsync(ct);
+                _staticMapDataLoaded = true;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                if (enteredGate)
+                    _mapLoadGate.Release();
+            }
+        });
     }
 
     private void RestoreMapState()
@@ -730,7 +746,7 @@ public partial class MapPage : UserControl
 
     private void OnPositionUpdated(object? sender, ScreenPosition position)
     {
-        Dispatcher.Invoke(() =>
+        DispatchUi(() =>
         {
             UpdateMarkerPosition(position);
             UpdateTrailPath();
@@ -807,7 +823,7 @@ public partial class MapPage : UserControl
 
     private void OnErrorOccurred(object? sender, string message)
     {
-        Dispatcher.Invoke(() =>
+        DispatchUi(() =>
         {
             TxtStatus.Text = $"오류: {message}";
             TxtStatus.Foreground = TryFindResource("WarningBrush") as Brush ?? Brushes.Orange;
@@ -816,7 +832,7 @@ public partial class MapPage : UserControl
 
     private void OnStatusMessage(object? sender, string message)
     {
-        Dispatcher.Invoke(() =>
+        DispatchUi(() =>
         {
             TxtStatus.Text = message;
             TxtStatus.Foreground = TryFindResource("TextSecondaryBrush") as Brush ?? Brushes.Gray;
@@ -825,7 +841,7 @@ public partial class MapPage : UserControl
 
     private void OnWatchingStateChanged(object? sender, bool isWatching)
     {
-        Dispatcher.Invoke(UpdateUI);
+        DispatchUi(UpdateUI);
     }
 
     #endregion
@@ -894,7 +910,7 @@ public partial class MapPage : UserControl
     /// </summary>
     private void OnRaidEvent(object? sender, EftRaidEventArgs e)
     {
-        Dispatcher.Invoke(() =>
+        DispatchUi(() =>
         {
             switch (e.EventType)
             {
@@ -1166,7 +1182,7 @@ public partial class MapPage : UserControl
 
     private void OnOverlayVisibilityChanged(bool isVisible)
     {
-        Dispatcher.Invoke(() => UpdateMinimapButtonState(isVisible));
+        DispatchUi(() => UpdateMinimapButtonState(isVisible));
     }
 
     private void UpdateMinimapButtonState(bool isVisible)
@@ -2205,7 +2221,7 @@ public partial class MapPage : UserControl
 
             await _objectiveService.EnsureLoadedAsync(msg =>
             {
-                Dispatcher.Invoke(() => TxtStatus.Text = msg);
+                DispatchUi(() => TxtStatus.Text = msg);
             }).WaitAsync(ct);
 
             var count = _objectiveService.AllObjectives.Count;
@@ -2623,7 +2639,7 @@ public partial class MapPage : UserControl
 
             await _extractService.EnsureLoadedAsync(msg =>
             {
-                Dispatcher.Invoke(() => TxtStatus.Text = msg);
+                DispatchUi(() => TxtStatus.Text = msg);
             }).WaitAsync(ct);
 
             var count = _extractService.AllExtracts.Count;

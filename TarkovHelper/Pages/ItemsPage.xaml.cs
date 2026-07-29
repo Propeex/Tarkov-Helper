@@ -24,6 +24,9 @@ namespace TarkovHelper.Pages
         private bool _isUnloaded = false;
         private bool _needsRefreshOnLoad = false; // Flag to indicate data refresh needed after unload
         private string? _pendingItemSelection = null;
+        private readonly SemaphoreSlim _itemsLoadGate = new(1, 1);
+        private int _itemsLoadRequestVersion;
+        private CancellationTokenSource? _imageLoadCts;
 
 
         public ItemsPage()
@@ -49,6 +52,8 @@ namespace TarkovHelper.Pages
         private void ItemsPage_Unloaded(object sender, RoutedEventArgs e)
         {
             _isUnloaded = true;
+            Interlocked.Increment(ref _itemsLoadRequestVersion);
+            _imageLoadCts?.Cancel();
             _needsRefreshOnLoad = true; // Mark for refresh on next load to catch changes
             // Unsubscribe from events to prevent memory leaks
             _loc.LanguageChanged -= OnLanguageChanged;
@@ -67,7 +72,7 @@ namespace TarkovHelper.Pages
 
         private void OnInventoryChanged(object? sender, EventArgs e)
         {
-            Dispatcher.Invoke(() =>
+            DispatchUi(() =>
             {
                 // Update inventory quantities in view models
                 foreach (var vm in _allItemViewModels)
@@ -80,21 +85,15 @@ namespace TarkovHelper.Pages
             });
         }
 
-        private async void OnDatabaseRefreshed(object? sender, EventArgs e)
+        private void OnDatabaseRefreshed(object? sender, EventArgs e)
         {
-            // DB 업데이트 후 데이터 다시 로드
-            await Dispatcher.InvokeAsync(async () =>
+            DispatchUi(async () =>
             {
-                // Item lookup 새로고침
                 _itemLookup = new Dictionary<string, TarkovItem>(
                     ItemDbService.Instance.GetItemLookup(), StringComparer.OrdinalIgnoreCase);
-
-                // Items 데이터 다시 로드
                 await LoadItemsAsync();
                 ApplyFilters();
                 UpdateDetailPanel();
-
-                // 아이콘 백그라운드 로드
                 _ = LoadImagesInBackgroundAsync();
             });
         }
@@ -202,7 +201,7 @@ namespace TarkovHelper.Pages
 
         private void OnLanguageChanged(object? sender, AppLanguage e)
         {
-            Dispatcher.Invoke(async () =>
+            DispatchUi(async () =>
             {
                 // Update localized UI elements
                 UpdateLocalizedUIStrings();
@@ -293,7 +292,7 @@ namespace TarkovHelper.Pages
 
         private void OnProgressChanged(object? sender, EventArgs e)
         {
-            Dispatcher.Invoke(async () =>
+            DispatchUi(async () =>
             {
                 await LoadItemsAsync();
                 ApplyFilters();
@@ -305,7 +304,7 @@ namespace TarkovHelper.Pages
         private void OnFactionChanged(object? sender, string? e)
         {
             // Reload items when faction changes to update item counts
-            Dispatcher.Invoke(async () =>
+            DispatchUi(async () =>
             {
                 await LoadItemsAsync();
                 ApplyFilters();
@@ -318,7 +317,7 @@ namespace TarkovHelper.Pages
         private void OnEditionChanged(object? sender, bool e)
         {
             // Edition change affects which quests are available (Unavailable status)
-            Dispatcher.Invoke(async () =>
+            DispatchUi(async () =>
             {
                 await LoadItemsAsync();
                 ApplyFilters();
@@ -330,7 +329,7 @@ namespace TarkovHelper.Pages
         private void OnPrestigeLevelChanged(object? sender, int e)
         {
             // Prestige level change affects which quests are available (Unavailable status)
-            Dispatcher.Invoke(async () =>
+            DispatchUi(async () =>
             {
                 await LoadItemsAsync();
                 ApplyFilters();
@@ -342,7 +341,7 @@ namespace TarkovHelper.Pages
         private void OnDspDecodeCountChanged(object? sender, int e)
         {
             // DSP decode count change affects which quests are available (Locked status)
-            Dispatcher.Invoke(async () =>
+            DispatchUi(async () =>
             {
                 await LoadItemsAsync();
                 ApplyFilters();
@@ -353,34 +352,54 @@ namespace TarkovHelper.Pages
 
         private async Task LoadItemsAsync()
         {
-            _allItemViewModels = await _itemsDataService.GetAggregatedItemsAsync(_itemLookup);
-
-            // Build parent category list from loaded items
-            var newCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var vm in _allItemViewModels)
+            var requestVersion = Interlocked.Increment(ref _itemsLoadRequestVersion);
+            await _itemsLoadGate.WaitAsync();
+            try
             {
-                if (!string.IsNullOrEmpty(vm.ParentCategory))
+                if (requestVersion != Volatile.Read(ref _itemsLoadRequestVersion))
+                    return;
+
+                var lookupSnapshot = _itemLookup == null
+                    ? null
+                    : new Dictionary<string, TarkovItem>(
+                        _itemLookup,
+                        StringComparer.OrdinalIgnoreCase);
+
+                var loadedItems = await Task.Run(() =>
+                    _itemsDataService
+                        .GetAggregatedItemsAsync(lookupSnapshot)
+                        .GetAwaiter()
+                        .GetResult());
+
+                if (_isUnloaded ||
+                    requestVersion != Volatile.Read(ref _itemsLoadRequestVersion))
                 {
-                    newCategories.Add(vm.ParentCategory);
+                    return;
+                }
+
+                _allItemViewModels = loadedItems;
+
+                var newCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var vm in _allItemViewModels)
+                {
+                    if (!string.IsNullOrEmpty(vm.ParentCategory))
+                        newCategories.Add(vm.ParentCategory);
+
+                    var inventory = _inventoryService.GetInventory(vm.ItemNormalizedName);
+                    vm.OwnedFirQuantity = inventory.FirQuantity;
+                    vm.OwnedNonFirQuantity = inventory.NonFirQuantity;
+                }
+
+                if (!newCategories.SetEquals(_allCategories))
+                {
+                    _allCategories = newCategories;
+                    UpdateCategoryDropdown();
                 }
             }
-
-            // Update category dropdown if categories changed
-            if (!newCategories.SetEquals(_allCategories))
+            finally
             {
-                _allCategories = newCategories;
-                UpdateCategoryDropdown();
+                _itemsLoadGate.Release();
             }
-
-            // Load inventory data (fast, synchronous)
-            foreach (var vm in _allItemViewModels)
-            {
-                var inventory = _inventoryService.GetInventory(vm.ItemNormalizedName);
-                vm.OwnedFirQuantity = inventory.FirQuantity;
-                vm.OwnedNonFirQuantity = inventory.NonFirQuantity;
-            }
-
-            // Note: Image loading is now done separately via LoadImagesInBackgroundAsync()
         }
 
         /// <summary>
@@ -411,14 +430,44 @@ namespace TarkovHelper.Pages
         /// </summary>
         private async Task LoadImagesInBackgroundAsync()
         {
-            if (_allItemViewModels == null || _allItemViewModels.Count == 0)
-                return;
+            _imageLoadCts?.Cancel();
+            _imageLoadCts?.Dispose();
+            _imageLoadCts = new CancellationTokenSource();
+            var token = _imageLoadCts.Token;
 
-            // Phase 1: Load visible items first (immediate UX improvement)
-            await LoadVisibleItemImagesAsync();
+            try
+            {
+                if (_allItemViewModels.Count == 0 || _isUnloaded)
+                    return;
 
-            // Phase 2: Load remaining items in background
-            await LoadRemainingItemImagesAsync();
+                var visibleItems = GetVisibleItems()
+                    .Where(vm => !string.IsNullOrEmpty(vm.ItemId) && vm.IconSource == null)
+                    .ToList();
+                LoadItemImages(visibleItems);
+
+                var remainingItems = _allItemViewModels
+                    .Where(vm => !string.IsNullOrEmpty(vm.ItemId) && vm.IconSource == null)
+                    .ToList();
+
+                const int batchSize = 12;
+                for (var index = 0; index < remainingItems.Count; index += batchSize)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (_isUnloaded)
+                        return;
+
+                    LoadItemImages(remainingItems
+                        .Skip(index)
+                        .Take(batchSize)
+                        .ToList());
+                    await System.Windows.Threading.Dispatcher.Yield(
+                        System.Windows.Threading.DispatcherPriority.Background);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer page load or tab switch superseded this icon pass.
+            }
         }
 
         /// <summary>

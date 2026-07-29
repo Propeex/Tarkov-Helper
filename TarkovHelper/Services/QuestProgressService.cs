@@ -1015,27 +1015,24 @@ namespace TarkovHelper.Services
         /// <summary>
         /// Reset all quest progress
         /// </summary>
-        public void ResetAllProgress()
+        public async Task ResetAllProgressAsync(ProfileType? profileType = null)
+        {
+            var actualProfile = profileType ?? _loadedProfile;
+            ResetInMemoryProgress();
+            await ObjectiveProgressService.Instance.ClearAllProgressAsync(actualProfile);
+            await _userDataDb.ClearAllQuestProgressAsync(actualProfile);
+        }
+
+        internal void ResetInMemoryProgress()
         {
             _questProgress.Clear();
-            ObjectiveProgressService.Instance.ClearAllProgress();
-
-            // DB에서 모든 퀘스트 진행 데이터 삭제
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var profileType = ProfileService.Instance.CurrentProfile;
-                    await _userDataDb.ClearAllQuestProgressAsync(profileType);
-                    System.Diagnostics.Debug.WriteLine("[QuestProgressService] All progress cleared from DB");
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Reset failed: {ex.Message}");
-                }
-            });
-
+            _progressDataV2 = new QuestProgressDataV2();
             ProgressChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public void ResetAllProgress()
+        {
+            ResetAllProgressAsync().GetAwaiter().GetResult();
         }
 
         /// <summary>
