@@ -1,5 +1,4 @@
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Threading;
 using TarkovHelper.Services;
 
@@ -48,31 +47,23 @@ public partial class MapPage
         _currentMapObjectives.Clear();
         _selectedObjective = null;
 
-        if (QuestMarkersContainer != null)
-        {
-            QuestMarkersContainer.Children.Clear();
-            QuestMarkersContainer.Visibility = Visibility.Collapsed;
-            QuestMarkersContainer.IsHitTestVisible = false;
-        }
+        QuestObjectivesList.ItemsSource = null;
+        QuestMarkersContainer.Children.Clear();
+        QuestMarkersContainer.Visibility = Visibility.Collapsed;
+        QuestMarkersContainer.IsHitTestVisible = false;
 
-        if (QuestDrawerPanel != null)
-        {
-            QuestDrawerPanel.Visibility = Visibility.Collapsed;
-            QuestDrawerPanel.IsEnabled = false;
-        }
+        QuestDrawerPanel.Visibility = Visibility.Collapsed;
+        QuestDrawerPanel.IsEnabled = false;
+        QuestDrawerColumn.MinWidth = 0;
+        QuestDrawerColumn.Width = new GridLength(0);
 
-        if (QuestDrawerColumn != null)
-        {
-            QuestDrawerColumn.MinWidth = 0;
-            QuestDrawerColumn.Width = new GridLength(0);
-        }
+        ChkShowQuestMarkers.IsChecked = false;
+        ChkShowQuestMarkers.Visibility = Visibility.Collapsed;
+        ChkShowQuestMarkers.IsEnabled = false;
 
-        if (ChkShowQuestMarkers != null)
-        {
-            ChkShowQuestMarkers.IsChecked = false;
-            ChkShowQuestMarkers.Visibility = Visibility.Collapsed;
-            ChkShowQuestMarkers.IsEnabled = false;
-        }
+        CollapseNamedElement("DrawerSplitter");
+        CollapseNamedElement("BtnToggleDrawer");
+        CollapseNamedElement("TxtDrawerToggleIcon");
 
         SettingsService.Instance.MapShowQuests = false;
 
