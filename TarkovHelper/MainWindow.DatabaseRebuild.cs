@@ -10,6 +10,12 @@ public partial class MainWindow
     /// </summary>
     internal async Task ReloadAfterDatabaseRebuildAsync()
     {
+        // A completion clicked immediately before a manual DB rebuild may still be
+        // waiting for durable user-progress confirmation. Finish that operation before
+        // profile-bound inventory services are reset and recreated.
+        await InventoryConsumptionService.FlushExistingAsync();
+        await ItemInventoryService.FlushExistingAsync();
+
         // DatabaseUpdated is dispatched only after this method completes. Reload the
         // reference-data caches first so newly constructed pages cannot capture the
         // pre-rebuild item lookup or an empty quest snapshot.
