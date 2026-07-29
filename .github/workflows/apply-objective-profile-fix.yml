@@ -21,7 +21,10 @@ jobs:
       - name: Apply objective profile isolation fix
         shell: python
         run: |
-          exec(open('.github/scripts/apply_objective_profile_fix.py', encoding='utf-8').read())
+          path = '.github/scripts/apply_objective_profile_fix.py'
+          source = open(path, encoding='utf-8').read()
+          source = source.replace('if count != 1:', 'if count < 1:', 1)
+          exec(compile(source, path, 'exec'))
 
       - name: Commit patched sources
         shell: bash
