@@ -1,0 +1,902 @@
+name: Apply v1.6.2 Hotfix
+
+on:
+  push:
+    branches:
+      - hotfix/v1.6.2-reset-quest-tab-freeze
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message != 'v1.6.2 실사용 회귀 수정 적용'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def read(path):
+              return Path(path).read_text(encoding='utf-8-sig')
+
+          def write(path, text):
+              Path(path).parent.mkdir(parents=True, exist_ok=True)
+              Path(path).write_text(text, encoding='utf-8', newline='\n')
+
+          def replace_exact(path, old, new, expected=1):
+              text = read(path)
+              count = text.count(old)
+              if count != expected:
+                  raise RuntimeError(f'{path}: expected {expected} occurrences, found {count}: {old[:80]!r}')
+              write(path, text.replace(old, new))
+
+          def replace_method(path, signature, replacement):
+              text = read(path)
+              start = text.find(signature)
+              if start < 0:
+                  raise RuntimeError(f'{path}: method signature not found: {signature}')
+              brace = text.find('{', start)
+              if brace < 0:
+                  raise RuntimeError(f'{path}: opening brace not found: {signature}')
+              depth = 0
+              end = None
+              for index in range(brace, len(text)):
+                  char = text[index]
+                  if char == '{':
+                      depth += 1
+                  elif char == '}':
+                      depth -= 1
+                      if depth == 0:
+                          end = index + 1
+                          break
+              if end is None:
+                  raise RuntimeError(f'{path}: closing brace not found: {signature}')
+              write(path, text[:start] + replacement.rstrip() + text[end:])
+
+          # Version and update feed.
+          replace_exact('TarkovHelper/TarkovHelper.csproj',
+              '<Version>1.6.1</Version>\n    <AssemblyVersion>1.6.1.0</AssemblyVersion>\n    <FileVersion>1.6.1.0</FileVersion>',
+              '<Version>1.6.2</Version>\n    <AssemblyVersion>1.6.2.0</AssemblyVersion>\n    <FileVersion>1.6.2.0</FileVersion>')
+          replace_exact('update.xml', '<version>1.6.1</version>', '<version>1.6.2</version>')
+
+          # Reset button: await a verified full progress reset, then rebuild all service/page instances.
+          replace_method('TarkovHelper/MainWindow.xaml.cs',
+              '    private async void BtnResetProgress_Click(object sender, RoutedEventArgs e)',
+          '''    private async void BtnResetProgress_Click(object sender, RoutedEventArgs e)
+              {
+                  var result = MessageBox.Show(
+                      "퀘스트·목표·은신처 진행도와 보유 아이템을 모두 초기화하시겠습니까?",
+                      "진행도 초기화",
+                      MessageBoxButton.YesNo,
+                      MessageBoxImage.Warning);
+
+                  if (result != MessageBoxResult.Yes)
+                      return;
+
+                  BtnResetProgress.IsEnabled = false;
+                  ShowLoadingOverlay("사용자 진행도와 보유 아이템을 초기화하는 중...");
+
+                  try
+                  {
+                      await UserProgressResetService.Instance.ResetCurrentProfileAsync();
+                      await RefreshCurrentProfileDataAsync();
+                      _questListPage?.ShowAllQuests();
+
+                      MessageBox.Show(
+                          "퀘스트·은신처 진행도와 보유 아이템이 초기화되었습니다.",
+                          "초기화 완료",
+                          MessageBoxButton.OK,
+                          MessageBoxImage.Information);
+                  }
+                  catch (Exception ex)
+                  {
+                      _log.Error("User progress reset failed", ex);
+                      MessageBox.Show(
+                          $"초기화에 실패했습니다. 사용자 데이터는 변경 전 상태로 남아 있을 수 있습니다.\\n\\n{ex.Message}",
+                          "초기화 실패",
+                          MessageBoxButton.OK,
+                          MessageBoxImage.Error);
+                  }
+                  finally
+                  {
+                      BtnResetProgress.IsEnabled = true;
+                      HideLoadingOverlay();
+                  }
+              }''')
+
+          # Quest progress reset must clear both legacy and V2 memory and await DB/objective deletion.
+          replace_method('TarkovHelper/Services/QuestProgressService.cs',
+              '        public void ResetAllProgress()',
+          '''        public async Task ResetAllProgressAsync(ProfileType? profileType = null)
+                  {
+                      var actualProfile = profileType ?? _loadedProfile;
+                      ResetInMemoryProgress();
+                      await ObjectiveProgressService.Instance.ClearAllProgressAsync(actualProfile);
+                      await _userDataDb.ClearAllQuestProgressAsync(actualProfile);
+                  }
+
+                  internal void ResetInMemoryProgress()
+                  {
+                      _questProgress.Clear();
+                      _progressDataV2 = new QuestProgressDataV2();
+                      ProgressChanged?.Invoke(this, EventArgs.Empty);
+                  }
+
+                  public void ResetAllProgress()
+                  {
+                      ResetAllProgressAsync().GetAwaiter().GetResult();
+                  }''')
+
+          # Objective reset becomes awaitable and profile-specific.
+          replace_method('TarkovHelper/Services/ObjectiveProgressService.cs',
+              '        public void ClearAllProgress()',
+          '''        public async Task ClearAllProgressAsync(ProfileType? profileType = null)
+                  {
+                      ResetInMemoryProgress();
+                      await _userDataDb.ClearAllObjectiveProgressAsync(profileType);
+                  }
+
+                  internal void ResetInMemoryProgress()
+                  {
+                      _objectiveProgress.Clear();
+                      ObjectiveProgressChanged?.Invoke(
+                          this,
+                          new ObjectiveProgressChangedEventArgs(string.Empty, -1, false));
+                  }
+
+                  public void ClearAllProgress()
+                  {
+                      ClearAllProgressAsync().GetAwaiter().GetResult();
+                  }''')
+
+          # Hideout reset becomes awaitable.
+          replace_method('TarkovHelper/Services/HideoutProgressService.cs',
+              '        public void ResetAllProgress()',
+          '''        public async Task ResetAllProgressAsync(ProfileType? profileType = null)
+                  {
+                      var actualProfile = profileType ?? _loadedProfile;
+                      ResetInMemoryProgress();
+                      await _userDataDb.ClearAllHideoutProgressAsync(actualProfile);
+                  }
+
+                  internal void ResetInMemoryProgress()
+                  {
+                      _progress = new HideoutProgress();
+                      ProgressChanged?.Invoke(this, EventArgs.Empty);
+                  }
+
+                  public void ResetAllProgress()
+                  {
+                      ResetAllProgressAsync().GetAwaiter().GetResult();
+                  }''')
+
+          # Inventory reset waits for older queued saves, then clears DB and memory.
+          replace_method('TarkovHelper/Services/ItemInventoryService.cs',
+              '        public void ResetAllInventory()',
+          '''        public async Task ResetAllInventoryAsync(ProfileType? profileType = null)
+                  {
+                      ProfileType actualProfile;
+                      Task pendingSave;
+
+                      lock (_lock)
+                      {
+                          if (_disposed)
+                              return;
+
+                          actualProfile = profileType ?? _loadedProfile;
+                          _saveTimer?.Stop();
+                          _pendingSaves.Clear();
+                          _inventoryData = new ItemInventoryData();
+                      }
+
+                      lock (_saveTaskLock)
+                          pendingSave = _saveTask;
+
+                      await pendingSave.ConfigureAwait(false);
+                      await _userDataDb.ClearAllItemInventoryAsync(actualProfile).ConfigureAwait(false);
+                      InventoryChanged?.Invoke(this, EventArgs.Empty);
+                  }
+
+                  internal void ResetInMemoryInventory()
+                  {
+                      lock (_lock)
+                      {
+                          if (_disposed)
+                              return;
+
+                          _saveTimer?.Stop();
+                          _pendingSaves.Clear();
+                          _inventoryData = new ItemInventoryData();
+                      }
+
+                      InventoryChanged?.Invoke(this, EventArgs.Empty);
+                  }
+
+                  public void ResetAllInventory()
+                  {
+                      ResetAllInventoryAsync().GetAwaiter().GetResult();
+                  }''')
+
+          # Objective DB clear accepts the profile used by the reset transaction.
+          replace_exact('TarkovHelper/Services/UserDataDbService.cs',
+          '''    public async Task ClearAllObjectiveProgressAsync()
+              {
+                  await InitializeAsync();
+                  var profileType = ProfileService.Instance.CurrentProfile;
+
+                  var connectionString = GetConnectionString();
+                  await using var connection = new SqliteConnection(connectionString);
+                  await connection.OpenAsync();
+
+                  await using var cmd = new SqliteCommand("DELETE FROM ObjectiveProgress WHERE ProfileType = @profileType", connection);
+                  cmd.Parameters.AddWithValue("@profileType", (int)profileType);
+                  await cmd.ExecuteNonQueryAsync();
+              }''',
+          '''    public async Task ClearAllObjectiveProgressAsync(ProfileType? profileType = null)
+              {
+                  await InitializeAsync();
+                  var actualProfileType = profileType ?? ProfileService.Instance.CurrentProfile;
+
+                  var connectionString = GetConnectionString();
+                  await using var connection = new SqliteConnection(connectionString);
+                  await connection.OpenAsync();
+
+                  await using var cmd = new SqliteCommand("DELETE FROM ObjectiveProgress WHERE ProfileType = @profileType", connection);
+                  cmd.Parameters.AddWithValue("@profileType", (int)actualProfileType);
+                  await cmd.ExecuteNonQueryAsync();
+              }''')
+
+          # Add one transaction that clears all progress tables and a verification query.
+          db_path = 'TarkovHelper/Services/UserDataDbService.cs'
+          db_text = read(db_path)
+          marker = '    #region JSON Migration'
+          if marker not in db_text:
+              raise RuntimeError('UserDataDbService JSON migration marker not found')
+          reset_methods = r'''
+              public async Task ClearAllProgressDataAsync(ProfileType profileType)
+              {
+                  await InitializeAsync();
+                  await _dbSemaphore.WaitAsync();
+                  try
+                  {
+                      var connectionString = GetConnectionString();
+                      await using var connection = new SqliteConnection(connectionString);
+                      await connection.OpenAsync();
+                      await using var transaction = await connection.BeginTransactionAsync();
+
+                      foreach (var table in new[]
+                      {
+                          "QuestProgress",
+                          "ObjectiveProgress",
+                          "HideoutProgress",
+                          "ItemInventory"
+                      })
+                      {
+                          await using var command = connection.CreateCommand();
+                          command.Transaction = transaction;
+                          command.CommandText = $"DELETE FROM {table} WHERE ProfileType = @profileType";
+                          command.Parameters.AddWithValue("@profileType", (int)profileType);
+                          await command.ExecuteNonQueryAsync();
+                      }
+
+                      await transaction.CommitAsync();
+                  }
+                  finally
+                  {
+                      _dbSemaphore.Release();
+                  }
+              }
+
+              public async Task<(int Quests, int Objectives, int Hideout, int Inventory)> GetProgressRowCountsAsync(
+                  ProfileType profileType)
+              {
+                  await InitializeAsync();
+                  await _dbSemaphore.WaitAsync();
+                  try
+                  {
+                      var connectionString = GetConnectionString(readOnly: true);
+                      await using var connection = new SqliteConnection(connectionString);
+                      await connection.OpenAsync();
+
+                      async Task<int> CountAsync(string table)
+                      {
+                          await using var command = connection.CreateCommand();
+                          command.CommandText = $"SELECT COUNT(*) FROM {table} WHERE ProfileType = @profileType";
+                          command.Parameters.AddWithValue("@profileType", (int)profileType);
+                          return Convert.ToInt32(await command.ExecuteScalarAsync());
+                      }
+
+                      return (
+                          await CountAsync("QuestProgress"),
+                          await CountAsync("ObjectiveProgress"),
+                          await CountAsync("HideoutProgress"),
+                          await CountAsync("ItemInventory"));
+                  }
+                  finally
+                  {
+                      _dbSemaphore.Release();
+                  }
+              }
+
+          '''
+          db_text = db_text.replace(marker, reset_methods + marker, 1)
+          write(db_path, db_text)
+
+          write('TarkovHelper/Services/UserProgressResetService.cs', r'''using TarkovHelper.Models;
+
+          namespace TarkovHelper.Services;
+
+          public sealed class UserProgressResetService
+          {
+              private static UserProgressResetService? _instance;
+              public static UserProgressResetService Instance => _instance ??= new UserProgressResetService();
+
+              private readonly SemaphoreSlim _resetGate = new(1, 1);
+
+              private UserProgressResetService()
+              {
+              }
+
+              public async Task ResetCurrentProfileAsync()
+              {
+                  await _resetGate.WaitAsync();
+                  try
+                  {
+                      var profile = ProfileService.Instance.CurrentProfile;
+
+                      await ItemInventoryService.Instance.ResetAllInventoryAsync(profile);
+                      await QuestProgressService.Instance.ResetAllProgressAsync(profile);
+                      await HideoutProgressService.Instance.ResetAllProgressAsync(profile);
+
+                      // Final transactional sweep catches any older fire-and-forget write
+                      // that completed while the individual services were being reset.
+                      await UserDataDbService.Instance.ClearAllProgressDataAsync(profile);
+                      ResetAllInMemoryServices();
+
+                      await Task.Delay(150);
+                      var counts = await UserDataDbService.Instance.GetProgressRowCountsAsync(profile);
+                      if (counts != (0, 0, 0, 0))
+                      {
+                          await UserDataDbService.Instance.ClearAllProgressDataAsync(profile);
+                          ResetAllInMemoryServices();
+                          counts = await UserDataDbService.Instance.GetProgressRowCountsAsync(profile);
+                      }
+
+                      if (counts != (0, 0, 0, 0))
+                      {
+                          throw new InvalidDataException(
+                              $"Reset verification failed: quests={counts.Quests}, objectives={counts.Objectives}, " +
+                              $"hideout={counts.Hideout}, inventory={counts.Inventory}.");
+                      }
+                  }
+                  finally
+                  {
+                      _resetGate.Release();
+                  }
+              }
+
+              private static void ResetAllInMemoryServices()
+              {
+                  QuestProgressService.Instance.ResetInMemoryProgress();
+                  ObjectiveProgressService.Instance.ResetInMemoryProgress();
+                  HideoutProgressService.Instance.ResetInMemoryProgress();
+                  ItemInventoryService.Instance.ResetInMemoryInventory();
+              }
+          }
+          ''')
+
+          # Default quest list must show available/locked quests after a reset.
+          replace_exact('TarkovHelper/Pages/QuestListPage.xaml',
+              '<ComboBoxItem Content="진행 중" Tag="Active" IsSelected="True"/>\n                        <ComboBoxItem Content="전체" Tag="All"/>',
+              '<ComboBoxItem Content="진행 중" Tag="Active"/>\n                        <ComboBoxItem Content="전체" Tag="All" IsSelected="True"/>')
+          replace_exact('TarkovHelper/Pages/QuestListPage.xaml.cs',
+              'var selectedStatus = (CmbStatus.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Active";',
+              'var selectedStatus = (CmbStatus.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "All";')
+          write('TarkovHelper/Pages/QuestListPage.ResetBehavior.cs', r'''using System.Windows.Controls;
+
+          namespace TarkovHelper.Pages;
+
+          public partial class QuestListPage
+          {
+              public void ShowAllQuests()
+              {
+                  _isInitializing = true;
+                  try
+                  {
+                      TxtSearch.Text = string.Empty;
+                      ChkKappaOnly.IsChecked = false;
+                      ChkItemRequired.IsChecked = false;
+                      CmbTrader.SelectedIndex = 0;
+                      CmbMap.SelectedIndex = 0;
+
+                      var allItem = CmbStatus.Items
+                          .OfType<ComboBoxItem>()
+                          .FirstOrDefault(item => string.Equals(
+                              item.Tag?.ToString(),
+                              "All",
+                              StringComparison.OrdinalIgnoreCase));
+                      if (allItem != null)
+                          CmbStatus.SelectedItem = allItem;
+                  }
+                  finally
+                  {
+                      _isInitializing = false;
+                  }
+
+                  ApplyActualQuestStatuses();
+              }
+          }
+          ''')
+
+          # Items page: non-blocking dispatch, serialized CPU aggregation, cancellable batched icon loading.
+          items_path = 'TarkovHelper/Pages/ItemsPage.xaml.cs'
+          items_text = read(items_path)
+          field_marker = '        private string? _pendingItemSelection = null;\n'
+          if field_marker not in items_text:
+              raise RuntimeError('ItemsPage field marker missing')
+          items_text = items_text.replace(field_marker, field_marker + '''        private readonly SemaphoreSlim _itemsLoadGate = new(1, 1);\n        private int _itemsLoadRequestVersion;\n        private CancellationTokenSource? _imageLoadCts;\n''', 1)
+          items_text = items_text.replace('Dispatcher.Invoke(', 'DispatchUi(')
+          write(items_path, items_text)
+
+          replace_exact(items_path,
+              '            _isUnloaded = true;\n            _needsRefreshOnLoad = true; // Mark for refresh on next load to catch changes',
+              '            _isUnloaded = true;\n            Interlocked.Increment(ref _itemsLoadRequestVersion);\n            _imageLoadCts?.Cancel();\n            _needsRefreshOnLoad = true; // Mark for refresh on next load to catch changes')
+
+          replace_method(items_path,
+              '        private async void OnDatabaseRefreshed(object? sender, EventArgs e)',
+          '''        private void OnDatabaseRefreshed(object? sender, EventArgs e)
+                  {
+                      DispatchUi(async () =>
+                      {
+                          _itemLookup = new Dictionary<string, TarkovItem>(
+                              ItemDbService.Instance.GetItemLookup(), StringComparer.OrdinalIgnoreCase);
+                          await LoadItemsAsync();
+                          ApplyFilters();
+                          UpdateDetailPanel();
+                          _ = LoadImagesInBackgroundAsync();
+                      });
+                  }''')
+
+          replace_method(items_path,
+              '        private async Task LoadItemsAsync()',
+          '''        private async Task LoadItemsAsync()
+                  {
+                      var requestVersion = Interlocked.Increment(ref _itemsLoadRequestVersion);
+                      await _itemsLoadGate.WaitAsync();
+                      try
+                      {
+                          if (requestVersion != Volatile.Read(ref _itemsLoadRequestVersion))
+                              return;
+
+                          var lookupSnapshot = _itemLookup == null
+                              ? null
+                              : new Dictionary<string, TarkovItem>(
+                                  _itemLookup,
+                                  StringComparer.OrdinalIgnoreCase);
+
+                          var loadedItems = await Task.Run(() =>
+                              _itemsDataService
+                                  .GetAggregatedItemsAsync(lookupSnapshot)
+                                  .GetAwaiter()
+                                  .GetResult());
+
+                          if (_isUnloaded ||
+                              requestVersion != Volatile.Read(ref _itemsLoadRequestVersion))
+                          {
+                              return;
+                          }
+
+                          _allItemViewModels = loadedItems;
+
+                          var newCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                          foreach (var vm in _allItemViewModels)
+                          {
+                              if (!string.IsNullOrEmpty(vm.ParentCategory))
+                                  newCategories.Add(vm.ParentCategory);
+
+                              var inventory = _inventoryService.GetInventory(vm.ItemNormalizedName);
+                              vm.OwnedFirQuantity = inventory.FirQuantity;
+                              vm.OwnedNonFirQuantity = inventory.NonFirQuantity;
+                          }
+
+                          if (!newCategories.SetEquals(_allCategories))
+                          {
+                              _allCategories = newCategories;
+                              UpdateCategoryDropdown();
+                          }
+                      }
+                      finally
+                      {
+                          _itemsLoadGate.Release();
+                      }
+                  }''')
+
+          replace_method(items_path,
+              '        private async Task LoadImagesInBackgroundAsync()',
+          '''        private async Task LoadImagesInBackgroundAsync()
+                  {
+                      _imageLoadCts?.Cancel();
+                      _imageLoadCts?.Dispose();
+                      _imageLoadCts = new CancellationTokenSource();
+                      var token = _imageLoadCts.Token;
+
+                      try
+                      {
+                          if (_allItemViewModels.Count == 0 || _isUnloaded)
+                              return;
+
+                          var visibleItems = GetVisibleItems()
+                              .Where(vm => !string.IsNullOrEmpty(vm.ItemId) && vm.IconSource == null)
+                              .ToList();
+                          LoadItemImages(visibleItems);
+
+                          var remainingItems = _allItemViewModels
+                              .Where(vm => !string.IsNullOrEmpty(vm.ItemId) && vm.IconSource == null)
+                              .ToList();
+
+                          const int batchSize = 12;
+                          for (var index = 0; index < remainingItems.Count; index += batchSize)
+                          {
+                              token.ThrowIfCancellationRequested();
+                              if (_isUnloaded)
+                                  return;
+
+                              LoadItemImages(remainingItems
+                                  .Skip(index)
+                                  .Take(batchSize)
+                                  .ToList());
+                              await System.Windows.Threading.Dispatcher.Yield(
+                                  System.Windows.Threading.DispatcherPriority.Background);
+                          }
+                      }
+                      catch (OperationCanceledException)
+                      {
+                          // A newer page load or tab switch superseded this icon pass.
+                      }
+                  }''')
+
+          write('TarkovHelper/Pages/ItemsPage.Dispatching.cs', r'''using System.Windows.Threading;
+          using TarkovHelper.Services.Logging;
+
+          namespace TarkovHelper.Pages;
+
+          public partial class ItemsPage
+          {
+              private void DispatchUi(Action action)
+              {
+                  if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+                      return;
+
+                  if (Dispatcher.CheckAccess())
+                  {
+                      action();
+                      return;
+                  }
+
+                  _ = Dispatcher.BeginInvoke(action, DispatcherPriority.Background);
+              }
+
+              private void DispatchUi(Func<Task> action)
+              {
+                  if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+                      return;
+
+                  _ = Dispatcher.BeginInvoke(new Action(async () =>
+                  {
+                      try
+                      {
+                          await action();
+                      }
+                      catch (OperationCanceledException)
+                      {
+                      }
+                      catch (Exception ex)
+                      {
+                          System.Diagnostics.Debug.WriteLine($"[ItemsPage] Deferred UI refresh failed: {ex}");
+                      }
+                  }), DispatcherPriority.Background);
+              }
+          }
+          ''')
+
+          # Map page: no synchronous dispatcher waits, one component setup, one static-data load per page instance.
+          map_path = 'TarkovHelper/Pages/Map/MapPage.xaml.cs'
+          map_text = read(map_path)
+          map_field_marker = '    private bool _isInitializing;\n'
+          if map_field_marker not in map_text:
+              raise RuntimeError('MapPage field marker missing')
+          map_text = map_text.replace(map_field_marker, map_field_marker + '''    private readonly SemaphoreSlim _mapLoadGate = new(1, 1);\n    private bool _mapPageActive;\n    private bool _componentsInitialized;\n    private bool _staticMapDataLoaded;\n''', 1)
+          map_text = map_text.replace('Dispatcher.Invoke(', 'DispatchUi(')
+          write(map_path, map_text)
+
+          replace_exact(map_path,
+          '''    private void InitializeComponents()
+              {
+                  if (_trackerService == null) return;''',
+          '''    private void InitializeComponents()
+              {
+                  if (_componentsInitialized || _trackerService == null)
+                      return;
+
+                  _componentsInitialized = true;''')
+
+          replace_method(map_path,
+              '    private async void MapTrackerPage_Loaded(object sender, RoutedEventArgs e)',
+          '''    private async void MapTrackerPage_Loaded(object sender, RoutedEventArgs e)
+              {
+                  _mapPageActive = true;
+                  var enteredGate = false;
+
+                  try
+                  {
+                      await _mapLoadGate.WaitAsync();
+                      enteredGate = true;
+                      if (!_mapPageActive)
+                          return;
+
+                      _loadingCts?.Cancel();
+                      _loadingCts?.Dispose();
+                      _loadingCts = new CancellationTokenSource();
+                      var ct = _loadingCts.Token;
+                      _isInitializing = true;
+
+                      InitializeComponents();
+
+                      MapMarkerDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+                      MapMarkerDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
+
+                      if (!_staticMapDataLoaded)
+                      {
+                          _trackerService?.ClearTrail();
+                          TrailPath.Points.Clear();
+                          LoadSettings();
+                          PopulateMapComboBox();
+                          RestoreMapState();
+                          UpdateUI();
+
+                          await System.Windows.Threading.Dispatcher.Yield(
+                              System.Windows.Threading.DispatcherPriority.Loaded);
+
+                          await LoadExtractsAsync(ct);
+                          await LoadMapMarkersAsync(ct);
+
+                          try
+                          {
+                              await FloorDetectionService.Instance
+                                  .LoadFloorRangesAsync()
+                                  .WaitAsync(TimeSpan.FromSeconds(10), ct);
+                          }
+                          catch (TimeoutException)
+                          {
+                              _log.Warning("Floor detection initialization timed out; map UI remains available.");
+                          }
+
+                          _staticMapDataLoaded = true;
+                      }
+                      else
+                      {
+                          UpdateUI();
+                      }
+
+                      StartRaidEventMonitoring();
+
+                      GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
+                      GlobalKeyboardHookService.Instance.FloorKeyPressed += OnFloorKeyPressed;
+                      GlobalKeyboardHookService.Instance.IsEnabled = true;
+
+                      try
+                      {
+                          await InitializeOverlayServiceAsync()
+                              .WaitAsync(TimeSpan.FromSeconds(10), ct);
+                      }
+                      catch (TimeoutException)
+                      {
+                          _log.Warning("Minimap service initialization timed out; map tab remains usable.");
+                      }
+
+                      _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
+                      _overlayService.OverlayVisibilityChanged += OnOverlayVisibilityChanged;
+                      UpdateMinimapButtonState(_overlayService.IsOverlayVisible);
+                      StartAutoTracking();
+                  }
+                  catch (Exception ex) when (
+                      ex is OperationCanceledException or TaskCanceledException ||
+                      (_loadingCts?.IsCancellationRequested ?? false))
+                  {
+                      _log.Debug("Map loading task was cancelled.");
+                  }
+                  catch (Exception ex)
+                  {
+                      _log.Error("Critical error loading map page", ex);
+                      MessageBox.Show(
+                          $"지도 페이지 로드 오류: {ex.Message}",
+                          "오류",
+                          MessageBoxButton.OK,
+                          MessageBoxImage.Error);
+                  }
+                  finally
+                  {
+                      _isInitializing = false;
+                      if (enteredGate)
+                          _mapLoadGate.Release();
+                  }
+              }''')
+
+          replace_method(map_path,
+              '    private void MapTrackerPage_Unloaded(object sender, RoutedEventArgs e)',
+          '''    private void MapTrackerPage_Unloaded(object sender, RoutedEventArgs e)
+              {
+                  _mapPageActive = false;
+                  _loadingCts?.Cancel();
+                  SaveMapState();
+
+                  _progressService.ProgressChanged -= OnQuestProgressChanged;
+                  ActualQuestStatusService.Instance.StatusChanged -= OnQuestProgressChanged;
+                  ObjectiveProgressService.Instance.ObjectiveProgressChanged -= OnObjectiveProgressChanged;
+                  MapMarkerDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+                  QuestObjectiveDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+
+                  GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
+                  GlobalKeyboardHookService.Instance.IsEnabled = false;
+                  _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
+                  _overlayService.HideOverlay();
+                  StopAutoTracking();
+                  StopRaidEventMonitoring();
+              }''')
+
+          replace_method(map_path,
+              '    private async void OnDatabaseRefreshed(object? sender, EventArgs e)',
+          '''    private void OnDatabaseRefreshed(object? sender, EventArgs e)
+              {
+                  _staticMapDataLoaded = false;
+                  if (!_mapPageActive)
+                      return;
+
+                  DispatchUi(async () =>
+                  {
+                      if (!_mapPageActive)
+                          return;
+
+                      var enteredGate = false;
+                      try
+                      {
+                          var ct = GetNewCancellationToken();
+                          await _mapLoadGate.WaitAsync(ct);
+                          enteredGate = true;
+                          await LoadExtractsAsync(ct);
+                          await LoadMapMarkersAsync(ct);
+                          _staticMapDataLoaded = true;
+                      }
+                      catch (OperationCanceledException)
+                      {
+                      }
+                      finally
+                      {
+                          if (enteredGate)
+                              _mapLoadGate.Release();
+                      }
+                  });
+              }''')
+
+          write('TarkovHelper/Pages/Map/MapPage.Dispatching.cs', r'''using System.Windows.Threading;
+
+          namespace TarkovHelper.Pages.Map;
+
+          public partial class MapPage
+          {
+              private void DispatchUi(Action action)
+              {
+                  if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+                      return;
+
+                  if (Dispatcher.CheckAccess())
+                  {
+                      action();
+                      return;
+                  }
+
+                  _ = Dispatcher.BeginInvoke(action, DispatcherPriority.Background);
+              }
+
+              private void DispatchUi(Func<Task> action)
+              {
+                  if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+                      return;
+
+                  _ = Dispatcher.BeginInvoke(new Action(async () =>
+                  {
+                      try
+                      {
+                          await action();
+                      }
+                      catch (OperationCanceledException)
+                      {
+                      }
+                      catch (Exception ex)
+                      {
+                          _log.Error("Deferred map UI operation failed", ex);
+                      }
+                  }), DispatcherPriority.Background);
+              }
+          }
+          ''')
+
+          # Deterministic smoke: verify all four progress tables are really empty after reset.
+          program_path = 'TarkovHelper.DatabaseSmoke/Program.cs'
+          program_text = read(program_path)
+          program_text = program_text.replace(
+              '    RunApplicationBehaviorSmoke();\n',
+              '    await RunUserProgressResetSmokeAsync();\n    RunApplicationBehaviorSmoke();\n',
+              1)
+          insert_marker = 'static async Task ForceDuplicateQuestNamesAsync(string databasePath)'
+          if insert_marker not in program_text:
+              raise RuntimeError('DatabaseSmoke function marker missing')
+          reset_smoke = r'''static async Task RunUserProgressResetSmokeAsync()
+          {
+              var database = UserDataDbService.Instance;
+              var profile = ProfileType.Pvp;
+
+              await database.SaveQuestProgressAsync(
+                  "reset-smoke-quest",
+                  "reset-smoke-quest",
+                  QuestStatus.Done,
+                  profile);
+              await database.SaveObjectiveProgressAsync(
+                  "reset-smoke-quest:0",
+                  "reset-smoke-quest",
+                  true);
+              await database.SaveHideoutProgressAsync("reset-smoke-hideout", 2, profile);
+              await database.SaveItemInventoryAsync("reset-smoke-item", 3, 4, profile);
+
+              await database.ClearAllProgressDataAsync(profile);
+              var counts = await database.GetProgressRowCountsAsync(profile);
+              if (counts != (0, 0, 0, 0))
+              {
+                  throw new InvalidDataException(
+                      $"User progress reset smoke failed: quests={counts.Quests}, " +
+                      $"objectives={counts.Objectives}, hideout={counts.Hideout}, inventory={counts.Inventory}.");
+              }
+          }
+
+          '''
+          program_text = program_text.replace(insert_marker, reset_smoke + insert_marker, 1)
+          write(program_path, program_text)
+
+          # Release notes for v1.6.2.
+          release_path = '.github/workflows/release.yml'
+          release_text = read(release_path)
+          old_notes = '''          ### v1.6.1 수정
+                    - 아이템 화면에 필요한 PNG 아이콘을 최신 tarkov.dev DB 기준으로 생성하여 배포 파일에 포함
+                    - 미니맵 설정창 초기화 중 클릭 투과 상태가 반대로 전환되는 문제 수정
+                    - 클릭 투과 체크 해제 시 미니맵을 마우스로 이동·확대·축소할 수 있도록 상태 적용 방식 수정
+                    - 게시된 ZIP의 아이콘 완전성, SQLite 무결성, 사용자 데이터 미포함을 자동 검증'''
+          new_notes = '''          ### v1.6.2 수정
+                    - 초기화 버튼이 퀘스트·목표·은신처·보유 아이템을 모두 실제 DB에서 삭제하고 결과를 검증하도록 수정
+                    - 초기화 후 퀘스트 목록의 기본 상태 필터를 전체로 변경
+                    - 아이템 집계와 아이콘 로드를 직렬화·분할하여 탭 전환 중 UI 정지 방지
+                    - 지도 컴포넌트와 정적 데이터의 중복 초기화를 제거하고 동기 Dispatcher 대기 제거
+                    - 초기화 DB 회귀 검사와 게시 ZIP 무결성 검증 유지'''
+          if old_notes not in release_text:
+              raise RuntimeError('Release note block not found')
+          write(release_path, release_text.replace(old_notes, new_notes, 1))
+
+          # Remove this one-shot workflow before committing the actual patch.
+          Path('.github/workflows/apply-v162-hotfix.yml').unlink()
+          PY
+
+      - name: Commit patched source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "v1.6.2 실사용 회귀 수정 적용"
+          git push origin HEAD:hotfix/v1.6.2-reset-quest-tab-freeze
