@@ -11,7 +11,7 @@ namespace TarkovHelper.Models
         Locked,
 
         /// <summary>
-        /// Available to start/in progress
+        /// Quest was actually accepted/started and is currently in progress
         /// </summary>
         Active,
 
@@ -26,13 +26,18 @@ namespace TarkovHelper.Models
         Failed,
 
         /// <summary>
-        /// Prerequisites met but player level too low
+        /// Prerequisites met but player level is too low
         /// </summary>
         LevelLocked,
 
         /// <summary>
-        /// Quest is not available due to edition or prestige level requirements
+        /// Quest is not available due to edition, prestige, or faction requirements
         /// </summary>
-        Unavailable
+        Unavailable,
+
+        /// <summary>
+        /// All start conditions are met, but the quest has not actually been accepted yet
+        /// </summary>
+        Available
     }
 }
