@@ -43,7 +43,7 @@ jobs:
             $actual = (Get-FileHash ".maintenance/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
             Write-Host "$name $actual"
             if ($actual -ne $expectedChunks[$name]) {
-              throw "Staged chunk hash mismatch for $name: $actual"
+              throw "Staged chunk hash mismatch for ${name}: $actual"
             }
           }
 
