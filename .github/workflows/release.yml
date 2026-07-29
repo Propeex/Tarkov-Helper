@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: publish-release
@@ -58,7 +60,6 @@ jobs:
 
       - name: Rebuild and validate live database
         if: steps.version.outputs.exists != 'true'
-        id: database
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -198,3 +199,126 @@ jobs:
             --title "타르코프헬퍼_JH v${{ steps.version.outputs.version }}" `
             --notes-file RELEASE_NOTES.md `
             --latest
+
+      - name: Verify published release and assets
+        id: verify
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ steps.version.outputs.tag }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $expectedTitle = "타르코프헬퍼_JH v$version"
+
+          $release = gh release view $tag `
+            --repo $env:GITHUB_REPOSITORY `
+            --json name,isDraft,isPrerelease,url,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $null -eq $release) {
+            throw "The GitHub Release could not be read."
+          }
+          if ($release.name -ne $expectedTitle -or $release.isDraft -or $release.isPrerelease) {
+            throw "Release metadata is invalid: name=$($release.name), draft=$($release.isDraft), prerelease=$($release.isPrerelease)."
+          }
+
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          foreach ($requiredAsset in @("TarkovHelper_JH.zip", "TarkovHelper_JH.zip.sha256")) {
+            if ($assetNames -notcontains $requiredAsset) {
+              throw "Required release asset is missing: $requiredAsset"
+            }
+          }
+
+          New-Item -ItemType Directory -Path release-verification -Force | Out-Null
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip" --dir release-verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the release ZIP." }
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip.sha256" --dir release-verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the SHA-256 file." }
+
+          $zipPath = "release-verification/TarkovHelper_JH.zip"
+          $shaPath = "release-verification/TarkovHelper_JH.zip.sha256"
+          $declaredHash = ((Get-Content $shaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declaredHash -ne $actualHash) {
+            throw "Published SHA-256 mismatch: declared=$declaredHash actual=$actualHash"
+          }
+
+          Expand-Archive $zipPath -DestinationPath release-verification/extracted -Force
+          foreach ($requiredFile in @(
+            "release-verification/extracted/TarkovHelper_JH.exe",
+            "release-verification/extracted/Assets/tarkov_data.db"
+          )) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Required file is missing from the published ZIP: $requiredFile"
+            }
+          }
+
+          @'
+          import os
+          import sqlite3
+          import sys
+          import zipfile
+
+          zip_path, db_path = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(zip_path) as archive:
+              names = archive.namelist()
+              if len(names) != len(set(names)):
+                  raise SystemExit("duplicate ZIP entries")
+              if any(name.startswith(("/", "\\")) or ".." in name.replace("\\", "/").split("/") for name in names):
+                  raise SystemExit("unsafe ZIP path")
+              forbidden = {
+                  "user_data.db", "quest_progress.json", "quest_progress_v2.json",
+                  "objective_progress.json", "hideout_progress.json", "item_inventory.json",
+                  "settings.json", "app_settings.json"
+              }
+              if any(os.path.basename(name).lower() in forbidden or name.lower().endswith(".pdb") for name in names):
+                  raise SystemExit("user-data or debug file included")
+
+          connection = sqlite3.connect(db_path)
+          if connection.execute("pragma integrity_check").fetchone()[0] != "ok":
+              raise SystemExit("SQLite integrity_check failed")
+          if connection.execute("pragma foreign_key_check").fetchall():
+              raise SystemExit("SQLite foreign-key violation")
+          requirement_types = {
+              row[0].lower() for row in connection.execute(
+                  "select distinct coalesce(RequirementType, '') from QuestRequiredItems"
+              )
+          }
+          if requirement_types != {"giveitem"}:
+              raise SystemExit(f"unexpected requirement types: {sorted(requirement_types)}")
+          bad_rows = connection.execute("""
+              select count(*) from QuestRequiredItems
+              where lower(replace(replace(replace(coalesce(RequirementType, ''), '_', ''), '-', ''), ' ', ''))
+                    in ('finditem', 'collect', 'item', 'genericitem', 'sellitem')
+          """).fetchone()[0]
+          if bad_rows != 0:
+              raise SystemExit(f"non-consumable requirement rows: {bad_rows}")
+          print(
+              "published release database verified:",
+              "items=", connection.execute("select count(*) from Items").fetchone()[0],
+              "quests=", connection.execute("select count(*) from Quests").fetchone()[0],
+              "requirements=", connection.execute("select count(*) from QuestRequiredItems").fetchone()[0]
+          )
+          connection.close()
+          '@ | Set-Content verify_release.py -Encoding utf8
+
+          python verify_release.py $zipPath "release-verification/extracted/Assets/tarkov_data.db"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          "hash=$actualHash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "url=$($release.url)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Report release verification
+        if: success()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment 2 --repo $env:GITHUB_REPOSITORY --body "릴리즈 검증 성공: 타르코프헬퍼_JH v${{ steps.version.outputs.version }}, SHA-256 `${{ steps.verify.outputs.hash }}`, ${{ steps.verify.outputs.url }}"
+
+      - name: Report release verification failure
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment 2 --repo $env:GITHUB_REPOSITORY --body "릴리즈 검증 실패: Actions run ${{ github.run_id }}. 게시 자산 검사를 통과하지 못했습니다."
