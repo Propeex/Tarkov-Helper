@@ -153,13 +153,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
         {
             English = english;
             Korean = korean;
-            ApplyObjectiveLocalizationPolicy();
+            ApplyOfficialKoreanObjectives();
         }
 
         public ApiTask English { get; }
         public ApiTask? Korean { get; }
 
-        private void ApplyObjectiveLocalizationPolicy()
+        private void ApplyOfficialKoreanObjectives()
         {
             if (Korean == null || English.Objectives.Count == 0 || Korean.Objectives.Count == 0)
                 return;
@@ -183,7 +183,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 if (englishObjective == null)
                     continue;
 
-                koreanObjective.Description = QuestTextLocalizationPolicy.SelectContent(
+                koreanObjective.Description = QuestKoreanSourcePolicy.SelectQuestContent(
                     englishObjective.Description,
                     koreanObjective.Description);
             }
