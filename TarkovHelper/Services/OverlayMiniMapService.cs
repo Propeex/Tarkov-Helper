@@ -33,10 +33,12 @@ public sealed class OverlayMiniMapService : IDisposable
 
     private readonly UserDataDbService _userDataDb = UserDataDbService.Instance;
     private readonly SemaphoreSlim _initializeGate = new(1, 1);
+    private readonly object _settingsSaveLock = new();
 
     private OverlayMiniMapWindow? _overlayWindow;
     private OverlaySettingsWindow? _settingsWindow;
     private OverlayMiniMapSettings _settings = new();
+    private Task _settingsSaveTask = Task.CompletedTask;
     private bool _isInitialized;
     private bool _disposed;
 
@@ -62,6 +64,9 @@ public sealed class OverlayMiniMapService : IDisposable
                 return;
 
             await LoadSettingsAsync();
+            if (_disposed)
+                return;
+
             SubscribeHotkeys();
             _isInitialized = true;
             _log.Info("OverlayMiniMapService initialized");
@@ -104,7 +109,7 @@ public sealed class OverlayMiniMapService : IDisposable
             _overlayWindow?.Hide();
             _settings.Enabled = false;
             OverlayVisibilityChanged?.Invoke(false);
-            _ = SaveSettingsAsync();
+            QueueSettingsSave();
             _log.Debug("Overlay hidden");
         }
         catch (Exception ex)
@@ -149,7 +154,7 @@ public sealed class OverlayMiniMapService : IDisposable
             _overlayWindow.Activate();
             _settings.Enabled = true;
             OverlayVisibilityChanged?.Invoke(true);
-            _ = SaveSettingsAsync();
+            QueueSettingsSave();
             _log.Debug("Overlay shown");
         }
         catch (InvalidOperationException ex)
@@ -165,17 +170,19 @@ public sealed class OverlayMiniMapService : IDisposable
                 _overlayWindow.Activate();
                 _settings.Enabled = true;
                 OverlayVisibilityChanged?.Invoke(true);
-                _ = SaveSettingsAsync();
+                QueueSettingsSave();
             }
             catch (Exception retryException)
             {
                 _settings.Enabled = false;
+                QueueSettingsSave();
                 _log.Error("Failed to recreate overlay", retryException);
             }
         }
         catch (Exception ex)
         {
             _settings.Enabled = false;
+            QueueSettingsSave();
             _log.Error("Failed to show overlay", ex);
         }
     }
@@ -202,7 +209,7 @@ public sealed class OverlayMiniMapService : IDisposable
     {
         _settings = settings;
         SyncHotkeys();
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
         SettingsChanged?.Invoke(settings);
     }
 
@@ -212,7 +219,7 @@ public sealed class OverlayMiniMapService : IDisposable
         DetachOverlayWindow();
         _settings.Enabled = false;
         OverlayVisibilityChanged?.Invoke(false);
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
         _log.Debug("Overlay window closed and released");
     }
 
@@ -287,22 +294,58 @@ public sealed class OverlayMiniMapService : IDisposable
         }
     }
 
-    private async Task SaveSettingsAsync()
+    private void QueueSettingsSave()
     {
+        string json;
         try
         {
-            var json = JsonSerializer.Serialize(_settings);
-            await _userDataDb.SetSettingAsync(SettingsKey, json);
+            // Capture an immutable snapshot now. Serializing later could persist a
+            // newer state ahead of an older queued save and reverse user actions.
+            json = JsonSerializer.Serialize(_settings);
         }
         catch (Exception ex)
         {
-            _log.Warning($"Failed to save overlay settings: {ex.Message}");
+            _log.Warning($"Failed to serialize overlay settings: {ex.Message}");
+            return;
         }
+
+        lock (_settingsSaveLock)
+        {
+            _settingsSaveTask = _settingsSaveTask.ContinueWith(
+                async previous =>
+                {
+                    if (previous.IsFaulted)
+                        _log.Error("Previous overlay settings save failed", previous.Exception!);
+
+                    try
+                    {
+                        await _userDataDb.SetSettingAsync(SettingsKey, json).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Warning($"Failed to save overlay settings: {ex.Message}");
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default).Unwrap();
+        }
+    }
+
+    private void FlushSettingsSaves()
+    {
+        QueueSettingsSave();
+
+        Task pending;
+        lock (_settingsSaveLock)
+            pending = _settingsSaveTask;
+
+        pending.GetAwaiter().GetResult();
     }
 
     public void SaveSettings()
     {
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
     }
 
     public void ResetSettings()
@@ -313,7 +356,7 @@ public sealed class OverlayMiniMapService : IDisposable
         DetachOverlayWindow();
         window?.Close();
 
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
         OverlayVisibilityChanged?.Invoke(false);
     }
 
@@ -343,7 +386,7 @@ public sealed class OverlayMiniMapService : IDisposable
     {
         _settings.CopyFrom(settings);
         SyncHotkeys();
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
         SettingsChanged?.Invoke(_settings);
     }
 
@@ -371,8 +414,18 @@ public sealed class OverlayMiniMapService : IDisposable
         DetachOverlayWindow();
         window?.Close();
 
+        try
+        {
+            FlushSettingsSaves();
+        }
+        catch (Exception ex)
+        {
+            _log.Warning($"Failed to flush overlay settings during shutdown: {ex.Message}");
+        }
+
         _isInitialized = false;
-        _initializeGate.Dispose();
+        // Do not dispose _initializeGate here. An initialization already awaiting
+        // LoadSettingsAsync must still be able to release it during shutdown.
         _log.Info("OverlayMiniMapService disposed");
         GC.SuppressFinalize(this);
     }
