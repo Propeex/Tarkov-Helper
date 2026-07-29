@@ -13,6 +13,33 @@ internal static class MapUiRegressionSmoke
         AssertEqual("2층", MapFloorConfig.GetLocalizedDisplayName("Level 2", "level2", 1));
         AssertEqual("옥상", MapFloorConfig.GetLocalizedDisplayName("Rooftop", "roof", 3));
 
+        if (OverlayClickThroughPolicy.ShouldToggle(
+                isInitializing: true,
+                currentState: true,
+                requestedState: false))
+        {
+            throw new InvalidDataException(
+                "Overlay click-through changed while the settings window was initializing.");
+        }
+
+        if (!OverlayClickThroughPolicy.ShouldToggle(
+                isInitializing: false,
+                currentState: true,
+                requestedState: false))
+        {
+            throw new InvalidDataException(
+                "Overlay click-through did not recognize an explicit disable request.");
+        }
+
+        if (OverlayClickThroughPolicy.ShouldToggle(
+                isInitializing: false,
+                currentState: false,
+                requestedState: false))
+        {
+            throw new InvalidDataException(
+                "Overlay click-through toggled despite an unchanged requested state.");
+        }
+
         var mapQuestService = QuestObjectiveDbService.Instance;
         if (!mapQuestService.LoadObjectivesAsync().GetAwaiter().GetResult())
             throw new InvalidDataException("Map quest compatibility service failed to initialize.");
