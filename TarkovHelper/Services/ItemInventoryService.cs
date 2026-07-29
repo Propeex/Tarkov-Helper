@@ -7,86 +7,189 @@ namespace TarkovHelper.Services
     /// <summary>
     /// Service for managing user's item inventory quantities (FIR/Non-FIR)
     /// </summary>
-    public class ItemInventoryService
+    public class ItemInventoryService : IDisposable
     {
         private static readonly ILogger _log = Log.For<ItemInventoryService>();
+        private static readonly object InstanceLock = new();
         private static ItemInventoryService? _instance;
-        public static ItemInventoryService Instance => _instance ??= new ItemInventoryService();
+
+        public static ItemInventoryService Instance
+        {
+            get
+            {
+                lock (InstanceLock)
+                    return _instance ??= new ItemInventoryService();
+            }
+        }
 
         /// <summary>
-        /// 싱글톤 인스턴스를 파괴하여 캐시된 인벤토리 데이터를 완전히 비웁니다.
+        /// Flushes the current instance without creating a new one.
+        /// </summary>
+        public static Task FlushExistingAsync()
+        {
+            lock (InstanceLock)
+                return _instance?.FlushPendingSavesAsync() ?? Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Flushes and disposes the old singleton before a refreshed instance is used.
         /// </summary>
         public static void ResetInstance()
         {
-            _instance = null;
+            ItemInventoryService? previous;
+            lock (InstanceLock)
+            {
+                previous = _instance;
+                _instance = null;
+            }
+
+            previous?.Dispose();
         }
+
         private ProfileType _loadedProfile = ProfileType.Pvp;
-
         private readonly UserDataDbService _userDataDb = UserDataDbService.Instance;
-
         private ItemInventoryData _inventoryData = new();
         private readonly object _lock = new();
 
-        // Debounce save timer
         private System.Timers.Timer? _saveTimer;
         private readonly HashSet<string> _pendingSaves = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _saveTaskLock = new();
+        private Task _saveTask = Task.CompletedTask;
+        private bool _disposed;
 
         public event EventHandler? InventoryChanged;
 
         private ItemInventoryService()
         {
-            // 초기화는 외부에서 비동기적으로 호출되어야 합니다.
             InitializeSaveTimer();
         }
 
         private void InitializeSaveTimer()
         {
-            _saveTimer = new System.Timers.Timer(500); // 500ms debounce
-            _saveTimer.AutoReset = false;
-            _saveTimer.Elapsed += (s, e) =>
+            _saveTimer = new System.Timers.Timer(500)
             {
-                SavePendingItems();
+                AutoReset = false
             };
+            _saveTimer.Elapsed += (_, _) => SavePendingItems();
         }
 
         private void SavePendingItems()
         {
-            List<string> itemsToSave;
+            var itemsToSave = DrainPendingItems();
+            if (itemsToSave.Count == 0)
+                return;
+
+            QueueSaveBatch(itemsToSave, _loadedProfile);
+        }
+
+        private List<string> DrainPendingItems()
+        {
             lock (_lock)
             {
-                if (_pendingSaves.Count == 0) return;
-                itemsToSave = _pendingSaves.ToList();
-                _pendingSaves.Clear();
-            }
+                if (_pendingSaves.Count == 0)
+                    return [];
 
-            _ = Task.Run(async () =>
+                var items = _pendingSaves.ToList();
+                _pendingSaves.Clear();
+                return items;
+            }
+        }
+
+        private void QueueSaveBatch(IReadOnlyCollection<string> itemNames, ProfileType profile)
+        {
+            if (itemNames.Count == 0)
+                return;
+
+            var distinctNames = itemNames
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (distinctNames.Length == 0)
+                return;
+
+            QueuePersistence(() => SaveItemsAsync(distinctNames, profile));
+        }
+
+        private void QueuePersistence(Func<Task> operation)
+        {
+            lock (_saveTaskLock)
             {
-                foreach (var itemName in itemsToSave)
-                {
-                    try
+                _saveTask = _saveTask.ContinueWith(
+                    async previous =>
                     {
-                        int firQty, nonFirQty;
-                        lock (_lock)
+                        if (previous.IsFaulted)
+                            _log.Error("Previous inventory persistence operation failed", previous.Exception!);
+
+                        try
                         {
-                            if (_inventoryData.Items.TryGetValue(itemName, out var inv))
-                            {
-                                firQty = inv.FirQuantity;
-                                nonFirQty = inv.NonFirQuantity;
-                            }
-                            else
-                            {
-                                firQty = 0;
-                                nonFirQty = 0;
-                            }
+                            await operation().ConfigureAwait(false);
                         }
-                        await _userDataDb.SaveItemInventoryAsync(itemName, firQty, nonFirQty, _loadedProfile);
-                    }
-                    catch (Exception ex)
+                        catch (Exception ex)
+                        {
+                            _log.Error("Inventory persistence operation failed", ex);
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default).Unwrap();
+            }
+        }
+
+        private async Task SaveItemsAsync(
+            IReadOnlyCollection<string> itemNames,
+            ProfileType profile)
+        {
+            foreach (var itemName in itemNames)
+            {
+                int firQuantity;
+                int nonFirQuantity;
+                lock (_lock)
+                {
+                    if (_inventoryData.Items.TryGetValue(itemName, out var inventory))
                     {
-                        _log.Error($"Save failed for {itemName}: {ex.Message}");
+                        firQuantity = inventory.FirQuantity;
+                        nonFirQuantity = inventory.NonFirQuantity;
+                    }
+                    else
+                    {
+                        firQuantity = 0;
+                        nonFirQuantity = 0;
                     }
                 }
-            });
+
+                await _userDataDb.SaveItemInventoryAsync(
+                    itemName,
+                    firQuantity,
+                    nonFirQuantity,
+                    profile).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Persists all queued changes and waits for previously queued saves.
+        /// </summary>
+        public async Task FlushPendingSavesAsync()
+        {
+            _saveTimer?.Stop();
+
+            while (true)
+            {
+                var pendingItems = DrainPendingItems();
+                if (pendingItems.Count > 0)
+                    QueueSaveBatch(pendingItems, _loadedProfile);
+
+                Task pendingTask;
+                lock (_saveTaskLock)
+                    pendingTask = _saveTask;
+
+                await pendingTask.ConfigureAwait(false);
+
+                lock (_lock)
+                {
+                    if (_pendingSaves.Count == 0)
+                        return;
+                }
+            }
         }
 
         /// <summary>
@@ -97,47 +200,31 @@ namespace TarkovHelper.Services
             lock (_lock)
             {
                 if (_inventoryData.Items.TryGetValue(itemNormalizedName, out var inventory))
-                {
                     return inventory;
-                }
 
                 return new ItemInventory { ItemNormalizedName = itemNormalizedName };
             }
         }
 
-        /// <summary>
-        /// Get FIR quantity for an item
-        /// </summary>
-        public int GetFirQuantity(string itemNormalizedName)
-        {
-            return GetInventory(itemNormalizedName).FirQuantity;
-        }
+        public int GetFirQuantity(string itemNormalizedName) =>
+            GetInventory(itemNormalizedName).FirQuantity;
 
-        /// <summary>
-        /// Get Non-FIR quantity for an item
-        /// </summary>
-        public int GetNonFirQuantity(string itemNormalizedName)
-        {
-            return GetInventory(itemNormalizedName).NonFirQuantity;
-        }
+        public int GetNonFirQuantity(string itemNormalizedName) =>
+            GetInventory(itemNormalizedName).NonFirQuantity;
 
-        /// <summary>
-        /// Get total quantity for an item
-        /// </summary>
-        public int GetTotalQuantity(string itemNormalizedName)
-        {
-            return GetInventory(itemNormalizedName).TotalQuantity;
-        }
+        public int GetTotalQuantity(string itemNormalizedName) =>
+            GetInventory(itemNormalizedName).TotalQuantity;
 
-        /// <summary>
-        /// Set FIR quantity for an item
-        /// </summary>
         public void SetFirQuantity(string itemNormalizedName, int quantity)
         {
             quantity = Math.Max(0, quantity);
+            var changed = false;
 
             lock (_lock)
             {
+                if (_disposed)
+                    return;
+
                 if (!_inventoryData.Items.TryGetValue(itemNormalizedName, out var inventory))
                 {
                     inventory = new ItemInventory { ItemNormalizedName = itemNormalizedName };
@@ -149,20 +236,24 @@ namespace TarkovHelper.Services
                     inventory.FirQuantity = quantity;
                     CleanupEmptyInventory(itemNormalizedName);
                     ScheduleSave(itemNormalizedName);
-                    InventoryChanged?.Invoke(this, EventArgs.Empty);
+                    changed = true;
                 }
             }
+
+            if (changed)
+                InventoryChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        /// <summary>
-        /// Set Non-FIR quantity for an item
-        /// </summary>
         public void SetNonFirQuantity(string itemNormalizedName, int quantity)
         {
             quantity = Math.Max(0, quantity);
+            var changed = false;
 
             lock (_lock)
             {
+                if (_disposed)
+                    return;
+
                 if (!_inventoryData.Items.TryGetValue(itemNormalizedName, out var inventory))
                 {
                     inventory = new ItemInventory { ItemNormalizedName = itemNormalizedName };
@@ -174,23 +265,20 @@ namespace TarkovHelper.Services
                     inventory.NonFirQuantity = quantity;
                     CleanupEmptyInventory(itemNormalizedName);
                     ScheduleSave(itemNormalizedName);
-                    InventoryChanged?.Invoke(this, EventArgs.Empty);
+                    changed = true;
                 }
             }
+
+            if (changed)
+                InventoryChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        /// <summary>
-        /// Adjust FIR quantity by delta (can be positive or negative)
-        /// </summary>
         public void AdjustFirQuantity(string itemNormalizedName, int delta)
         {
             var current = GetFirQuantity(itemNormalizedName);
             SetFirQuantity(itemNormalizedName, current + delta);
         }
 
-        /// <summary>
-        /// Adjust Non-FIR quantity by delta (can be positive or negative)
-        /// </summary>
         public void AdjustNonFirQuantity(string itemNormalizedName, int delta)
         {
             var current = GetNonFirQuantity(itemNormalizedName);
@@ -199,7 +287,7 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// Consume several item requirements atomically in memory and persist each
-        /// affected item through the existing debounce queue. General requirements
+        /// affected item through the serialized save queue. General requirements
         /// consume non-FIR stock first; FIR-only requirements consume FIR stock only.
         /// Quantities never become negative.
         /// </summary>
@@ -212,6 +300,14 @@ namespace TarkovHelper.Services
 
             lock (_lock)
             {
+                if (_disposed)
+                {
+                    requested = requirements
+                        .Where(requirement => requirement.Quantity > 0)
+                        .Sum(requirement => requirement.Quantity);
+                    return new InventoryConsumptionResult(requested, 0, requested);
+                }
+
                 foreach (var requirement in requirements)
                 {
                     if (string.IsNullOrWhiteSpace(requirement.ItemNormalizedName) ||
@@ -238,8 +334,6 @@ namespace TarkovHelper.Services
                     }
                     else
                     {
-                        // Preserve FIR items where possible because later quests may
-                        // explicitly require FIR status.
                         var fromNonFir = Math.Min(inventory.NonFirQuantity, remaining);
                         inventory.NonFirQuantity -= fromNonFir;
                         remaining -= fromNonFir;
@@ -276,24 +370,19 @@ namespace TarkovHelper.Services
                 Math.Max(0, requested - consumed));
         }
 
-        /// <summary>
-        /// Remove inventory entry if both quantities are 0
-        /// </summary>
         private void CleanupEmptyInventory(string itemNormalizedName)
         {
-            if (_inventoryData.Items.TryGetValue(itemNormalizedName, out var inventory))
+            if (_inventoryData.Items.TryGetValue(itemNormalizedName, out var inventory) &&
+                inventory.FirQuantity == 0 && inventory.NonFirQuantity == 0)
             {
-                if (inventory.FirQuantity == 0 && inventory.NonFirQuantity == 0)
-                {
-                    _inventoryData.Items.Remove(itemNormalizedName);
-                }
+                _inventoryData.Items.Remove(itemNormalizedName);
             }
         }
 
-        /// <summary>
-        /// Calculate fulfillment info for an item
-        /// </summary>
-        public ItemFulfillmentInfo GetFulfillmentInfo(string itemNormalizedName, int requiredTotal, int requiredFir)
+        public ItemFulfillmentInfo GetFulfillmentInfo(
+            string itemNormalizedName,
+            int requiredTotal,
+            int requiredFir)
         {
             var inventory = GetInventory(itemNormalizedName);
 
@@ -307,72 +396,65 @@ namespace TarkovHelper.Services
             };
         }
 
-        /// <summary>
-        /// Get all items in inventory
-        /// </summary>
         public IReadOnlyDictionary<string, ItemInventory> GetAllInventory()
         {
             lock (_lock)
             {
-                return new Dictionary<string, ItemInventory>(_inventoryData.Items, StringComparer.OrdinalIgnoreCase);
+                return _inventoryData.Items.ToDictionary(
+                    pair => pair.Key,
+                    pair => new ItemInventory
+                    {
+                        ItemNormalizedName = pair.Value.ItemNormalizedName,
+                        FirQuantity = pair.Value.FirQuantity,
+                        NonFirQuantity = pair.Value.NonFirQuantity
+                    },
+                    StringComparer.OrdinalIgnoreCase);
             }
         }
 
-        /// <summary>
-        /// Get inventory statistics
-        /// </summary>
         public (int TotalItems, int TotalFirCount, int TotalNonFirCount) GetStatistics()
         {
             lock (_lock)
             {
-                var totalFir = _inventoryData.Items.Values.Sum(i => i.FirQuantity);
-                var totalNonFir = _inventoryData.Items.Values.Sum(i => i.NonFirQuantity);
+                var totalFir = _inventoryData.Items.Values.Sum(item => item.FirQuantity);
+                var totalNonFir = _inventoryData.Items.Values.Sum(item => item.NonFirQuantity);
                 return (_inventoryData.Items.Count, totalFir, totalNonFir);
             }
         }
 
-        /// <summary>
-        /// Reset all inventory data
-        /// </summary>
         public void ResetAllInventory()
         {
+            ProfileType profile;
             lock (_lock)
             {
+                if (_disposed)
+                    return;
+
+                profile = _loadedProfile;
+                _saveTimer?.Stop();
+                _pendingSaves.Clear();
                 _inventoryData = new ItemInventoryData();
             }
 
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await _userDataDb.ClearAllItemInventoryAsync(_loadedProfile);
-                }
-                catch (Exception ex)
-                {
-                    _log.Error($"Reset failed: {ex.Message}");
-                }
-            });
-
+            // Serialize the clear operation with ordinary item saves so a delayed save
+            // cannot repopulate rows after the reset transaction has completed.
+            QueuePersistence(() => _userDataDb.ClearAllItemInventoryAsync(profile));
             InventoryChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        /// <summary>
-        /// 강제로 인벤토리를 다시 로드 (프로필 전환 시 사용)
-        /// </summary>
         public async Task ReloadInventoryAsync()
         {
+            await FlushPendingSavesAsync();
             await LoadInventoryFromDbAsync();
             InventoryChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        #region Persistence
-
         private void ScheduleSave(string itemNormalizedName)
         {
-            lock (_lock)
-            {
-                _pendingSaves.Add(itemNormalizedName);
-            }
+            if (_disposed)
+                return;
+
+            _pendingSaves.Add(itemNormalizedName);
             _inventoryData.LastUpdated = DateTime.UtcNow;
             _saveTimer?.Stop();
             _saveTimer?.Start();
@@ -396,37 +478,60 @@ namespace TarkovHelper.Services
 
         private async Task LoadInventoryFromDbAsync()
         {
+            var profile = _loadedProfile;
             try
             {
-                var items = await _userDataDb.LoadItemInventoryAsync(_loadedProfile);
+                var items = await _userDataDb.LoadItemInventoryAsync(profile).ConfigureAwait(false);
                 var newData = new ItemInventoryData
                 {
                     LastUpdated = DateTime.UtcNow,
                     Items = new Dictionary<string, ItemInventory>(StringComparer.OrdinalIgnoreCase)
                 };
 
-                foreach (var kvp in items)
+                foreach (var pair in items)
                 {
-                    newData.Items[kvp.Key] = new ItemInventory
+                    newData.Items[pair.Key] = new ItemInventory
                     {
-                        ItemNormalizedName = kvp.Key,
-                        FirQuantity = kvp.Value.FirQuantity,
-                        NonFirQuantity = kvp.Value.NonFirQuantity
+                        ItemNormalizedName = pair.Key,
+                        FirQuantity = pair.Value.FirQuantity,
+                        NonFirQuantity = pair.Value.NonFirQuantity
                     };
                 }
 
                 lock (_lock)
-                {
                     _inventoryData = newData;
-                }
             }
             catch (Exception ex)
             {
                 _log.Error($"Load failed: {ex.Message}");
-                _inventoryData = new ItemInventoryData();
+                lock (_lock)
+                    _inventoryData = new ItemInventoryData();
             }
         }
 
-        #endregion
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                if (_disposed)
+                    return;
+
+                _disposed = true;
+                _saveTimer?.Stop();
+            }
+
+            try
+            {
+                FlushPendingSavesAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _log.Error("Failed to flush item inventory during disposal", ex);
+            }
+
+            _saveTimer?.Dispose();
+            _saveTimer = null;
+            GC.SuppressFinalize(this);
+        }
     }
 }
