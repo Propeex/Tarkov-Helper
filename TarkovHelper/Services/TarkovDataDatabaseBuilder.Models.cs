@@ -146,7 +146,50 @@ internal sealed partial class TarkovDataDatabaseBuilder
     }
 
     private sealed record LocalizedItem(ApiItem English, ApiItem? Korean);
-    private sealed record LocalizedTask(ApiTask English, ApiTask? Korean);
+
+    private sealed record LocalizedTask
+    {
+        public LocalizedTask(ApiTask english, ApiTask? korean)
+        {
+            English = english;
+            Korean = korean;
+            ApplyObjectiveLocalizationPolicy();
+        }
+
+        public ApiTask English { get; }
+        public ApiTask? Korean { get; }
+
+        private void ApplyObjectiveLocalizationPolicy()
+        {
+            if (Korean == null || English.Objectives.Count == 0 || Korean.Objectives.Count == 0)
+                return;
+
+            var englishObjectivesById = English.Objectives
+                .Where(objective => !string.IsNullOrWhiteSpace(objective.Id))
+                .GroupBy(objective => objective.Id!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+            for (var index = 0; index < Korean.Objectives.Count; index++)
+            {
+                var koreanObjective = Korean.Objectives[index];
+                ApiTaskObjective? englishObjective = null;
+
+                if (!string.IsNullOrWhiteSpace(koreanObjective.Id))
+                    englishObjectivesById.TryGetValue(koreanObjective.Id, out englishObjective);
+
+                if (englishObjective == null && index < English.Objectives.Count)
+                    englishObjective = English.Objectives[index];
+
+                if (englishObjective == null)
+                    continue;
+
+                koreanObjective.Description = QuestTextLocalizationPolicy.SelectContent(
+                    englishObjective.Description,
+                    koreanObjective.Description);
+            }
+        }
+    }
+
     private sealed record LocalizedHideoutStation(ApiHideoutStation English, ApiHideoutStation? Korean);
     private sealed record MergedApiData(
         List<LocalizedItem> Items,
