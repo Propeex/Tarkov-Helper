@@ -103,11 +103,11 @@ public sealed class QuestObjectiveService
     }
 
     /// <summary>
-    /// 특정 맵의 활성(미완료) 퀘스트 목표를 반환합니다.
+    /// 특정 맵의 계산된 진행 중 퀘스트 목표만 반환합니다.
     /// </summary>
     /// <param name="mapName">맵 이름</param>
     /// <param name="progressService">퀘스트 진행 서비스</param>
-    /// <returns>활성 퀘스트 목표 목록</returns>
+    /// <returns>계산 결과가 Active인 퀘스트 목표 목록</returns>
     public List<TaskObjectiveWithLocation> GetActiveObjectivesForMap(string mapName, QuestProgressService progressService)
     {
         var allObjectives = GetAllObjectives();
@@ -116,32 +116,32 @@ public sealed class QuestObjectiveService
         foreach (var obj in allObjectives)
         {
             // 맵 필터링
-            bool isOnMap = false;
-            foreach (var loc in obj.Locations)
-            {
-                if (string.Equals(loc.MapName, mapName, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(loc.MapNormalizedName, mapName, StringComparison.OrdinalIgnoreCase))
-                {
-                    isOnMap = true;
-                    break;
-                }
-            }
+            var isOnMap = obj.Locations.Any(loc =>
+                string.Equals(loc.MapName, mapName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(loc.MapNormalizedName, mapName, StringComparison.OrdinalIgnoreCase));
 
-            if (!isOnMap) continue;
+            if (!isOnMap)
+                continue;
 
-            // 퀘스트 활성 상태 확인 (ID 기반 조회 우선, NormalizedName은 fallback)
-            var task = progressService.GetTaskById(obj.QuestId)
-                ?? progressService.GetTask(obj.TaskNormalizedName);
-            if (task != null)
-            {
-                var status = ActualQuestStatusService.Instance.GetStatus(task);
-                if (status == QuestStatus.Active)
-                {
-                    // 목표 완료 상태 확인
-                    obj.IsCompleted = ObjectiveProgressService.Instance.IsObjectiveCompletedById(obj.ObjectiveId);
-                    activeObjectives.Add(obj);
-                }
-            }
+            // BSG ID가 가장 권위 있는 키다. 구형 DB에서는 BSG ID가 없을 수 있으므로
+            // 안정적인 DB ID까지는 허용하지만, 표시 이름/NormalizedName fallback은 절대
+            // 사용하지 않는다. 이름 fallback은 서로 다른 퀘스트를 같은 마커에 연결한다.
+            TarkovTask? task = null;
+            if (!string.IsNullOrWhiteSpace(obj.QuestBsgId))
+                task = progressService.GetTaskByBsgId(obj.QuestBsgId);
+
+            if (task == null && !string.IsNullOrWhiteSpace(obj.QuestId))
+                task = progressService.GetTaskById(obj.QuestId);
+
+            if (task == null)
+                continue;
+
+            if (ActualQuestStatusService.Instance.GetStatus(task) != QuestStatus.Active)
+                continue;
+
+            // 목표 완료 상태 확인
+            obj.IsCompleted = ObjectiveProgressService.Instance.IsObjectiveCompletedById(obj.ObjectiveId);
+            activeObjectives.Add(obj);
         }
 
         return activeObjectives;
@@ -151,7 +151,7 @@ public sealed class QuestObjectiveService
     /// 특정 퀘스트의 모든 목표를 반환합니다. (NormalizedName 기반 - deprecated)
     /// </summary>
     /// <param name="taskNormalizedName">정규화된 퀘스트 이름</param>
-    /// <returns>해당 퀘스트의 목표 목록</returns>
+    /// <returns>해당 퀘스트 목표 목록</returns>
     public List<TaskObjectiveWithLocation> GetObjectivesForTask(string taskNormalizedName)
     {
         return GetAllObjectives()
@@ -163,11 +163,12 @@ public sealed class QuestObjectiveService
     /// 특정 퀘스트의 모든 목표를 QuestId로 반환합니다. (권장)
     /// </summary>
     /// <param name="questId">퀘스트 ID</param>
-    /// <returns>해당 퀘스트의 목표 목록</returns>
+    /// <returns>해당 퀘스트 목표 목록</returns>
     public List<TaskObjectiveWithLocation> GetObjectivesForTaskById(string questId)
     {
         return GetAllObjectives()
-            .Where(o => string.Equals(o.QuestId, questId, StringComparison.OrdinalIgnoreCase))
+            .Where(o => string.Equals(o.QuestId, questId, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(o.QuestBsgId, questId, StringComparison.OrdinalIgnoreCase))
             .ToList();
     }
 
@@ -176,18 +177,26 @@ public sealed class QuestObjectiveService
     /// </summary>
     private static TaskObjectiveWithLocation ConvertToTaskObjective(QuestObjective obj, MapConfig? mapConfig)
     {
-        // QuestDbService에서 정확한 NormalizedName 조회
-        var quest = QuestDbService.Instance.GetQuestById(obj.QuestId);
-        var taskNormalizedName = quest?.NormalizedName ?? NormalizeQuestName(obj.QuestName);
+        // 정확한 ID로만 QuestDbService에서 조회한다. 이름 정규화 fallback은 사용하지 않는다.
+        TarkovTask? quest = null;
+        if (!string.IsNullOrWhiteSpace(obj.QuestBsgId))
+            quest = QuestDbService.Instance.GetQuestById(obj.QuestBsgId);
+        quest ??= QuestDbService.Instance.GetQuestById(obj.QuestId);
+
+        var descriptionKo = string.IsNullOrWhiteSpace(obj.DescriptionKo)
+            ? null
+            : obj.DescriptionKo;
 
         var result = new TaskObjectiveWithLocation
         {
             ObjectiveId = obj.Id,
-            Description = obj.Description,
-            DescriptionKo = null, // DB에 한국어 설명이 없으면 null
+            Description = descriptionKo ?? obj.Description,
+            DescriptionKo = descriptionKo,
             Type = ConvertObjectiveType(obj.ObjectiveType),
             QuestId = obj.QuestId,
-            TaskNormalizedName = taskNormalizedName,
+            QuestBsgId = obj.QuestBsgId,
+            TaskNormalizedName = quest?.NormalizedName ?? string.Empty,
+            // 퀘스트 이름은 원문 영문을 유지한다.
             TaskName = obj.QuestName,
             TaskNameKo = obj.QuestNameKo,
             Locations = new List<QuestObjectiveLocation>()
@@ -261,20 +270,6 @@ public sealed class QuestObjectiveService
             QuestObjectiveType.Task => "task",
             _ => "custom"
         };
-    }
-
-    /// <summary>
-    /// 퀘스트 이름을 정규화합니다.
-    /// </summary>
-    private static string NormalizeQuestName(string name)
-    {
-        if (string.IsNullOrEmpty(name))
-            return string.Empty;
-
-        return name.ToLowerInvariant()
-            .Replace(" ", "-")
-            .Replace("'", "")
-            .Replace("\"", "");
     }
 
     /// <summary>
