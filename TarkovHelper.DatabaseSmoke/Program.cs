@@ -297,23 +297,27 @@ static async Task RunPersistenceWriteQueueSmokeAsync()
     });
 
     await writeStarted.Task;
-    var resetTask = queue.ResetAsync(() =>
-    {
-        state = 0;
-        return Task.CompletedTask;
-    });
-
-    var writeDuringReset = queue.Enqueue(() =>
+    var resetBarrier = queue.BeginResetAsync();
+    var queuedDuringDrain = queue.Enqueue(() =>
     {
         state = 2;
         return Task.CompletedTask;
     });
 
     releaseWrite.TrySetResult();
-    await Task.WhenAll(resetTask, writeDuringReset);
-    if (state != 0)
-        throw new InvalidDataException($"Persistence reset barrier failed: state={state}.");
+    await Task.WhenAll(resetBarrier, queuedDuringDrain);
 
+    // Simulate the database clear while the reset barrier remains held.
+    state = 0;
+    await queue.Enqueue(() =>
+    {
+        state = 4;
+        return Task.CompletedTask;
+    });
+    if (state != 0)
+        throw new InvalidDataException($"Persistence reset hold failed: state={state}.");
+
+    queue.EndReset();
     await queue.Enqueue(() =>
     {
         state = 3;
@@ -340,7 +344,12 @@ static async Task RunUserProgressResetSmokeAsync()
     await database.SaveHideoutProgressAsync("reset-smoke-hideout", 2, profile);
     await database.SaveItemInventoryAsync("reset-smoke-item", 3, 4, profile);
 
+    // Exercise the real debounced inventory persistence path immediately before reset.
+    // The timer would recreate a row after 500 ms if the coordinated barrier failed.
+    ItemInventoryService.Instance.SetFirQuantity("reset-smoke-pending-item", 7);
+
     await UserProgressResetService.Instance.ResetCurrentProfileAsync();
+    await Task.Delay(650);
 
     var counts = (
         Quests: (await database.LoadQuestProgressAsync(profile)).Count,

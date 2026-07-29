@@ -201,6 +201,10 @@ namespace TarkovHelper.Services
 
         public Task FlushPersistenceAsync() => _persistenceQueue.FlushAsync();
 
+        internal Task BeginPersistenceResetAsync() => _persistenceQueue.BeginResetAsync();
+
+        internal void EndPersistenceReset() => _persistenceQueue.EndReset();
+
         #endregion
 
         #region Persistence

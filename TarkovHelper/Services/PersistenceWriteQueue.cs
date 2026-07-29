@@ -1,10 +1,10 @@
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// Serializes fire-and-forget persistence writes and provides a reset barrier.
-/// Writes queued before a reset either finish before the clear or are discarded.
-/// Writes requested while a reset is active are discarded so they cannot recreate
-/// rows after the reset has completed.
+/// Serializes fire-and-forget persistence writes and provides an explicit reset barrier.
+/// Writes queued before a reset either finish before the barrier or are discarded.
+/// Writes requested while the barrier is held are discarded so they cannot recreate
+/// rows after the database has been cleared.
 /// </summary>
 public sealed class PersistenceWriteQueue
 {
@@ -28,17 +28,38 @@ public sealed class PersistenceWriteQueue
         }
     }
 
-    public Task ResetAsync(Func<Task> clearOperation)
+    public Task BeginResetAsync()
+    {
+        lock (_sync)
+        {
+            if (_resetInProgress)
+                return _tail;
+
+            _generation++;
+            _resetInProgress = true;
+            _tail = ObservePreviousAsync(_tail);
+            return _tail;
+        }
+    }
+
+    public void EndReset()
+    {
+        lock (_sync)
+            _resetInProgress = false;
+    }
+
+    public async Task ResetAsync(Func<Task> clearOperation)
     {
         ArgumentNullException.ThrowIfNull(clearOperation);
 
-        lock (_sync)
+        await BeginResetAsync().ConfigureAwait(false);
+        try
         {
-            _generation++;
-            _resetInProgress = true;
-            var generation = _generation;
-            _tail = ExecuteResetAsync(_tail, generation, clearOperation);
-            return _tail;
+            await clearOperation().ConfigureAwait(false);
+        }
+        finally
+        {
+            EndReset();
         }
     }
 
@@ -59,23 +80,6 @@ public sealed class PersistenceWriteQueue
         }
 
         await operation().ConfigureAwait(false);
-    }
-
-    private async Task ExecuteResetAsync(Task previous, long generation, Func<Task> clearOperation)
-    {
-        try
-        {
-            await ObservePreviousAsync(previous).ConfigureAwait(false);
-            await clearOperation().ConfigureAwait(false);
-        }
-        finally
-        {
-            lock (_sync)
-            {
-                if (generation == _generation)
-                    _resetInProgress = false;
-            }
-        }
     }
 
     private static async Task ObservePreviousAsync(Task previous)

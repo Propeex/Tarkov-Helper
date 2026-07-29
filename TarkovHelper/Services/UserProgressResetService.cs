@@ -16,18 +16,30 @@ public sealed class UserProgressResetService
     public async Task ResetCurrentProfileAsync()
     {
         await _resetGate.WaitAsync();
+
+        var questProgress = QuestProgressService.Instance;
+        var objectiveProgress = ObjectiveProgressService.Instance;
+        var hideoutProgress = HideoutProgressService.Instance;
+        var inventory = ItemInventoryService.Instance;
+
         try
         {
             var profile = ProfileService.Instance.CurrentProfile;
 
+            // Hold every persistence queue for the entire reset transaction. This is
+            // deliberately wider than the individual table clears: no service can
+            // reopen its queue while another table is still being cleared or verified.
             await Task.WhenAll(
-                QuestProgressService.Instance.ResetAllProgressAsync(profile),
-                HideoutProgressService.Instance.ResetAllProgressAsync(profile));
-            await ItemInventoryService.Instance.ResetAllInventoryAsync(profile);
+                questProgress.BeginPersistenceResetAsync(),
+                objectiveProgress.BeginPersistenceResetAsync(),
+                hideoutProgress.BeginPersistenceResetAsync(),
+                inventory.BeginPersistenceResetAsync());
 
             ResetAllInMemoryServices();
+            await ClearAllDatabaseRowsAsync(profile);
+
             var counts = await GetRowCountsAsync(profile);
-            if (counts != (0, 0, 0, 0))
+            if (!IsEmpty(counts))
             {
                 throw new InvalidDataException(
                     $"Reset verification failed: quests={counts.Quests}, " +
@@ -37,8 +49,27 @@ public sealed class UserProgressResetService
         }
         finally
         {
+            // Discard any in-memory mutations raised while persistence was paused,
+            // then reopen all queues together without an asynchronous gap.
+            ResetAllInMemoryServices();
+            questProgress.EndPersistenceReset();
+            objectiveProgress.EndPersistenceReset();
+            hideoutProgress.EndPersistenceReset();
+            inventory.EndPersistenceReset();
             _resetGate.Release();
         }
+    }
+
+    private static bool IsEmpty((int Quests, int Objectives, int Hideout, int Inventory) counts)
+        => counts == (0, 0, 0, 0);
+
+    private static async Task ClearAllDatabaseRowsAsync(ProfileType profile)
+    {
+        var database = UserDataDbService.Instance;
+        await database.ClearAllQuestProgressAsync(profile);
+        await database.ClearAllObjectiveProgressAsync();
+        await database.ClearAllHideoutProgressAsync(profile);
+        await database.ClearAllItemInventoryAsync(profile);
     }
 
     private static async Task<(int Quests, int Objectives, int Hideout, int Inventory)> GetRowCountsAsync(

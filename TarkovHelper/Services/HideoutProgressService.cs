@@ -352,6 +352,10 @@ namespace TarkovHelper.Services
 
         public Task FlushPersistenceAsync() => _persistenceQueue.FlushAsync();
 
+        internal Task BeginPersistenceResetAsync() => _persistenceQueue.BeginResetAsync();
+
+        internal void EndPersistenceReset() => _persistenceQueue.EndReset();
+
         /// <summary>
         /// 강제로 진행도를 다시 로드 (프로필 전환 시 사용)
         /// </summary>
