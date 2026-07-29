@@ -8,29 +8,19 @@ on:
 
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 concurrency:
   group: publish-release
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release:
-    if: ${{ false }}
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Report release start
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr comment 1 --repo $env:GITHUB_REPOSITORY --body "릴리즈 자동화 실행 시작: run ${{ github.run_id }}, commit $env:GITHUB_SHA"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -54,18 +44,52 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          $existingTag = gh release list `
+          $releaseJson = gh release list `
             --repo $env:GITHUB_REPOSITORY `
             --limit 100 `
-            --json tagName `
-            --jq ".[] | select(.tagName == `"$tag`") | .tagName"
+            --json tagName
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to query existing releases."
           }
 
-          $releaseExists = -not [string]::IsNullOrWhiteSpace($existingTag)
+          $releaseExists = @($releaseJson | ConvertFrom-Json).tagName -contains $tag
           "exists=$($releaseExists.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "version=$version tag=$tag releaseExists=$releaseExists"
+
+      - name: Rebuild and validate live database
+        if: steps.version.outputs.exists != 'true'
+        id: database
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet run `
+            --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj `
+            --configuration Release `
+            -- --external *> release-database.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content release-database.log
+            exit $LASTEXITCODE
+          }
+
+          $databasePath = "TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db"
+          if (-not (Test-Path $databasePath)) {
+            throw "The verified live database was not generated."
+          }
+
+          $databaseSize = (Get-Item $databasePath).Length
+          if ($databaseSize -lt 1MB) {
+            throw "The verified live database is unexpectedly small: $databaseSize bytes."
+          }
+
+          Copy-Item $databasePath "TarkovHelper/Assets/tarkov_data.db" -Force
+
+      - name: Upload database rebuild log
+        if: always() && steps.version.outputs.exists != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-database-log
+          path: release-database.log
+          if-no-files-found: warn
 
       - name: Publish Windows application
         if: steps.version.outputs.exists != 'true'
@@ -84,17 +108,29 @@ jobs:
             "publish/TarkovHelper_JH.exe",
             "publish/Assets/tarkov_data.db"
           )
-
           foreach ($requiredFile in $requiredFiles) {
             if (-not (Test-Path $requiredFile)) {
               throw "Required release file is missing: $requiredFile"
             }
           }
 
+          $publishedDatabaseSize = (Get-Item "publish/Assets/tarkov_data.db").Length
+          if ($publishedDatabaseSize -lt 1MB) {
+            throw "The published database is unexpectedly small: $publishedDatabaseSize bytes."
+          }
+
+          $forbiddenNames = @(
+            "user_data.db",
+            "quest_progress.json",
+            "quest_progress_v2.json",
+            "objective_progress.json",
+            "hideout_progress.json",
+            "item_inventory.json",
+            "settings.json",
+            "app_settings.json"
+          )
           $forbiddenFiles = Get-ChildItem publish -Recurse -File | Where-Object {
-            $_.Name -eq "user_data.db" -or
-            $_.Extension -eq ".pdb" -or
-            $_.Name -match "progress|settings"
+            $_.Extension -eq ".pdb" -or $forbiddenNames -contains $_.Name.ToLowerInvariant()
           }
           if ($forbiddenFiles) {
             $forbiddenFiles | ForEach-Object { Write-Error "Forbidden release file: $($_.FullName)" }
@@ -112,8 +148,8 @@ jobs:
           $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
 
-          $notes = @"
-          ## 타르코프헬퍼_JH $version
+          $notes = @'
+          ## 타르코프헬퍼_JH VERSION_PLACEHOLDER
 
           Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
 
@@ -121,21 +157,23 @@ jobs:
           - PVP 전용 데이터 구조와 tarkov.dev 기반 데이터베이스 재생성
           - 실제 게임 로그 기반 퀘스트 진행 상태 계산
           - 퀘스트 및 은신처 완료 시 요구 아이템 자동 차감
+          - 획득 목표와 제출 목표의 요구 재료 중복 계산 제거
+          - 진행 상태 저장 확인 후 아이템 차감
           - 공식 한국어 원문 우선 표시와 영문 fallback
           - 지도 탭 퀘스트 기능 제거 및 미니맵 안정화
           - 사용자 데이터 저장, DB 교체, 프로그램 종료 수명주기 보강
-          - 자체 업데이트 피드와 릴리즈 패키지 검증 추가
+          - 검증된 최신 tarkov.dev DB를 릴리즈 패키지에 포함
 
           ### 설치
-          1. `TarkovHelper_JH.zip`을 원하는 폴더에 압축 해제합니다.
-          2. `TarkovHelper_JH.exe`를 실행합니다.
+          1. TarkovHelper_JH.zip을 원하는 폴더에 압축 해제합니다.
+          2. TarkovHelper_JH.exe를 실행합니다.
           3. .NET 8 Windows Desktop Runtime이 필요합니다.
 
-          기존 사용자 데이터인 `user_data.db`는 릴리즈 ZIP에 포함되지 않으며 프로그램 업데이트 시 유지됩니다.
-          "@
+          기존 사용자 데이터인 user_data.db는 릴리즈 ZIP에 포함되지 않으며 프로그램 업데이트 시 유지됩니다.
+          '@.Replace("VERSION_PLACEHOLDER", $version)
           $notes | Set-Content RELEASE_NOTES.md -Encoding utf8
 
-      - name: Upload verified workflow artifact
+      - name: Upload verified release artifact
         if: steps.version.outputs.exists != 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -160,19 +198,3 @@ jobs:
             --title "타르코프헬퍼_JH v${{ steps.version.outputs.version }}" `
             --notes-file RELEASE_NOTES.md `
             --latest
-
-      - name: Report release success
-        if: success()
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr comment 1 --repo $env:GITHUB_REPOSITORY --body "릴리즈 자동화 성공: run ${{ github.run_id }}, tag ${{ steps.version.outputs.tag }}"
-
-      - name: Report release failure
-        if: failure()
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr comment 1 --repo $env:GITHUB_REPOSITORY --body "릴리즈 자동화 실패: run ${{ github.run_id }}. Actions 로그를 확인해 수정합니다."
