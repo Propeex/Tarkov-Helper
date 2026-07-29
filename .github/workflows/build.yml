@@ -1,8 +1,5 @@
 name: Build
 
-permissions:
-  contents: write
-
 on:
   push:
     branches:
@@ -18,53 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
-
-      - name: Apply staged maintenance patch
-        shell: pwsh
-        run: |
-          if (-not (Test-Path ".maintenance/b64.00")) {
-            Write-Host "No staged maintenance patch."
-            exit 0
-          }
-
-          $encoded = (Get-ChildItem ".maintenance/b64.*" |
-            Sort-Object Name |
-            ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join ""
-          [IO.File]::WriteAllBytes(
-            "maintenance.patch",
-            [Convert]::FromBase64String($encoded))
-
-          $patchHash = (Get-FileHash "maintenance.patch" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($patchHash -ne "c6c66697eead8a524daf9413dc6e2e946c9a7ec07e82104a60c72ebb111ea7d5") {
-            throw "Staged maintenance patch hash mismatch: $patchHash"
-          }
-
-          git apply --whitespace=nowarn maintenance.patch
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
-          Remove-Item ".maintenance" -Recurse -Force
-          Remove-Item "maintenance.patch" -Force
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Apply active marker inventory and category fixes"
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
-          $targetBranch = if ([string]::IsNullOrWhiteSpace($env:GITHUB_HEAD_REF)) {
-            $env:GITHUB_REF_NAME
-          } else {
-            $env:GITHUB_HEAD_REF
-          }
-          git push origin "HEAD:$targetBranch"
-          exit $LASTEXITCODE
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -167,7 +117,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release *> database-external-smoke.log
+          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release -- --external *> database-external-smoke.log
           exit $LASTEXITCODE
 
       - name: Upload external smoke log
