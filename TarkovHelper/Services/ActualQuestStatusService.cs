@@ -109,10 +109,13 @@ public sealed class ActualQuestStatusService
         }
         catch (Exception exception)
         {
-            _log.Error("Failed to calculate shared quest status from logs.", exception);
-            lock (_sync)
-                _startedQuestKeys.Clear();
-            StatusChanged?.Invoke(this, EventArgs.Empty);
+            // A game log can be temporarily locked while EFT is writing it. Clearing
+            // the last valid set here made every marker disappear until the next full
+            // scan. Preserve the last successful status and do not publish a false
+            // empty-state update on transient I/O or parsing failures.
+            _log.Error(
+                "Failed to calculate shared quest status from logs; preserving the last successful active set.",
+                exception);
         }
     }
 
