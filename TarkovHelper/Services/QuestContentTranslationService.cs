@@ -16,7 +16,7 @@ public sealed class QuestContentTranslationService
     private const string TranslationEndpoint = "https://api.mymemory.translated.net/get";
     private const int MaxSegmentBytes = 420;
     private static readonly TimeSpan MinimumRequestInterval = TimeSpan.FromMilliseconds(250);
-    private static readonly ILogger Log = Services.Logging.Log.For<QuestContentTranslationService>();
+    private static readonly ILogger Log = TarkovHelper.Services.Logging.Log.For<QuestContentTranslationService>();
     private static readonly Lazy<QuestContentTranslationService> LazyInstance =
         new(() => new QuestContentTranslationService());
 
