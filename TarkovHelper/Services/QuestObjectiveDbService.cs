@@ -49,10 +49,11 @@ public sealed class QuestObjectiveDbService
     {
         System.Diagnostics.Debug.WriteLine("[QuestObjectiveDbService] Refreshing objective data...");
         // 기존 데이터를 클리어하지 않음 - LoadObjectivesAsync()에서 atomic swap으로 교체
-        await LoadObjectivesAsync();
-
-        // 데이터 새로고침 완료 이벤트 발생
-        OnDataRefreshed();
+        if (await LoadObjectivesAsync())
+        {
+            // 성공적으로 교체된 경우에만 데이터 새로고침 이벤트 발생
+            OnDataRefreshed();
+        }
     }
 
     /// <summary>
@@ -113,45 +114,57 @@ public sealed class QuestObjectiveDbService
                 return false;
             }
 
-            // Check if columns exist
+            // Check if optional/localization columns exist
             var hasOptionalPoints = await ColumnExistsAsync(connection, "QuestObjectives", "OptionalPoints");
             var hasObjectiveType = await ColumnExistsAsync(connection, "QuestObjectives", "ObjectiveType");
+            var hasDescriptionEn = await ColumnExistsAsync(connection, "QuestObjectives", "DescriptionEN");
+            var hasDescriptionKo = await ColumnExistsAsync(connection, "QuestObjectives", "DescriptionKO");
+            var hasQuestNameKo = await ColumnExistsAsync(connection, "Quests", "NameKo");
+            var hasQuestNameJa = await ColumnExistsAsync(connection, "Quests", "NameJa");
+            var hasQuestBsgId = await ColumnExistsAsync(connection, "Quests", "BsgId");
 
             // 새 리스트 빌드 (기존 데이터 유지하면서)
             var newObjectives = new List<QuestObjective>();
 
-            // Check if Quests table has localization columns
-            var hasQuestNameKo = await ColumnExistsAsync(connection, "Quests", "NameKo");
-            var hasQuestNameJa = await ColumnExistsAsync(connection, "Quests", "NameJa");
-
-            // Load objectives with location points and quest info
+            // Load objectives with location points and exact quest identity. Orphaned
+            // preserved coordinate rows are excluded because they cannot be assigned a
+            // trustworthy calculated quest status.
             var sql = $@"
                 SELECT o.Id, o.QuestId, o.Description, o.MapName, o.LocationPoints,
                        q.Location as QuestLocation,
                        q.Name as QuestName,
                        {(hasQuestNameKo ? "q.NameKo as QuestNameKo," : "NULL as QuestNameKo,")}
                        {(hasQuestNameJa ? "q.NameJa as QuestNameJa," : "NULL as QuestNameJa,")}
-                       q.Trader as TraderName
+                       q.Trader as TraderName,
+                       {(hasQuestBsgId ? "q.BsgId" : "NULL")} as QuestBsgId,
+                       {(hasDescriptionEn ? "o.DescriptionEN" : "NULL")} as DescriptionEN,
+                       {(hasDescriptionKo ? "o.DescriptionKO" : "NULL")} as DescriptionKO
                        {(hasOptionalPoints ? ", o.OptionalPoints" : "")}
                        {(hasObjectiveType ? ", o.ObjectiveType" : "")}
                 FROM QuestObjectives o
-                LEFT JOIN Quests q ON o.QuestId = q.Id
-                WHERE (o.LocationPoints IS NOT NULL AND o.LocationPoints != '')
-                   {(hasOptionalPoints ? "OR (o.OptionalPoints IS NOT NULL AND o.OptionalPoints != '')" : "")}";
+                INNER JOIN Quests q ON o.QuestId = q.Id
+                WHERE ((o.LocationPoints IS NOT NULL AND o.LocationPoints != '')
+                   {(hasOptionalPoints ? "OR (o.OptionalPoints IS NOT NULL AND o.OptionalPoints != '')" : "")})";
 
             await using var cmd = new SqliteCommand(sql, connection);
             await using var reader = await cmd.ExecuteReaderAsync();
 
             while (await reader.ReadAsync())
             {
+                var legacyDescription = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+                var descriptionEn = reader.IsDBNull(11) ? null : reader.GetString(11);
+                var descriptionKo = reader.IsDBNull(12) ? null : reader.GetString(12);
+
                 var objective = new QuestObjective
                 {
                     Id = reader.GetString(0),
                     QuestId = reader.GetString(1),
-                    Description = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                    QuestBsgId = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    Description = FirstNonEmpty(descriptionEn, legacyDescription),
+                    DescriptionKo = FirstNonEmpty(descriptionKo, legacyDescription),
                     MapName = reader.IsDBNull(3) ? null : reader.GetString(3),
                     QuestLocation = reader.IsDBNull(5) ? null : reader.GetString(5),
-                    QuestName = reader.IsDBNull(6) ? "" : reader.GetString(6),
+                    QuestName = reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
                     QuestNameKo = reader.IsDBNull(7) ? null : reader.GetString(7),
                     QuestNameJa = reader.IsDBNull(8) ? null : reader.GetString(8),
                     TraderName = reader.IsDBNull(9) ? null : reader.GetString(9)
@@ -162,7 +175,7 @@ public sealed class QuestObjectiveDbService
                 objective.LocationPointsJson = locationJson;
 
                 // Track column index for optional fields
-                int nextIndex = 10;
+                var nextIndex = 13;
 
                 // Parse OptionalPoints JSON if column exists
                 if (hasOptionalPoints && reader.FieldCount > nextIndex)
@@ -179,8 +192,10 @@ public sealed class QuestObjectiveDbService
                     objective.ObjectiveType = ParseObjectiveType(typeStr);
                 }
 
-                // Only add if has any coordinates
-                if (objective.HasCoordinates || objective.HasOptionalPoints)
+                // Only add if has any coordinates and an exact quest identity.
+                if ((objective.HasCoordinates || objective.HasOptionalPoints) &&
+                    (!string.IsNullOrWhiteSpace(objective.QuestBsgId) ||
+                     !string.IsNullOrWhiteSpace(objective.QuestId)))
                 {
                     newObjectives.Add(objective);
                 }
@@ -189,7 +204,7 @@ public sealed class QuestObjectiveDbService
             // Atomic swap - 모든 데이터가 준비된 후 한 번에 교체
             _allObjectives = newObjectives;
             _isLoaded = true;
-            System.Diagnostics.Debug.WriteLine($"[QuestObjectiveDbService] Loaded {_allObjectives.Count} objectives with location data");
+            System.Diagnostics.Debug.WriteLine($"[QuestObjectiveDbService] Loaded {_allObjectives.Count} objectives with exact quest identity and location data");
             return true;
         }
         catch (Exception ex)
@@ -199,9 +214,17 @@ public sealed class QuestObjectiveDbService
         }
     }
 
+    private static string FirstNonEmpty(string? preferred, string? fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(preferred))
+            return preferred;
+
+        return fallback ?? string.Empty;
+    }
+
     private async Task<bool> TableExistsAsync(SqliteConnection connection, string tableName)
     {
-        var sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@name";
+        const string sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@name";
         await using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@name", tableName);
         var count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
