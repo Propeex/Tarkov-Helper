@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -32,6 +33,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = "Stop"
           [xml]$project = Get-Content "TarkovHelper/TarkovHelper.csproj"
           $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
           if ([string]::IsNullOrWhiteSpace($version)) {
@@ -43,18 +45,15 @@ jobs:
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            "exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            Write-Host "Release $tag already exists; publishing is skipped."
-          }
-          else {
-            "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          }
+          $releaseExists = $LASTEXITCODE -eq 0
+          "exists=$($releaseExists.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "version=$version tag=$tag releaseExists=$releaseExists"
 
       - name: Publish Windows application
         if: steps.version.outputs.exists != 'true'
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           dotnet publish TarkovHelper/TarkovHelper.csproj `
             --configuration Release `
             --runtime win-x64 `
@@ -74,11 +73,13 @@ jobs:
             }
           }
 
-          if (Get-ChildItem publish -Recurse -File | Where-Object {
-              $_.Name -eq "user_data.db" -or
-              $_.Extension -eq ".pdb" -or
-              $_.Name -match "progress|settings"
-          }) {
+          $forbiddenFiles = Get-ChildItem publish -Recurse -File | Where-Object {
+            $_.Name -eq "user_data.db" -or
+            $_.Extension -eq ".pdb" -or
+            $_.Name -match "progress|settings"
+          }
+          if ($forbiddenFiles) {
+            $forbiddenFiles | ForEach-Object { Write-Error "Forbidden release file: $($_.FullName)" }
             throw "A user-data or debug file was included in the release directory."
           }
 
@@ -86,12 +87,15 @@ jobs:
         if: steps.version.outputs.exists != 'true'
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ steps.version.outputs.version }}"
+
           Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
           $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
 
-          @'
-          ## 타르코프헬퍼_JH 1.6.0
+          $notes = @"
+          ## 타르코프헬퍼_JH $version
 
           Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
 
@@ -110,7 +114,8 @@ jobs:
           3. .NET 8 Windows Desktop Runtime이 필요합니다.
 
           기존 사용자 데이터인 `user_data.db`는 릴리즈 ZIP에 포함되지 않으며 프로그램 업데이트 시 유지됩니다.
-          '@ | Set-Content RELEASE_NOTES.md -Encoding utf8
+          "@
+          $notes | Set-Content RELEASE_NOTES.md -Encoding utf8
 
       - name: Upload verified workflow artifact
         if: steps.version.outputs.exists != 'true'
@@ -128,6 +133,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = "Stop"
           gh release create "${{ steps.version.outputs.tag }}" `
             TarkovHelper_JH.zip `
             TarkovHelper_JH.zip.sha256 `
