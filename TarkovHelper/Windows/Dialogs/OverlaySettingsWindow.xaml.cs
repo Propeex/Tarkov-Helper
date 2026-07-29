@@ -158,7 +158,17 @@ public partial class OverlaySettingsWindow : Window
 
     private void BtnReset_Click(object sender, RoutedEventArgs e)
     {
+        var previousClickThrough = _settings.ClickThrough;
         _settings.ResetToDefaults();
+
+        if (OverlayClickThroughPolicy.ShouldToggle(
+                isInitializing: false,
+                currentState: previousClickThrough,
+                requestedState: _settings.ClickThrough))
+        {
+            _overlayWindow?.ToggleClickThrough();
+        }
+
         _isInitializing = true;
         LoadSettings();
         _isInitializing = false;
