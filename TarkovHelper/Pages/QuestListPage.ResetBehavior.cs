@@ -1,4 +1,5 @@
 using System.Windows.Controls;
+using TarkovHelper.Services;
 
 namespace TarkovHelper.Pages;
 
@@ -19,7 +20,7 @@ public partial class QuestListPage
                 .OfType<ComboBoxItem>()
                 .FirstOrDefault(item => string.Equals(
                     item.Tag?.ToString(),
-                    "All",
+                    QuestStatusSelector.DefaultStatus,
                     StringComparison.OrdinalIgnoreCase));
             if (allItem != null)
                 CmbStatus.SelectedItem = allItem;
