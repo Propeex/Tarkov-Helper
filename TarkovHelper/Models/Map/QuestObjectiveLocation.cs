@@ -132,16 +132,21 @@ public sealed class TaskObjectiveWithLocation
     public string TaskNormalizedName { get; set; } = string.Empty;
 
     /// <summary>
-    /// 연결된 퀘스트 이름 (영문)
+    /// 연결된 퀘스트 이름 (원문 영문)
     /// </summary>
     [JsonPropertyName("taskName")]
     public string TaskName { get; set; } = string.Empty;
 
     /// <summary>
-    /// 연결된 퀘스트 이름 (한국어)
+    /// 지도 화면에서는 퀘스트 고유명을 번역하지 않습니다. 기존 호출부와 JSON 호환을
+    /// 위해 속성은 유지하되 항상 null을 반환하여 TaskName 원문을 사용하게 합니다.
     /// </summary>
     [JsonPropertyName("taskNameKo")]
-    public string? TaskNameKo { get; set; }
+    public string? TaskNameKo
+    {
+        get => null;
+        set { }
+    }
 
     /// <summary>
     /// 이 목표의 위치들 (여러 맵/위치에 있을 수 있음)
