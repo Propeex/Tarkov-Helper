@@ -12,7 +12,6 @@ namespace TarkovHelper.Pages.Map.Components;
 public sealed class MapQuestMarkerManager
 {
     private readonly Canvas _markersContainer;
-    private static readonly List<TaskObjectiveWithLocation> EmptyObjectives = new();
 
 #pragma warning disable CS0067
     public event EventHandler<TaskObjectiveWithLocation>? ObjectiveSelected;
@@ -73,7 +72,9 @@ public sealed class MapQuestMarkerManager
 
     public List<TaskObjectiveWithLocation> GetCurrentMapObjectives()
     {
-        return EmptyObjectives;
+        // Return a fresh collection so legacy callers cannot mutate shared state and
+        // accidentally make later map refreshes observe phantom quest objectives.
+        return [];
     }
 
     public Task RefreshMarkersAsync(CancellationToken ct = default)
