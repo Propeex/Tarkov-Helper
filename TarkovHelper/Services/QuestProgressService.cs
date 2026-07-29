@@ -28,6 +28,7 @@ namespace TarkovHelper.Services
         // V2 진행 데이터 (이중 키 저장)
         private QuestProgressDataV2 _progressDataV2 = new();
         private ProfileType _loadedProfile = ProfileType.Pvp;
+        private readonly PersistenceWriteQueue _persistenceQueue = new();
 
         /// <summary>
         /// 데이터 소스 (JSON 또는 DB)
@@ -646,7 +647,7 @@ namespace TarkovHelper.Services
                 ConsumeItemsForCompletedQuests(changedQuests);
 
                 // PVE/PVP 격리를 위해 로드된 프로필 정보를 명시적으로 전달
-                _ = SaveProgressBatchAsync(changedQuests, _loadedProfile);
+                _ = _persistenceQueue.Enqueue(() => SaveProgressBatchAsync(changedQuests, _loadedProfile));
                 System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Progress save initiated for {_loadedProfile}");
                 ProgressChanged?.Invoke(this, EventArgs.Empty);
             }
@@ -803,7 +804,7 @@ namespace TarkovHelper.Services
             {
                 ConsumeItemsForCompletedQuests(changedQuests);
                 System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Batch completing {changedQuests.Count} quests for {_loadedProfile}");
-                _ = SaveProgressBatchAsync(changedQuests, _loadedProfile);
+                _ = _persistenceQueue.Enqueue(() => SaveProgressBatchAsync(changedQuests, _loadedProfile));
                 ProgressChanged?.Invoke(this, EventArgs.Empty);
             }
         }
@@ -920,7 +921,8 @@ namespace TarkovHelper.Services
                 ConsumeItemsForCompletedQuests(changedItems);
 
                 // Save all changes in one batch transaction
-                await _userDataDb.SaveQuestProgressBatchAsync(changedItems);
+                await _persistenceQueue.Enqueue(() =>
+                    _userDataDb.SaveQuestProgressBatchAsync(changedItems, _loadedProfile));
                 System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Batch saved {changedItems.Count} quest changes");
                 ProgressChanged?.Invoke(this, EventArgs.Empty);
             }
@@ -960,16 +962,20 @@ namespace TarkovHelper.Services
             if (string.IsNullOrEmpty(taskKey)) return;
 
             _questProgress[taskKey] = QuestStatus.Failed;
-            // Fire-and-forget async save - don't block UI
-            _ = Task.Run(async () =>
+            _ = _persistenceQueue.Enqueue(async () =>
             {
                 try
                 {
-                    await _userDataDb.SaveQuestProgressAsync(taskId ?? taskKey, task.NormalizedName, QuestStatus.Failed);
+                    await _userDataDb.SaveQuestProgressAsync(
+                        taskId ?? taskKey,
+                        task.NormalizedName,
+                        QuestStatus.Failed,
+                        _loadedProfile);
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to save failed quest: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[QuestProgressService] Failed to save failed quest: {ex.Message}");
                 }
             });
             ProgressChanged?.Invoke(this, EventArgs.Empty);
@@ -985,28 +991,22 @@ namespace TarkovHelper.Services
 
             if (string.IsNullOrEmpty(taskKey)) return;
 
-            // Remove by both Id and NormalizedName for clean migration
             _questProgress.Remove(taskKey);
             if (!string.IsNullOrEmpty(task.NormalizedName) && task.NormalizedName != taskKey)
-            {
                 _questProgress.Remove(task.NormalizedName);
-            }
 
-            // Fire-and-forget async delete - don't block UI
-            _ = Task.Run(async () =>
+            _ = _persistenceQueue.Enqueue(async () =>
             {
                 try
                 {
-                    await _userDataDb.DeleteQuestProgressAsync(taskId ?? taskKey);
-                    // Also delete by NormalizedName for clean migration
+                    await _userDataDb.DeleteQuestProgressAsync(taskId ?? taskKey, _loadedProfile);
                     if (!string.IsNullOrEmpty(task.NormalizedName) && task.NormalizedName != taskKey)
-                    {
-                        await _userDataDb.DeleteQuestProgressAsync(task.NormalizedName);
-                    }
+                        await _userDataDb.DeleteQuestProgressAsync(task.NormalizedName, _loadedProfile);
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to delete quest progress: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[QuestProgressService] Failed to delete quest progress: {ex.Message}");
                 }
             });
             ProgressChanged?.Invoke(this, EventArgs.Empty);
@@ -1019,8 +1019,11 @@ namespace TarkovHelper.Services
         {
             var actualProfile = profileType ?? _loadedProfile;
             ResetInMemoryProgress();
-            await ObjectiveProgressService.Instance.ClearAllProgressAsync(actualProfile);
-            await _userDataDb.ClearAllQuestProgressAsync(actualProfile);
+
+            await Task.WhenAll(
+                _persistenceQueue.ResetAsync(() =>
+                    _userDataDb.ClearAllQuestProgressAsync(actualProfile)),
+                ObjectiveProgressService.Instance.ClearAllProgressAsync(actualProfile));
         }
 
         internal void ResetInMemoryProgress()
@@ -1034,6 +1037,8 @@ namespace TarkovHelper.Services
         {
             ResetAllProgressAsync().GetAwaiter().GetResult();
         }
+
+        public Task FlushPersistenceAsync() => _persistenceQueue.FlushAsync();
 
         /// <summary>
         /// Get prerequisite quest chain for a task
@@ -1140,9 +1145,8 @@ namespace TarkovHelper.Services
 
         private void SaveProgress()
         {
-            // DB에 저장 (비동기로 실행)
             var profileType = ProfileService.Instance.CurrentProfile;
-            _ = SaveProgressToDbAsync(profileType);
+            _ = _persistenceQueue.Enqueue(() => SaveProgressToDbAsync(profileType));
         }
 
         private async Task SaveProgressToDbAsync(ProfileType profileType)
@@ -1178,42 +1182,44 @@ namespace TarkovHelper.Services
 
         private void SaveSingleQuestProgress(string normalizedName, QuestStatus status)
         {
-            Task.Run(async () =>
+            _ = _persistenceQueue.Enqueue(async () =>
             {
                 try
                 {
                     string id = normalizedName;
                     if (_tasksByNormalizedName.TryGetValue(normalizedName, out var task))
-                    {
                         id = task.Ids?.FirstOrDefault() ?? normalizedName;
-                    }
 
-                    await _userDataDb.SaveQuestProgressAsync(id, normalizedName, status);
+                    await _userDataDb.SaveQuestProgressAsync(
+                        id,
+                        normalizedName,
+                        status,
+                        _loadedProfile);
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to save single quest progress: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[QuestProgressService] Failed to save single quest progress: {ex.Message}");
                 }
             });
         }
 
         private void DeleteSingleQuestProgress(string normalizedName)
         {
-            Task.Run(async () =>
+            _ = _persistenceQueue.Enqueue(async () =>
             {
                 try
                 {
                     string id = normalizedName;
                     if (_tasksByNormalizedName.TryGetValue(normalizedName, out var task))
-                    {
                         id = task.Ids?.FirstOrDefault() ?? normalizedName;
-                    }
 
-                    await _userDataDb.DeleteQuestProgressAsync(id);
+                    await _userDataDb.DeleteQuestProgressAsync(id, _loadedProfile);
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to delete quest progress: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[QuestProgressService] Failed to delete quest progress: {ex.Message}");
                 }
             });
         }

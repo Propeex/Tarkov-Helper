@@ -261,6 +261,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     if (invalidMaxLevels != 0)
         throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
 
+    await RunPersistenceWriteQueueSmokeAsync();
     await RunUserProgressResetSmokeAsync();
     RunApplicationBehaviorSmoke();
 
@@ -279,6 +280,47 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
     return 0;
+}
+
+static async Task RunPersistenceWriteQueueSmokeAsync()
+{
+    var queue = new PersistenceWriteQueue();
+    var writeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var state = 0;
+
+    _ = queue.Enqueue(async () =>
+    {
+        writeStarted.TrySetResult();
+        await releaseWrite.Task;
+        state = 1;
+    });
+
+    await writeStarted.Task;
+    var resetTask = queue.ResetAsync(() =>
+    {
+        state = 0;
+        return Task.CompletedTask;
+    });
+
+    var writeDuringReset = queue.Enqueue(() =>
+    {
+        state = 2;
+        return Task.CompletedTask;
+    });
+
+    releaseWrite.TrySetResult();
+    await Task.WhenAll(resetTask, writeDuringReset);
+    if (state != 0)
+        throw new InvalidDataException($"Persistence reset barrier failed: state={state}.");
+
+    await queue.Enqueue(() =>
+    {
+        state = 3;
+        return Task.CompletedTask;
+    });
+    if (state != 3)
+        throw new InvalidDataException("Persistence queue did not resume after reset.");
 }
 
 static async Task RunUserProgressResetSmokeAsync()

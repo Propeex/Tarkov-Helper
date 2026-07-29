@@ -15,6 +15,7 @@ namespace TarkovHelper.Services
         public static ObjectiveProgressService Instance => _instance ??= new ObjectiveProgressService();
 
         private readonly UserDataDbService _userDataDb = UserDataDbService.Instance;
+        private readonly PersistenceWriteQueue _persistenceQueue = new();
 
         // Objective progress: key = "questNormalizedName:objectiveIndex" or "id:objectiveId", value = completed
         private Dictionary<string, bool> _objectiveProgress = new();
@@ -79,7 +80,7 @@ namespace TarkovHelper.Services
             }
 
             // Fire-and-forget async save - don't block UI
-            _ = SaveObjectiveProgressBatchAsync(keysToSave);
+            _ = _persistenceQueue.Enqueue(() => SaveObjectiveProgressBatchAsync(keysToSave));
             ObjectiveProgressChanged?.Invoke(this, new ObjectiveProgressChangedEventArgs(questNormalizedName, objectiveIndex, completed));
         }
 
@@ -116,7 +117,7 @@ namespace TarkovHelper.Services
             }
 
             // Fire-and-forget async save - don't block UI
-            _ = SaveObjectiveProgressBatchAsync(keysToSave);
+            _ = _persistenceQueue.Enqueue(() => SaveObjectiveProgressBatchAsync(keysToSave));
             ObjectiveProgressChanged?.Invoke(this, new ObjectiveProgressChangedEventArgs(objectiveId, objectiveIndex, completed));
         }
 
@@ -181,7 +182,8 @@ namespace TarkovHelper.Services
         public async Task ClearAllProgressAsync(ProfileType? profileType = null)
         {
             ResetInMemoryProgress();
-            await _userDataDb.ClearAllObjectiveProgressAsync();
+            await _persistenceQueue.ResetAsync(() =>
+                _userDataDb.ClearAllObjectiveProgressAsync());
         }
 
         internal void ResetInMemoryProgress()
@@ -197,13 +199,15 @@ namespace TarkovHelper.Services
             ClearAllProgressAsync().GetAwaiter().GetResult();
         }
 
+        public Task FlushPersistenceAsync() => _persistenceQueue.FlushAsync();
+
         #endregion
 
         #region Persistence
 
         public void SaveObjectiveProgress()
         {
-            _ = SaveObjectiveProgressToDbAsync();
+            _ = _persistenceQueue.Enqueue(SaveObjectiveProgressToDbAsync);
         }
 
         private async Task SaveObjectiveProgressToDbAsync()

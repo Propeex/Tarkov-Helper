@@ -23,6 +23,7 @@ namespace TarkovHelper.Services
         private ProfileType _loadedProfile = ProfileType.Pvp;
 
         private readonly UserDataDbService _userDataDb = UserDataDbService.Instance;
+        private readonly PersistenceWriteQueue _persistenceQueue = new();
 
         // Currency items should count by reference count, not total amount
         private static readonly HashSet<string> CurrencyItems = new(StringComparer.OrdinalIgnoreCase)
@@ -146,11 +147,14 @@ namespace TarkovHelper.Services
 
         private void SaveSingleModule(string normalizedName, int level)
         {
-            _ = Task.Run(async () =>
+            _ = _persistenceQueue.Enqueue(async () =>
             {
                 try
                 {
-                    await _userDataDb.SaveHideoutProgressAsync(normalizedName, level, _loadedProfile);
+                    await _userDataDb.SaveHideoutProgressAsync(
+                        normalizedName,
+                        level,
+                        _loadedProfile);
                 }
                 catch (Exception ex)
                 {
@@ -331,7 +335,8 @@ namespace TarkovHelper.Services
         {
             var actualProfile = profileType ?? _loadedProfile;
             ResetInMemoryProgress();
-            await _userDataDb.ClearAllHideoutProgressAsync(actualProfile);
+            await _persistenceQueue.ResetAsync(() =>
+                _userDataDb.ClearAllHideoutProgressAsync(actualProfile));
         }
 
         internal void ResetInMemoryProgress()
@@ -344,6 +349,8 @@ namespace TarkovHelper.Services
         {
             ResetAllProgressAsync().GetAwaiter().GetResult();
         }
+
+        public Task FlushPersistenceAsync() => _persistenceQueue.FlushAsync();
 
         /// <summary>
         /// 강제로 진행도를 다시 로드 (프로필 전환 시 사용)
@@ -359,7 +366,7 @@ namespace TarkovHelper.Services
 
         private void SaveProgress()
         {
-            _ = SaveProgressToDbAsync();
+            _ = _persistenceQueue.Enqueue(SaveProgressToDbAsync);
         }
 
         private async Task SaveProgressToDbAsync()

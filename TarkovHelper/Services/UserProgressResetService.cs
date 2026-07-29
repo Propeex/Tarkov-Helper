@@ -20,50 +20,25 @@ public sealed class UserProgressResetService
         {
             var profile = ProfileService.Instance.CurrentProfile;
 
+            await Task.WhenAll(
+                QuestProgressService.Instance.ResetAllProgressAsync(profile),
+                HideoutProgressService.Instance.ResetAllProgressAsync(profile));
             await ItemInventoryService.Instance.ResetAllInventoryAsync(profile);
-            await QuestProgressService.Instance.ResetAllProgressAsync(profile);
-            await HideoutProgressService.Instance.ResetAllProgressAsync(profile);
 
-            for (var attempt = 0; attempt < 4; attempt++)
+            ResetAllInMemoryServices();
+            var counts = await GetRowCountsAsync(profile);
+            if (counts != (0, 0, 0, 0))
             {
-                await ClearAllDatabaseRowsAsync(profile);
-                ResetAllInMemoryServices();
-                await Task.Delay(250);
-
-                var firstCheck = await GetRowCountsAsync(profile);
-                if (!IsEmpty(firstCheck))
-                    continue;
-
-                // A previously queued save can arrive just after the first empty read.
-                // Require a second empty read after a stability window before reporting success.
-                await Task.Delay(350);
-                var stabilityCheck = await GetRowCountsAsync(profile);
-                if (IsEmpty(stabilityCheck))
-                    return;
+                throw new InvalidDataException(
+                    $"Reset verification failed: quests={counts.Quests}, " +
+                    $"objectives={counts.Objectives}, hideout={counts.Hideout}, " +
+                    $"inventory={counts.Inventory}.");
             }
-
-            var finalCounts = await GetRowCountsAsync(profile);
-            throw new InvalidDataException(
-                $"Reset verification failed: quests={finalCounts.Quests}, " +
-                $"objectives={finalCounts.Objectives}, hideout={finalCounts.Hideout}, " +
-                $"inventory={finalCounts.Inventory}.");
         }
         finally
         {
             _resetGate.Release();
         }
-    }
-
-    private static bool IsEmpty((int Quests, int Objectives, int Hideout, int Inventory) counts)
-        => counts == (0, 0, 0, 0);
-
-    private static async Task ClearAllDatabaseRowsAsync(ProfileType profile)
-    {
-        var database = UserDataDbService.Instance;
-        await database.ClearAllQuestProgressAsync(profile);
-        await database.ClearAllObjectiveProgressAsync();
-        await database.ClearAllHideoutProgressAsync(profile);
-        await database.ClearAllItemInventoryAsync(profile);
     }
 
     private static async Task<(int Quests, int Objectives, int Hideout, int Inventory)> GetRowCountsAsync(
