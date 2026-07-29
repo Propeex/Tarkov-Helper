@@ -15,8 +15,6 @@ internal sealed class InventoryConsumptionService
     public static InventoryConsumptionService Instance =>
         _instance ??= new InventoryConsumptionService();
 
-    private readonly ItemInventoryService _inventory = ItemInventoryService.Instance;
-
     private InventoryConsumptionService()
     {
     }
@@ -66,9 +64,14 @@ internal sealed class InventoryConsumptionService
         if (requirements.Count == 0)
             return;
 
+        // ItemInventoryService is recreated after a database/profile refresh. Resolve
+        // it at the point of use so this process-lifetime service never keeps a stale
+        // inventory instance and silently deducts from an object no longer used by UI.
+        var inventory = ItemInventoryService.Instance;
+
         // FIR-only requirements are processed first so general requirements cannot
         // consume the FIR stock needed for a mandatory FIR handover.
-        var result = _inventory.ConsumeBatch(
+        var result = inventory.ConsumeBatch(
             requirements.OrderByDescending(requirement => requirement.FirOnly));
 
         var requested = requirements.Sum(requirement => requirement.Quantity);
