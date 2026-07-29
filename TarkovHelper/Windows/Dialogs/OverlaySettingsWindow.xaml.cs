@@ -128,12 +128,21 @@ public partial class OverlaySettingsWindow : Window
         ApplySettings();
     }
 
-
-
     private void ClickThrough_Changed(object sender, RoutedEventArgs e)
     {
+        var requestedState = ChkClickThrough.IsChecked == true;
+        if (OverlayClickThroughPolicy.ShouldToggle(
+                _isInitializing,
+                _settings.ClickThrough,
+                requestedState))
+        {
+            // Toggle the native window style before ApplySettings copies the requested
+            // value into the shared settings object. Initialization-time Checked events
+            // must never change the live overlay state.
+            _overlayWindow?.ToggleClickThrough();
+        }
+
         ApplySettings();
-        _overlayWindow?.ToggleClickThrough();
     }
 
     private void BtnCenterPlayer_Click(object sender, RoutedEventArgs e)
@@ -149,7 +158,17 @@ public partial class OverlaySettingsWindow : Window
 
     private void BtnReset_Click(object sender, RoutedEventArgs e)
     {
+        var previousClickThrough = _settings.ClickThrough;
         _settings.ResetToDefaults();
+
+        if (OverlayClickThroughPolicy.ShouldToggle(
+                isInitializing: false,
+                currentState: previousClickThrough,
+                requestedState: _settings.ClickThrough))
+        {
+            _overlayWindow?.ToggleClickThrough();
+        }
+
         _isInitializing = true;
         LoadSettings();
         _isInitializing = false;
