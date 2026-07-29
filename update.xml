@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <item>
-    <!-- 릴리즈 게시 단계에서 실제 앱 버전과 자산 URL로 갱신합니다. -->
-    <version>0.0.0</version>
-    <url>https://github.com/Propeex/Tarkov-Helper/releases/latest/download/TarkovHelper.zip</url>
+    <version>1.6.0</version>
+    <url>https://github.com/Propeex/Tarkov-Helper/releases/latest/download/TarkovHelper_JH.zip</url>
     <changelog>https://github.com/Propeex/Tarkov-Helper/releases/latest</changelog>
     <mandatory>false</mandatory>
 </item>
