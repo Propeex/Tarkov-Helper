@@ -124,7 +124,7 @@ namespace TarkovHelper.Services
             // Get hideout requirements
             var hideoutItems = _hideoutProgressService.GetAllRemainingItemRequirements();
 
-            // Get quest requirements
+            // Get quest requirements, including zero-count placeholders from completed quests.
             var questItems = GetQuestItemRequirements(itemLookup);
 
             // Merge both sources
@@ -223,11 +223,13 @@ namespace TarkovHelper.Services
             foreach (var task in _questProgressService.AllTasks)
             {
                 var status = _questProgressService.GetStatus(task);
-                if (status == QuestStatus.Done || status == QuestStatus.Failed || status == QuestStatus.Unavailable)
+                if (status == QuestStatus.Failed || status == QuestStatus.Unavailable)
                     continue;
 
                 if (task.RequiredItems == null)
                     continue;
+
+                var isCompleted = status == QuestStatus.Done;
 
                 foreach (var questItem in task.RequiredItems)
                 {
@@ -244,7 +246,11 @@ namespace TarkovHelper.Services
                     var iconLink = itemInfo.IconLink;
                     var wikiLink = itemInfo.WikiLink;
 
-                    var countToAdd = IsCurrency(questItem.ItemNormalizedName) ? 1 : questItem.Amount;
+                    // Completed quests keep a zero-count item placeholder. This preserves the
+                    // item row while allowing the existing fulfillment UI to mark it complete.
+                    var countToAdd = isCompleted
+                        ? 0
+                        : IsCurrency(questItem.ItemNormalizedName) ? 1 : questItem.Amount;
                     var firCountToAdd = questItem.FoundInRaid ? countToAdd : 0;
 
                     if (result.TryGetValue(questItem.ItemNormalizedName, out var existing))
@@ -252,7 +258,7 @@ namespace TarkovHelper.Services
                         existing.QuestCount += countToAdd;
                         if (questItem.FoundInRaid)
                         {
-                            existing.QuestFIRCount += countToAdd;
+                            existing.QuestFIRCount += firCountToAdd;
                             existing.FoundInRaid = true;
                         }
                     }
@@ -286,7 +292,7 @@ namespace TarkovHelper.Services
             foreach (var task in _questProgressService.AllTasks)
             {
                 var status = _questProgressService.GetStatus(task);
-                if (status == QuestStatus.Done || status == QuestStatus.Failed || status == QuestStatus.Unavailable)
+                if (status == QuestStatus.Failed || status == QuestStatus.Unavailable)
                     continue;
 
                 if (task.RequiredItems == null)
@@ -297,6 +303,9 @@ namespace TarkovHelper.Services
                     if (string.Equals(questItem.ItemNormalizedName, itemNormalizedName, StringComparison.OrdinalIgnoreCase))
                     {
                         var questName = task.NameKo ?? task.Name;
+                        if (status == QuestStatus.Done)
+                            questName = $"✓ {questName}";
+
                         sources.Add(new QuestItemSourceViewModel
                         {
                             QuestName = questName,

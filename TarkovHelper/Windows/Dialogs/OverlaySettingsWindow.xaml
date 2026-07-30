@@ -104,8 +104,8 @@
                 </Grid>
                 <Slider x:Name="SliderOtherFloorOpacity" Minimum="0" Maximum="100" Value="30"
                         ValueChanged="SliderOtherFloorOpacity_ValueChanged"/>
-                <TextBlock Text="선택하지 않은 층의 지도 레이어와 마커에 적용됩니다."
-                           Foreground="#777777" FontSize="11" Margin="0,0,0,4"/>
+                <TextBlock Text="선택하지 않은 층의 지도 레이어와 마커에 적용됩니다. 0%는 현재 층만 표시합니다."
+                           Foreground="#777777" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
 
                 <Grid Margin="0,8,0,4">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -124,6 +124,10 @@
                         ValueChanged="SliderMarkerSize_ValueChanged"/>
 
                 <TextBlock Text="층 표시" Style="{StaticResource SectionHeader}"/>
+                <CheckBox x:Name="ChkCurrentFloorOnly" Content="현재 층만 표시"
+                          Checked="CurrentFloorOnly_Changed" Unchecked="CurrentFloorOnly_Changed"/>
+                <TextBlock Text="활성화하면 선택하지 않은 층의 지도와 마커를 완전히 숨깁니다."
+                           Foreground="#777777" FontSize="11" TextWrapping="Wrap" Margin="20,0,0,2"/>
                 <CheckBox x:Name="ChkAutoFloorSelection" Content="위치 기반 자동 층 선택"
                           Checked="AutoFloorSelection_Changed" Unchecked="AutoFloorSelection_Changed"/>
                 <TextBlock Text="위층/아래층 단축키를 사용하면 수동 모드로 전환됩니다. 자동 복귀 단축키나 아래 버튼으로 다시 활성화할 수 있습니다."
