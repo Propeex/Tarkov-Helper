@@ -1,0 +1,221 @@
+name: Fix v1.6.4 Automatic Floor Sync
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'agent/v1.6.4-quest-active-minimap-markers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.6.4-quest-active-minimap-markers
+          fetch-depth: 0
+
+      - name: Preserve unknown automatic floors and synchronize settings window
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one match, found {count}: {old[:120]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          window = Path('TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs')
+          replace_once(
+              window,
+              '''            if (!_settings.AutoFloorSelection || _manualFloorSelection)
+                          return;
+
+                      var detectedFloorId = DetectCurrentFloor(position);
+                      if (string.IsNullOrWhiteSpace(detectedFloorId) ||
+                          !IsConfiguredFloor(detectedFloorId) ||
+                          string.Equals(_selectedFloorId, detectedFloorId, StringComparison.OrdinalIgnoreCase))
+                      {
+                          return;
+                      }
+
+                      _selectedFloorId = detectedFloorId;
+                      UpdateFloorIndicator();
+                      QueueFloorRender(fitMap: false);
+              ''',
+              '''            if (!_settings.AutoFloorSelection || _manualFloorSelection)
+                          return;
+
+                      var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
+                          _currentMapConfig?.Floors,
+                          DetectCurrentFloor(position));
+                      if (string.Equals(
+                              _selectedFloorId,
+                              automaticFloorId,
+                              StringComparison.OrdinalIgnoreCase))
+                      {
+                          return;
+                      }
+
+                      _selectedFloorId = automaticFloorId;
+                      UpdateFloorIndicator();
+                      QueueFloorRender(fitMap: false);
+              ''')
+
+          replace_once(
+              window,
+              '''    private void SelectInitialFloor()
+                  {
+                      var detectedFloor = _settings.AutoFloorSelection ? DetectCurrentFloor() : null;
+                      _selectedFloorId = MiniMapFloorSelection.SelectInitial(
+                          _currentMapConfig?.Floors,
+                          detectedFloor);
+                      UpdateFloorIndicator();
+                  }
+              ''',
+              '''    private void SelectInitialFloor()
+                  {
+                      _selectedFloorId = _settings.AutoFloorSelection
+                          ? MiniMapFloorSelection.SelectAutomatic(
+                              _currentMapConfig?.Floors,
+                              DetectCurrentFloor())
+                          : MiniMapFloorSelection.SelectInitial(
+                              _currentMapConfig?.Floors,
+                              preferredFloorId: null);
+                      UpdateFloorIndicator();
+                  }
+              ''')
+
+          replace_once(
+              window,
+              '''    private bool IsConfiguredFloor(string floorId) =>
+                      MiniMapFloorSelection.Contains(_currentMapConfig?.Floors, floorId);
+
+              ''',
+              '')
+
+          text = window.read_text(encoding='utf-8')
+          text = text.replace('ApplyDetectedFloorIfAvailable()', 'ApplyAutomaticFloorSelection()')
+          window.write_text(text, encoding='utf-8', newline='\n')
+
+          replace_once(
+              window,
+              '''    private bool ApplyAutomaticFloorSelection()
+                  {
+                      var detectedFloor = DetectCurrentFloor();
+                      if (string.IsNullOrWhiteSpace(detectedFloor) ||
+                          !IsConfiguredFloor(detectedFloor) ||
+                          string.Equals(_selectedFloorId, detectedFloor, StringComparison.OrdinalIgnoreCase))
+                      {
+                          return false;
+                      }
+
+                      _selectedFloorId = detectedFloor;
+                      return true;
+                  }
+              ''',
+              '''    private bool ApplyAutomaticFloorSelection()
+                  {
+                      var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
+                          _currentMapConfig?.Floors,
+                          DetectCurrentFloor());
+                      if (string.Equals(
+                              _selectedFloorId,
+                              automaticFloorId,
+                              StringComparison.OrdinalIgnoreCase))
+                      {
+                          return false;
+                      }
+
+                      _selectedFloorId = automaticFloorId;
+                      return true;
+                  }
+              ''')
+
+          settings_window = Path('TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs')
+          replace_once(
+              settings_window,
+              '''        _settings = settings.Clone();
+                      _overlayWindow = overlayWindow;
+                      _hotkeyButtons = new Dictionary<OverlayMiniMapHotkeyAction, Button>
+              ''',
+              '''        _settings = settings.Clone();
+                      _overlayWindow = overlayWindow;
+                      if (_overlayWindow != null)
+                          _overlayWindow.SettingsChanged += OnOverlaySettingsChanged;
+
+                      _hotkeyButtons = new Dictionary<OverlayMiniMapHotkeyAction, Button>
+              ''')
+
+          replace_once(
+              settings_window,
+              '''    private void UpdateDisplays()
+                  {
+              ''',
+              '''    private void OnOverlaySettingsChanged(OverlayMiniMapSettings settings)
+                  {
+                      if (!Dispatcher.CheckAccess())
+                      {
+                          Dispatcher.BeginInvoke(() => OnOverlaySettingsChanged(settings));
+                          return;
+                      }
+
+                      _settings.CopyFrom(settings);
+                      _isInitializing = true;
+                      LoadSettings();
+                      _isInitializing = false;
+                  }
+
+                  private void UpdateDisplays()
+                  {
+              ''')
+
+          replace_once(
+              settings_window,
+              '''    protected override void OnClosed(EventArgs e)
+                  {
+                      GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+                      base.OnClosed(e);
+                  }
+              ''',
+              '''    protected override void OnClosed(EventArgs e)
+                  {
+                      GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+                      if (_overlayWindow != null)
+                          _overlayWindow.SettingsChanged -= OnOverlaySettingsChanged;
+                      base.OnClosed(e);
+                  }
+              ''')
+
+          smoke = Path('TarkovHelper.DatabaseSmoke/Program.cs')
+          replace_once(
+              smoke,
+              '''    if (MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
+                      MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||
+                      MiniMapFloorSelection.Move(floors, "main", 1) != "level3" ||
+              ''',
+              '''    if (MiniMapFloorSelection.SelectAutomatic(floors, null) != null ||
+                      MiniMapFloorSelection.SelectAutomatic(floors, "unknown") != null ||
+                      MiniMapFloorSelection.SelectAutomatic(floors, "level3") != "level3" ||
+                      MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
+                      MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||
+                      MiniMapFloorSelection.Move(floors, "main", 1) != "level3" ||
+              ''')
+
+      - name: Commit floor synchronization fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs \
+            TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs \
+            TarkovHelper.DatabaseSmoke/Program.cs
+          git commit -m "fix: preserve unknown minimap floors and sync settings"
+          git push origin HEAD:agent/v1.6.4-quest-active-minimap-markers
