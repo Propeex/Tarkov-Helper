@@ -6,10 +6,11 @@ namespace TarkovHelper.Windows;
 
 public partial class OverlayMiniMapWindow
 {
+    private static readonly bool SharedFloorOverlayHandlersRegistered = RegisterSharedFloorOverlayHandlers();
     private readonly SharedMapFloorStateService _sharedFloorState = SharedMapFloorStateService.Instance;
     private bool _sharedFloorAttached;
 
-    static OverlayMiniMapWindow()
+    private static bool RegisterSharedFloorOverlayHandlers()
     {
         EventManager.RegisterClassHandler(
             typeof(OverlayMiniMapWindow),
@@ -19,6 +20,7 @@ public partial class OverlayMiniMapWindow
             typeof(OverlayMiniMapWindow),
             FrameworkElement.UnloadedEvent,
             new RoutedEventHandler(OnSharedFloorOverlayUnloaded));
+        return true;
     }
 
     private static void OnSharedFloorOverlayLoaded(object sender, RoutedEventArgs e)
