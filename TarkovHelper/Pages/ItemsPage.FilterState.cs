@@ -7,14 +7,16 @@ namespace TarkovHelper.Pages;
 public partial class ItemsPage
 {
     private static readonly ItemsFilterState PersistedItemsFilters = new();
+    private static readonly bool PersistentItemsFiltersRegistered = RegisterPersistentItemsFilters();
     private bool _persistentItemsFilterHooksAttached;
 
-    static ItemsPage()
+    private static bool RegisterPersistentItemsFilters()
     {
         EventManager.RegisterClassHandler(
             typeof(ItemsPage),
             FrameworkElement.LoadedEvent,
             new RoutedEventHandler(OnPersistentItemsFiltersLoaded));
+        return true;
     }
 
     private static void OnPersistentItemsFiltersLoaded(object sender, RoutedEventArgs e)
