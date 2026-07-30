@@ -15,6 +15,13 @@ public partial class QuestListPage
     private bool _questMapGroupingAttached;
     private bool _questMapGroupingApplying;
 
+    static QuestListPage()
+    {
+        // 명시적 정적 생성자로 beforefieldinit을 제거해 클래스 핸들러 등록을 보장합니다.
+        _ = PersistentQuestFiltersRegistered;
+        _ = QuestMapGroupingHandlersRegistered;
+    }
+
     private static bool RegisterQuestMapGroupingHandlers()
     {
         EventManager.RegisterClassHandler(
@@ -75,15 +82,16 @@ public partial class QuestListPage
         if (_questMapGroupingApplying)
             return;
 
-        for (var attempt = 0; attempt < 120 && !_isDataLoaded; attempt++)
-            await Task.Delay(25);
-
-        if (!_isDataLoaded || _questMapGroupingApplying)
-            return;
-
         _questMapGroupingApplying = true;
         try
         {
+            // 초기 아이템·퀘스트 로딩이 느린 환경에서도 완료될 때까지 기다립니다.
+            while (!_isDataLoaded && !_isUnloaded)
+                await Task.Delay(50);
+
+            if (!_isDataLoaded || _isUnloaded)
+                return;
+
             var selectedMap = NormalizeQuestMapKey(
                 (CmbMap.SelectedItem as ComboBoxItem)?.Tag?.ToString());
 
@@ -153,11 +161,12 @@ public partial class QuestListPage
 
         var normalized = mapKey.Trim().ToLowerInvariant();
 
-        // Ground Zero의 레벨 조건별 데이터 키는 모두 Ground Zero로 통합합니다.
-        if (normalized == "ground-zero" ||
+        // DB의 GroundZero 표기와 API의 ground-zero-* 변형을 하나로 통합합니다.
+        if (normalized == "groundzero" ||
+            normalized == "ground-zero" ||
             normalized.StartsWith("ground-zero-", StringComparison.Ordinal))
         {
-            return "ground-zero";
+            return "groundzero";
         }
 
         // Factory의 주·야간/구버전 데이터 키는 모두 Factory로 통합합니다.
