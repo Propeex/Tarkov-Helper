@@ -1,0 +1,46 @@
+name: Fix v1.6.4 Settings Window Braces
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'agent/v1.6.4-quest-active-minimap-markers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.6.4-quest-active-minimap-markers
+          fetch-depth: 0
+
+      - name: Normalize class closing braces
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs')
+          text = path.read_text(encoding='utf-8').rstrip()
+          marker = '    protected override void OnClosed(EventArgs e)'
+          start = text.index(marker)
+          replacement = '''    protected override void OnClosed(EventArgs e)
+          {
+              GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+              _overlayService.SettingsChanged -= OnOverlaySettingsChanged;
+              base.OnClosed(e);
+          }
+          }'''
+          path.write_text(text[:start] + replacement + '\n', encoding='utf-8', newline='\n')
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs
+          git commit -m "fix: normalize overlay settings window braces"
+          git push origin HEAD:agent/v1.6.4-quest-active-minimap-markers
