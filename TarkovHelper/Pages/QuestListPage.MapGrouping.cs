@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using TarkovHelper.Services;
 
 namespace TarkovHelper.Pages;
 
