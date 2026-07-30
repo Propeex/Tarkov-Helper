@@ -1,0 +1,66 @@
+name: Refresh Release Notes
+
+on:
+  workflow_run:
+    workflows:
+      - Publish Release
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-notes:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Read release version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content "TarkovHelper/TarkovHelper.csproj"
+          $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Project version could not be read."
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Update v1.6.6 release notes
+        if: steps.version.outputs.version == '1.6.6'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $notes = @'
+          ## 타르코프헬퍼_JH VERSION_PLACEHOLDER
+
+          Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
+
+          ### v1.6.6 수정
+          - 아이템 화면과 중복되는 `수집가 - 카파` 탭을 내비게이션에서 제거
+          - 퀘스트 화면의 카파 체크 필터를 제거하고 카파 진행도 추적과 퀘스트 배지는 유지
+          - 퀘스트·아이템 탭을 나갔다가 돌아와도 세부 필터·체크·정렬 상태를 복구
+          - 미니맵의 다른 층 투명도와 불필요한 단축키·즉시 작업 UI를 제거하고 다른 층을 항상 숨김
+          - 일반 지도에서도 선택하지 않은 층의 지도 레이어와 마커를 숨김
+          - 위층·아래층·자동 층 추적 복귀 단축키를 일반 지도에서도 사용할 수 있도록 확장
+          - 일반 지도와 미니맵의 맵·층·자동 추적 상태를 양방향으로 연동
+
+          ### 설치
+          1. TarkovHelper_JH.zip을 원하는 폴더에 압축 해제합니다.
+          2. TarkovHelper_JH.exe를 실행합니다.
+          3. .NET 8 Windows Desktop Runtime이 필요합니다.
+
+          기존 user_data.db는 릴리즈 ZIP에 포함되지 않으며 업데이트 시 유지됩니다.
+          '@.Replace("VERSION_PLACEHOLDER", $version)
+          $notes | Set-Content RELEASE_NOTES.md -Encoding utf8
+
+          gh release edit "v$version" `
+            --repo $env:GITHUB_REPOSITORY `
+            --notes-file RELEASE_NOTES.md
