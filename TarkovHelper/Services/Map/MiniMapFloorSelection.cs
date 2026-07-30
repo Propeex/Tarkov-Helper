@@ -8,12 +8,16 @@ namespace TarkovHelper.Services.Map;
 /// </summary>
 public static class MiniMapFloorSelection
 {
-    public static IReadOnlyList<MapFloorConfig> Order(IEnumerable<MapFloorConfig>? floors) =>
-        floors?
+    public static IReadOnlyList<MapFloorConfig> Order(IEnumerable<MapFloorConfig>? floors)
+    {
+        if (floors == null)
+            return Array.Empty<MapFloorConfig>();
+
+        return floors
             .Where(floor => !string.IsNullOrWhiteSpace(floor.LayerId))
             .OrderBy(floor => floor.Order)
-            .ToList()
-        ?? Array.Empty<MapFloorConfig>();
+            .ToList();
+    }
 
     public static bool Contains(
         IEnumerable<MapFloorConfig>? floors,
