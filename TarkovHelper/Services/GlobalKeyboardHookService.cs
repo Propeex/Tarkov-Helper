@@ -17,6 +17,8 @@ public class GlobalKeyboardHookService : IDisposable
     private const int WH_KEYBOARD_LL = 13;
     private const int WM_KEYDOWN = 0x0100;
     private const int WM_SYSKEYDOWN = 0x0104;
+    private const int WM_KEYUP = 0x0101;
+    private const int WM_SYSKEYUP = 0x0105;
 
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
@@ -48,6 +50,7 @@ public class GlobalKeyboardHookService : IDisposable
     private readonly LowLevelKeyboardProc _proc;
     private bool _isHooked;
     private bool _isEnabled;
+    private readonly HashSet<int> _pressedKeys = new();
 
     // 붕권 커맨드: ↓↘→ + O (S → S+D → D → O)
     // 방향 입력: Down(1), DownForward(2), Forward(3), 그리고 O(4)
@@ -85,35 +88,36 @@ public class GlobalKeyboardHookService : IDisposable
 
     #region Overlay MiniMap Hotkey Events
 
-    /// <summary>
-    /// 오버레이 토글 (Ctrl+M)
-    /// </summary>
     public event Action? OverlayTogglePressed;
-
-    /// <summary>
-    /// 오버레이 설정창 열기 (Ctrl+L)
-    /// </summary>
     public event Action? OverlaySettingsPressed;
-
-    /// <summary>
-    /// 오버레이 줌 인 (NumPad +)
-    /// </summary>
     public event Action? OverlayZoomInPressed;
-
-    /// <summary>
-    /// 오버레이 줌 아웃 (NumPad -)
-    /// </summary>
     public event Action? OverlayZoomOutPressed;
+    public event Action? OverlayFloorUpPressed;
+    public event Action? OverlayFloorDownPressed;
+    public event Action? OverlayOpacityIncreasePressed;
+    public event Action? OverlayOpacityDecreasePressed;
+    public event Action? OverlayCenterPlayerPressed;
+    public event Action? OverlayToggleViewModePressed;
+    public event Action? OverlayToggleClickThroughPressed;
+    public event Action? OverlayResetViewPressed;
+    public event Action? OverlayResumeAutoFloorPressed;
+
+    public int ZoomInKey { get; set; } = 0x6B;
+    public int ZoomOutKey { get; set; } = 0x6D;
+    public int FloorUpKey { get; set; } = 0x21;
+    public int FloorDownKey { get; set; } = 0x22;
+    public int OpacityIncreaseKey { get; set; }
+    public int OpacityDecreaseKey { get; set; }
+    public int CenterPlayerKey { get; set; }
+    public int ToggleViewModeKey { get; set; }
+    public int ToggleClickThroughKey { get; set; }
+    public int ResetViewKey { get; set; }
+    public int ResumeAutoFloorKey { get; set; }
 
     /// <summary>
-    /// 설정된 줌 인 단축키 (Virtual Key Code)
+    /// 설정 창에서 키를 입력받는 동안에는 동일한 전역 키가 실제 동작을 실행하지 않도록 막습니다.
     /// </summary>
-    public int ZoomInKey { get; set; } = 0x6B; // VK_ADD
-
-    /// <summary>
-    /// 설정된 줌 아웃 단축키 (Virtual Key Code)
-    /// </summary>
-    public int ZoomOutKey { get; set; } = 0x6D; // VK_SUBTRACT
+    public bool OverlayHotkeysSuppressed { get; set; }
 
     #endregion
 
@@ -159,6 +163,7 @@ public class GlobalKeyboardHookService : IDisposable
 
     private void StopHook()
     {
+        _pressedKeys.Clear();
         if (!_isHooked || _hookId == IntPtr.Zero) return;
 
         UnhookWindowsHookEx(_hookId);
@@ -168,54 +173,57 @@ public class GlobalKeyboardHookService : IDisposable
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
+        if (nCode < 0)
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+        var message = wParam.ToInt32();
+        var vkCode = Marshal.ReadInt32(lParam);
+        if (message is WM_KEYUP or WM_SYSKEYUP)
         {
-            int vkCode = Marshal.ReadInt32(lParam);
+            _pressedKeys.Remove(vkCode);
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
 
-            // Check if EscapeFromTarkov.exe or TarkovHelper is the foreground window
-            if (IsTarkovOrHelperForeground())
+        if (message is not WM_KEYDOWN and not WM_SYSKEYDOWN)
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+        var isFirstPress = _pressedKeys.Add(vkCode);
+        if (!IsTarkovOrHelperForeground())
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+        if (isFirstPress)
+            CheckSecretCommand(vkCode);
+
+        if (!OverlayHotkeysSuppressed && isFirstPress)
+        {
+            var floorIndex = GetFloorIndexFromVkCode(vkCode);
+            if (floorIndex.HasValue)
             {
-                // 붕권 커맨드 체크 (S S D D O)
-                CheckSecretCommand(vkCode);
-
-                // NumPad keys for floor selection (0-5)
-                int? floorIndex = GetFloorIndexFromVkCode(vkCode);
-                if (floorIndex.HasValue)
+                Log($"NumPad{floorIndex.Value} pressed, firing event");
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
-                    Log($"NumPad{floorIndex.Value} pressed, firing event");
-                    System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-                    {
-                        FloorKeyPressed?.Invoke(floorIndex.Value);
-                    });
-                }
+                    FloorKeyPressed?.Invoke(floorIndex.Value);
+                });
+            }
+        }
 
-                // NumPad +/- for overlay zoom (오버레이 활성화 시에만)
-                if (IsOverlayVisible)
-                {
-                    var zoomAction = GetZoomActionFromVkCode(vkCode);
-                    if (zoomAction != null)
-                    {
-                        Log($"NumPad zoom key pressed (overlay visible)");
-                        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-                        {
-                            zoomAction.Invoke();
-                        });
-                    }
-                }
+        if (!OverlayHotkeysSuppressed && IsOverlayVisible)
+        {
+            var directAction = GetDirectOverlayActionFromVkCode(vkCode);
+            if (directAction != null && (isFirstPress || IsRepeatableOverlayHotkey(vkCode)))
+            {
+                Log($"Overlay direct hotkey detected: vk={vkCode}");
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(directAction);
+            }
+        }
 
-                // Overlay hotkeys (Ctrl + key) - 오버레이 활성화 시에만
-                if (IsCtrlPressed() && IsOverlayVisible)
-                {
-                    var overlayAction = GetOverlayActionFromVkCode(vkCode);
-                    if (overlayAction != null)
-                    {
-                        Log($"Overlay hotkey detected");
-                        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-                        {
-                            overlayAction.Invoke();
-                        });
-                    }
-                }
+        if (!OverlayHotkeysSuppressed && isFirstPress && IsCtrlPressed() && IsOverlayVisible)
+        {
+            var overlayAction = GetOverlayActionFromVkCode(vkCode);
+            if (overlayAction != null)
+            {
+                Log($"Overlay Ctrl hotkey detected: vk={vkCode}");
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(overlayAction);
             }
         }
 
@@ -373,15 +381,32 @@ public class GlobalKeyboardHookService : IDisposable
     }
 
     /// <summary>
-    /// Virtual key code를 줌 액션으로 변환 (설정된 단축키 기반)
+    /// 설정된 단일 키를 오버레이 동작으로 변환합니다.
+    /// 0은 미지정이며 어떤 동작도 실행하지 않습니다.
     /// </summary>
-    private Action? GetZoomActionFromVkCode(int vkCode)
+    private Action? GetDirectOverlayActionFromVkCode(int vkCode)
     {
+        if (vkCode == 0) return null;
         if (vkCode == ZoomInKey) return OverlayZoomInPressed;
         if (vkCode == ZoomOutKey) return OverlayZoomOutPressed;
-        
+        if (vkCode == FloorUpKey) return OverlayFloorUpPressed;
+        if (vkCode == FloorDownKey) return OverlayFloorDownPressed;
+        if (vkCode == OpacityIncreaseKey) return OverlayOpacityIncreasePressed;
+        if (vkCode == OpacityDecreaseKey) return OverlayOpacityDecreasePressed;
+        if (vkCode == CenterPlayerKey) return OverlayCenterPlayerPressed;
+        if (vkCode == ToggleViewModeKey) return OverlayToggleViewModePressed;
+        if (vkCode == ToggleClickThroughKey) return OverlayToggleClickThroughPressed;
+        if (vkCode == ResetViewKey) return OverlayResetViewPressed;
+        if (vkCode == ResumeAutoFloorKey) return OverlayResumeAutoFloorPressed;
         return null;
     }
+
+    private bool IsRepeatableOverlayHotkey(int vkCode) =>
+        vkCode != 0 &&
+        (vkCode == ZoomInKey ||
+         vkCode == ZoomOutKey ||
+         vkCode == OpacityIncreaseKey ||
+         vkCode == OpacityDecreaseKey);
 
     /// <summary>
     /// Checks if EscapeFromTarkov.exe or TarkovHelper is the foreground window.

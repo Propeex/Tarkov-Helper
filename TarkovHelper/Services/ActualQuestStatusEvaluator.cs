@@ -3,27 +3,21 @@ using TarkovHelper.Models;
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// Separates quests that are merely available to accept from quests that were
-/// actually started in the game. Eligibility still observes prerequisite,
-/// player-level, karma, edition, prestige, faction, and DSP requirements.
+/// Calculates the status exposed by the helper. Because the helper has no
+/// separate quest-accept action, every quest whose start conditions are met is
+/// represented as Active. Done and Failed remain explicit user progress.
 /// </summary>
 internal sealed class ActualQuestStatusEvaluator
 {
     private readonly QuestProgressService _progressService;
-    private readonly HashSet<string> _startedQuestKeys;
     private readonly Dictionary<string, QuestStatus> _cache =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _visiting =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public ActualQuestStatusEvaluator(
-        QuestProgressService progressService,
-        IEnumerable<string> startedQuestKeys)
+    public ActualQuestStatusEvaluator(QuestProgressService progressService)
     {
         _progressService = progressService;
-        _startedQuestKeys = startedQuestKeys
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     public QuestStatus Evaluate(TarkovTask task)
@@ -60,11 +54,7 @@ internal sealed class ActualQuestStatusEvaluator
                 return Cache(taskKey, QuestStatus.LevelLocked);
             }
 
-            return Cache(
-                taskKey,
-                IsActuallyStarted(task)
-                    ? QuestStatus.Active
-                    : QuestStatus.Available);
+            return Cache(taskKey, QuestStatus.Active);
         }
         finally
         {
@@ -122,7 +112,6 @@ internal sealed class ActualQuestStatusEvaluator
             ? _progressService.GetTask(requirement.TaskNormalizedName)
             : null;
 
-        // Missing prerequisite references must not silently unlock a quest.
         if (requiredTask == null)
             return false;
 
@@ -156,19 +145,6 @@ internal sealed class ActualQuestStatusEvaluator
         }
 
         return false;
-    }
-
-    private bool IsActuallyStarted(TarkovTask task)
-    {
-        if (!string.IsNullOrWhiteSpace(task.NormalizedName) &&
-            _startedQuestKeys.Contains(task.NormalizedName))
-        {
-            return true;
-        }
-
-        return task.Ids?.Any(id =>
-            !string.IsNullOrWhiteSpace(id) &&
-            _startedQuestKeys.Contains(id)) == true;
     }
 
     private static string GetTaskKey(TarkovTask task)

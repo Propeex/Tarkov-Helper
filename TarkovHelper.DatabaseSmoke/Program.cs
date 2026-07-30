@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Models;
+using TarkovHelper.Models.Map;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Map;
+using TarkovHelper.Services.Settings;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
@@ -264,6 +267,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     await RunPersistenceWriteQueueSmokeAsync();
     await RunObjectiveProfileIsolationSmokeAsync();
     await RunUserProgressResetSmokeAsync();
+    RunMiniMapVisibilitySourceSmoke();
+    RunOverlayMiniMapControlsSmoke();
     RunApplicationBehaviorSmoke();
 
     Console.WriteLine(
@@ -474,6 +479,137 @@ static async Task RunOutageHandlingSmokeAsync(string databasePath)
         $"static={outageHandler.StaticRequestCount}, graphql={outageHandler.GraphQlRequestCount}, etaHidden=true");
 }
 
+static void RunMiniMapVisibilitySourceSmoke()
+{
+    var markerSettings = MapSettings.Instance;
+    var applicationSettings = SettingsService.Instance;
+    var original = (
+        markerSettings.ShowPmcSpawns,
+        markerSettings.ShowSniperScavs,
+        markerSettings.ShowRogues,
+        markerSettings.ShowCultists,
+        markerSettings.ShowLevers,
+        markerSettings.ShowBosses,
+        applicationSettings.MapShowExtracts,
+        applicationSettings.MapShowPmcExtracts,
+        applicationSettings.MapShowScavExtracts,
+        applicationSettings.MapShowTransits);
+
+    try
+    {
+        markerSettings.ShowPmcSpawns = true;
+        markerSettings.ShowSniperScavs = false;
+        markerSettings.ShowRogues = true;
+        markerSettings.ShowCultists = false;
+        markerSettings.ShowLevers = true;
+        markerSettings.ShowBosses = false;
+        applicationSettings.MapShowExtracts = true;
+        applicationSettings.MapShowPmcExtracts = false;
+        applicationSettings.MapShowScavExtracts = true;
+        applicationSettings.MapShowTransits = false;
+
+        var captured = MiniMapMarkerVisibilityState.Capture(markerSettings);
+        if (!captured.ShowPmcSpawns || captured.ShowSniperScavs ||
+            !captured.ShowRogues || captured.ShowCultists ||
+            !captured.ShowLevers || captured.ShowBosses ||
+            !captured.ShowExtracts || captured.ShowPmcExtracts ||
+            !captured.ShowScavExtracts || captured.ShowTransits)
+        {
+            throw new InvalidDataException(
+                "Minimap visibility snapshot did not read the live map-tab setting sources.");
+        }
+    }
+    finally
+    {
+        markerSettings.ShowPmcSpawns = original.ShowPmcSpawns;
+        markerSettings.ShowSniperScavs = original.ShowSniperScavs;
+        markerSettings.ShowRogues = original.ShowRogues;
+        markerSettings.ShowCultists = original.ShowCultists;
+        markerSettings.ShowLevers = original.ShowLevers;
+        markerSettings.ShowBosses = original.ShowBosses;
+        applicationSettings.MapShowExtracts = original.MapShowExtracts;
+        applicationSettings.MapShowPmcExtracts = original.MapShowPmcExtracts;
+        applicationSettings.MapShowScavExtracts = original.MapShowScavExtracts;
+        applicationSettings.MapShowTransits = original.MapShowTransits;
+    }
+}
+
+static void RunOverlayMiniMapControlsSmoke()
+{
+    var settings = new OverlayMiniMapSettings();
+    if (settings.FloorUpKey != 0x21 || settings.FloorDownKey != 0x22 ||
+        Math.Abs(settings.OtherFloorOpacity - 0.3) > 0.0001 ||
+        !settings.AutoFloorSelection)
+        throw new InvalidDataException("Minimap floor-control defaults are not stable.");
+
+    settings.SetHotkey(OverlayMiniMapHotkeyAction.OpacityIncrease, settings.FloorUpKey);
+    if (settings.OpacityIncreaseKey != 0x21 || settings.FloorUpKey != 0 ||
+        settings.GetActionForHotkey(0x21) != OverlayMiniMapHotkeyAction.OpacityIncrease)
+        throw new InvalidDataException("Duplicate minimap hotkeys were not transferred atomically.");
+
+    settings.ToggleViewModeKey = 0x76;
+    settings.ToggleClickThroughKey = 0x77;
+    settings.ResetViewKey = 0x78;
+    settings.ResumeAutoFloorKey = 0x79;
+    var cloned = settings.Clone();
+    if (cloned.ToggleViewModeKey != settings.ToggleViewModeKey ||
+        cloned.ToggleClickThroughKey != settings.ToggleClickThroughKey ||
+        cloned.ResetViewKey != settings.ResetViewKey ||
+        cloned.ResumeAutoFloorKey != settings.ResumeAutoFloorKey)
+        throw new InvalidDataException("Minimap hotkeys were not preserved by cloning.");
+
+    var floors = new[]
+    {
+        new MapFloorConfig { LayerId = "level3", Order = 2 },
+        new MapFloorConfig { LayerId = "basement", Order = -1 },
+        new MapFloorConfig { LayerId = "main", Order = 0, IsDefault = true }
+    };
+    if (MiniMapFloorSelection.SelectAutomatic(floors, null) != null ||
+        MiniMapFloorSelection.SelectAutomatic(floors, "unknown") != null ||
+        MiniMapFloorSelection.SelectAutomatic(floors, "level3") != "level3" ||
+        MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
+        MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||
+        MiniMapFloorSelection.Move(floors, "main", 1) != "level3" ||
+        MiniMapFloorSelection.Move(floors, "main", -1) != "basement" ||
+        MiniMapFloorSelection.Move(floors, "level3", 1) != "level3" ||
+        MiniMapFloorSelection.Move(floors, "basement", -1) != "basement")
+        throw new InvalidDataException("Minimap floor ordering or navigation is incorrect.");
+
+    if (!MiniMapMarkerVisibilityState.IsCurrentFloor("basement", null) ||
+        !MiniMapMarkerVisibilityState.IsCurrentFloor("level3", null) ||
+        !MiniMapMarkerVisibilityState.IsCurrentFloor(null, "main") ||
+        MiniMapMarkerVisibilityState.IsCurrentFloor("basement", "main") ||
+        !MiniMapMarkerVisibilityState.IsCurrentFloor("basement", "basement"))
+        throw new InvalidDataException("Unknown minimap floor detection was forced to main.");
+
+    const string svg =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\">" +
+        "<g id=\"basement\"><rect width=\"10\" height=\"10\" /></g>" +
+        "<g id=\"main\"><rect width=\"10\" height=\"10\" /></g>" +
+        "<g id=\"level3\"><rect width=\"10\" height=\"10\" /></g>" +
+        "</svg>";
+    var processed = new TarkovHelper.Services.Map.SvgStylePreprocessor().ProcessSvgContent(
+        svg,
+        new[] { "main" },
+        new[] { "basement", "main", "level3" },
+        backgroundFloorId: null,
+        backgroundOpacity: 0.42,
+        dimAllOtherFloors: true);
+    var document = new System.Xml.XmlDocument();
+    document.LoadXml(processed);
+    var styles = document.GetElementsByTagName("g")
+        .Cast<System.Xml.XmlElement>()
+        .ToDictionary(
+            element => element.GetAttribute("id"),
+            element => element.GetAttribute("style"),
+            StringComparer.OrdinalIgnoreCase);
+    if (!styles["main"].Contains("display:block", StringComparison.OrdinalIgnoreCase) ||
+        !styles["main"].Contains("opacity:1", StringComparison.OrdinalIgnoreCase) ||
+        !styles["basement"].Contains("opacity:0.42", StringComparison.OrdinalIgnoreCase) ||
+        !styles["level3"].Contains("opacity:0.42", StringComparison.OrdinalIgnoreCase))
+        throw new InvalidDataException("Minimap floor opacity processing is incorrect.");
+}
+
 static void RunApplicationBehaviorSmoke()
 {
     const string inventoryKey = "__maintenance-consumption-smoke__";
@@ -511,16 +647,86 @@ static void RunApplicationBehaviorSmoke()
         NormalizedName = "actual-status-smoke",
         Name = "Actual Status Smoke"
     };
-    var availableStatus = new ActualQuestStatusEvaluator(
-        QuestProgressService.Instance,
-        []).Evaluate(statusTask);
-    var activeStatus = new ActualQuestStatusEvaluator(
-        QuestProgressService.Instance,
-        ["actual-status-smoke"]).Evaluate(statusTask);
-    if (availableStatus != QuestStatus.Available || activeStatus != QuestStatus.Active)
+    var eligibleStatus = new ActualQuestStatusEvaluator(
+        QuestProgressService.Instance).Evaluate(statusTask);
+    if (eligibleStatus != QuestStatus.Active)
     {
         throw new InvalidDataException(
-            $"Actual quest status separation failed: available={availableStatus}, active={activeStatus}.");
+            $"Eligible quest must be Active when the helper has no accept action: actual={eligibleStatus}.");
+    }
+
+    var markerVisibility = new MiniMapMarkerVisibilityState(
+        ShowPmcSpawns: true,
+        ShowSniperScavs: false,
+        ShowRogues: true,
+        ShowCultists: false,
+        ShowLevers: true,
+        ShowBosses: false,
+        ShowExtracts: true,
+        ShowPmcExtracts: true,
+        ShowScavExtracts: false,
+        ShowTransits: true);
+    if (!markerVisibility.IsMapMarkerVisible(MarkerType.PmcSpawn) ||
+        markerVisibility.IsMapMarkerVisible(MarkerType.SniperScavSpawn) ||
+        !markerVisibility.IsMapMarkerVisible(MarkerType.RogueSpawn) ||
+        markerVisibility.IsMapMarkerVisible(MarkerType.CultistSpawn) ||
+        !markerVisibility.IsMapMarkerVisible(MarkerType.Lever) ||
+        markerVisibility.IsMapMarkerVisible(MarkerType.BossSpawn) ||
+        markerVisibility.IsMapMarkerVisible(MarkerType.ScavSpawn) ||
+        !markerVisibility.IsExtractVisible(ExtractFaction.Pmc) ||
+        markerVisibility.IsExtractVisible(ExtractFaction.Scav) ||
+        !markerVisibility.IsExtractVisible(ExtractFaction.Transit) ||
+        !markerVisibility.IsExtractVisible(ExtractFaction.Shared))
+    {
+        throw new InvalidDataException(
+            "Minimap marker visibility did not mirror the map-tab category settings.");
+    }
+
+    var scavOnlyExtracts = markerVisibility with
+{
+    ShowPmcExtracts = false,
+    ShowScavExtracts = true
+};
+if (scavOnlyExtracts.IsExtractVisible(ExtractFaction.Shared))
+{
+    throw new InvalidDataException(
+        "Shared extracts must follow the PMC filter exactly like the map tab.");
+}
+
+    var pairedExtracts = MapExtractDisplayGrouping.GroupForDisplay(new[]
+    {
+        new MapExtract
+        {
+            Id = "paired-pmc",
+            Name = "Crossroads",
+            Faction = ExtractFaction.Pmc,
+            X = 100,
+            Z = 200
+        },
+        new MapExtract
+        {
+            Id = "paired-scav",
+            Name = "Crossroads",
+            Faction = ExtractFaction.Scav,
+            X = 104,
+            Z = 204
+        }
+    });
+    if (pairedExtracts.Count != 1 ||
+        pairedExtracts[0].Faction != ExtractFaction.Pmc ||
+        pairedExtracts[0].SourceCount != 2 ||
+        scavOnlyExtracts.IsExtractVisible(pairedExtracts[0].Faction))
+    {
+        throw new InvalidDataException(
+            "Paired PMC/Scav extracts were not grouped and classified as PMC.");
+    }
+
+        var extractsDisabled = markerVisibility with { ShowExtracts = false };
+    if (extractsDisabled.IsExtractVisible(ExtractFaction.Pmc) ||
+        extractsDisabled.IsExtractVisible(ExtractFaction.Transit))
+    {
+        throw new InvalidDataException(
+            "Minimap extract master visibility did not override faction filters.");
     }
 
     var categories = ItemsDataService.Instance;

@@ -36,8 +36,10 @@ namespace TarkovHelper.Models
         Unavailable,
 
         /// <summary>
-        /// All start conditions are met, but the quest has not actually been accepted yet
+        /// Legacy persisted value. Eligible quests are normalized to Active because
+        /// the helper has no separate quest-accept action.
         /// </summary>
+        [Obsolete("Eligible quests are represented as Active.")]
         Available
     }
 }

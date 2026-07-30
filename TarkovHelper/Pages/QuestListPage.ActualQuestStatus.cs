@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using System.Windows.Threading;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
@@ -9,9 +8,6 @@ namespace TarkovHelper.Pages;
 
 public partial class QuestListPage
 {
-    private static readonly Brush AvailableBrush =
-        new SolidColorBrush(Color.FromRgb(0x00, 0x96, 0x88));
-
     private bool _actualStatusEventsSubscribed;
 
     private void InitializeActualQuestStatusTracking()
@@ -23,15 +19,12 @@ public partial class QuestListPage
     private async void ActualQuestStatus_Loaded(object sender, RoutedEventArgs e)
     {
         SubscribeActualStatusEvents();
-        EnsureAvailableStatusFilter();
+        RemoveLegacyAvailableStatusFilter();
 
         await WaitForQuestDataAsync();
         if (_isUnloaded)
             return;
 
-        // 공유 로그 스캔이 끝나기 전에는 조건만 충족한 퀘스트를 진행 중으로 오인하지 않습니다.
-        ApplyActualQuestStatuses();
-        await ActualQuestStatusService.Instance.RefreshFromLogsAsync();
         ApplyActualQuestStatuses();
     }
 
@@ -59,15 +52,10 @@ public partial class QuestListPage
 
             var status = evaluator.Evaluate(viewModel.Task);
             viewModel.Status = status;
-            viewModel.StatusText = status == QuestStatus.Available
-                ? "수주 가능"
-                : GetStatusText(status, viewModel.Task);
-            viewModel.StatusBackground = status == QuestStatus.Available
-                ? AvailableBrush
-                : GetStatusBrush(status);
+            viewModel.StatusText = GetStatusText(status, viewModel.Task);
+            viewModel.StatusBackground = GetStatusBrush(status);
             viewModel.CompleteButtonVisibility =
-                status is QuestStatus.Active or QuestStatus.Available or
-                    QuestStatus.Locked or QuestStatus.LevelLocked
+                status is QuestStatus.Active or QuestStatus.Locked or QuestStatus.LevelLocked
                     ? Visibility.Visible
                     : Visibility.Collapsed;
         }
@@ -115,23 +103,31 @@ public partial class QuestListPage
             : Visibility.Collapsed;
     }
 
-    private void EnsureAvailableStatusFilter()
+    private void RemoveLegacyAvailableStatusFilter()
     {
-        var alreadyExists = CmbStatus.Items
+        var legacyItems = CmbStatus.Items
             .OfType<ComboBoxItem>()
-            .Any(item => string.Equals(
+            .Where(item => string.Equals(
                 item.Tag?.ToString(),
-                nameof(QuestStatus.Available),
-                StringComparison.OrdinalIgnoreCase));
+                "Available",
+                StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
-        if (!alreadyExists)
+        if (legacyItems.Count == 0)
+            return;
+
+        var selectedLegacyItem = legacyItems.Contains(CmbStatus.SelectedItem as ComboBoxItem);
+        foreach (var item in legacyItems)
+            CmbStatus.Items.Remove(item);
+
+        if (selectedLegacyItem)
         {
-            // 기존 인덱스 Active=0, All=1을 유지하기 위해 마지막에 추가합니다.
-            CmbStatus.Items.Add(new ComboBoxItem
-            {
-                Content = "수주 가능",
-                Tag = nameof(QuestStatus.Available)
-            });
+            CmbStatus.SelectedItem = CmbStatus.Items
+                .OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(
+                    item.Tag?.ToString(),
+                    QuestStatusSelector.DefaultStatus,
+                    StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -145,7 +141,6 @@ public partial class QuestListPage
             : 0;
 
         var active = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Active);
-        var available = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Available);
         var locked = _allQuestViewModels.Count(vm =>
             vm.Status is QuestStatus.Locked or QuestStatus.LevelLocked);
         var done = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Done);
@@ -155,7 +150,7 @@ public partial class QuestListPage
 
         TxtStats.Text =
             $"레벨 {playerLevel} | {_allQuestViewModels.Count}개 중 {filteredCount}개 표시 중 | " +
-            $"진행 중: {active} | 수주 가능: {available} | 잠김: {locked} | " +
+            $"진행 중: {active} | 잠김: {locked} | " +
             $"완료: {done} | 실패: {failed} | 불가: {unavailable}";
     }
 
@@ -173,7 +168,6 @@ public partial class QuestListPage
         SettingsService.Instance.HasUnheardEditionChanged += ActualStatus_BoolSettingChanged;
         SettingsService.Instance.PrestigeLevelChanged += ActualStatus_IntSettingChanged;
         SettingsService.Instance.DspDecodeCountChanged += ActualStatus_IntSettingChanged;
-        ActualQuestStatusService.Instance.StatusChanged += ActualStatus_ProgressChanged;
         _loc.LanguageChanged += QuestLocalization_LanguageChanged;
 
         TxtSearch.TextChanged += ActualStatus_FilterChanged;
@@ -204,7 +198,6 @@ public partial class QuestListPage
         SettingsService.Instance.HasUnheardEditionChanged -= ActualStatus_BoolSettingChanged;
         SettingsService.Instance.PrestigeLevelChanged -= ActualStatus_IntSettingChanged;
         SettingsService.Instance.DspDecodeCountChanged -= ActualStatus_IntSettingChanged;
-        ActualQuestStatusService.Instance.StatusChanged -= ActualStatus_ProgressChanged;
         _loc.LanguageChanged -= QuestLocalization_LanguageChanged;
 
         TxtSearch.TextChanged -= ActualStatus_FilterChanged;

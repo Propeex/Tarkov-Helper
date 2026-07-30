@@ -226,15 +226,21 @@ public sealed class OverlayMiniMapService : IDisposable
     private void SubscribeHotkeys()
     {
         var hooks = GlobalKeyboardHookService.Instance;
-        hooks.OverlayTogglePressed -= OnOverlayTogglePressed;
-        hooks.OverlaySettingsPressed -= OnSettingsPressed;
-        hooks.OverlayZoomInPressed -= OnZoomInPressed;
-        hooks.OverlayZoomOutPressed -= OnZoomOutPressed;
+        UnsubscribeHotkeys();
 
         hooks.OverlayTogglePressed += OnOverlayTogglePressed;
         hooks.OverlaySettingsPressed += OnSettingsPressed;
         hooks.OverlayZoomInPressed += OnZoomInPressed;
         hooks.OverlayZoomOutPressed += OnZoomOutPressed;
+        hooks.OverlayFloorUpPressed += OnFloorUpPressed;
+        hooks.OverlayFloorDownPressed += OnFloorDownPressed;
+        hooks.OverlayOpacityIncreasePressed += OnOpacityIncreasePressed;
+        hooks.OverlayOpacityDecreasePressed += OnOpacityDecreasePressed;
+        hooks.OverlayCenterPlayerPressed += OnCenterPlayerPressed;
+        hooks.OverlayToggleViewModePressed += OnToggleViewModePressed;
+        hooks.OverlayToggleClickThroughPressed += OnToggleClickThroughPressed;
+        hooks.OverlayResetViewPressed += OnResetViewPressed;
+        hooks.OverlayResumeAutoFloorPressed += OnResumeAutoFloorPressed;
         SyncHotkeys();
     }
 
@@ -245,33 +251,54 @@ public sealed class OverlayMiniMapService : IDisposable
         hooks.OverlaySettingsPressed -= OnSettingsPressed;
         hooks.OverlayZoomInPressed -= OnZoomInPressed;
         hooks.OverlayZoomOutPressed -= OnZoomOutPressed;
+        hooks.OverlayFloorUpPressed -= OnFloorUpPressed;
+        hooks.OverlayFloorDownPressed -= OnFloorDownPressed;
+        hooks.OverlayOpacityIncreasePressed -= OnOpacityIncreasePressed;
+        hooks.OverlayOpacityDecreasePressed -= OnOpacityDecreasePressed;
+        hooks.OverlayCenterPlayerPressed -= OnCenterPlayerPressed;
+        hooks.OverlayToggleViewModePressed -= OnToggleViewModePressed;
+        hooks.OverlayToggleClickThroughPressed -= OnToggleClickThroughPressed;
+        hooks.OverlayResetViewPressed -= OnResetViewPressed;
+        hooks.OverlayResumeAutoFloorPressed -= OnResumeAutoFloorPressed;
     }
 
-    private void OnOverlayTogglePressed()
-    {
+    private void OnOverlayTogglePressed() =>
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(ToggleOverlay);
-    }
 
-    private void OnSettingsPressed()
-    {
+    private void OnSettingsPressed() =>
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(ShowSettingsWindow);
-    }
 
-    private void OnZoomInPressed()
+    private void OnZoomInPressed() => ZoomIn();
+private void OnZoomOutPressed() => ZoomOut();
+private void OnFloorUpPressed() => MoveFloorUp();
+private void OnFloorDownPressed() => MoveFloorDown();
+private void OnOpacityIncreasePressed() => IncreaseOpacity();
+private void OnOpacityDecreasePressed() => DecreaseOpacity();
+private void OnCenterPlayerPressed() => CenterPlayer();
+private void OnToggleViewModePressed() => ToggleViewMode();
+private void OnToggleClickThroughPressed() => ToggleClickThrough();
+private void OnResetViewPressed() => ResetView();
+private void OnResumeAutoFloorPressed() => ResumeAutomaticFloorTracking();
+
+public void ZoomIn() => DispatchOverlay(window => window.ZoomIn());
+public void ZoomOut() => DispatchOverlay(window => window.ZoomOut());
+public void MoveFloorUp() => DispatchOverlay(window => window.MoveFloorUp());
+public void MoveFloorDown() => DispatchOverlay(window => window.MoveFloorDown());
+public void IncreaseOpacity() => DispatchOverlay(window => window.IncreaseOpacity());
+public void DecreaseOpacity() => DispatchOverlay(window => window.DecreaseOpacity());
+public void CenterPlayer() => DispatchOverlay(window => window.CenterPlayer());
+public void ToggleViewMode() => DispatchOverlay(window => window.ToggleViewMode());
+public void ToggleClickThrough() => DispatchOverlay(window => window.ToggleClickThrough());
+public void ResetView() => DispatchOverlay(window => window.ResetView());
+public void ResumeAutomaticFloorTracking() =>
+    DispatchOverlay(window => window.ResumeAutomaticFloorTracking());
+
+    private void DispatchOverlay(Action<OverlayMiniMapWindow> action)
     {
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             if (_overlayWindow != null && IsOverlayVisible)
-                _overlayWindow.ZoomIn();
-        });
-    }
-
-    private void OnZoomOutPressed()
-    {
-        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            if (_overlayWindow != null && IsOverlayVisible)
-                _overlayWindow.ZoomOut();
+                action(_overlayWindow);
         });
     }
 
@@ -376,7 +403,7 @@ public sealed class OverlayMiniMapService : IDisposable
 
         if (_settingsWindow == null || !_settingsWindow.IsVisible)
         {
-            _settingsWindow = new OverlaySettingsWindow(_settings, _overlayWindow);
+            _settingsWindow = new OverlaySettingsWindow(_settings, this);
             _settingsWindow.SettingsApplied += OnSettingsApplied;
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
@@ -387,17 +414,28 @@ public sealed class OverlayMiniMapService : IDisposable
     }
 
     private void OnSettingsApplied(OverlayMiniMapSettings settings)
-    {
-        _settings.CopyFrom(settings);
-        SyncHotkeys();
-        QueueSettingsSave();
-        SettingsChanged?.Invoke(_settings);
-    }
+{
+    _settings.CopyFrom(settings);
+    SyncHotkeys();
+    QueueSettingsSave();
+    _overlayWindow?.ApplyConfiguredSettings();
+    SettingsChanged?.Invoke(_settings);
+}
 
     private void SyncHotkeys()
     {
-        GlobalKeyboardHookService.Instance.ZoomInKey = _settings.ZoomInKey;
-        GlobalKeyboardHookService.Instance.ZoomOutKey = _settings.ZoomOutKey;
+        var hooks = GlobalKeyboardHookService.Instance;
+        hooks.ZoomInKey = _settings.ZoomInKey;
+        hooks.ZoomOutKey = _settings.ZoomOutKey;
+        hooks.FloorUpKey = _settings.FloorUpKey;
+        hooks.FloorDownKey = _settings.FloorDownKey;
+        hooks.OpacityIncreaseKey = _settings.OpacityIncreaseKey;
+        hooks.OpacityDecreaseKey = _settings.OpacityDecreaseKey;
+        hooks.CenterPlayerKey = _settings.CenterPlayerKey;
+        hooks.ToggleViewModeKey = _settings.ToggleViewModeKey;
+        hooks.ToggleClickThroughKey = _settings.ToggleClickThroughKey;
+        hooks.ResetViewKey = _settings.ResetViewKey;
+        hooks.ResumeAutoFloorKey = _settings.ResumeAutoFloorKey;
     }
 
     public void Dispose()

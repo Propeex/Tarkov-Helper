@@ -43,11 +43,14 @@
                 <!-- SVG 맵 이미지 -->
                 <svgc:SvgViewbox x:Name="MapSvg" Stretch="None"/>
 
-                <!-- 탈출구 마커 컨테이너 -->
-                <Canvas x:Name="ExtractMarkersContainer" ClipToBounds="False"/>
+                <!-- 지도 탭의 PMC/보스/레버 등 일반 마커 컨테이너 -->
+                <Canvas x:Name="MapMarkersContainer" ClipToBounds="False" IsHitTestVisible="False"/>
 
-                <!-- 퀘스트 마커 컨테이너 -->
-                <Canvas x:Name="QuestMarkersContainer" ClipToBounds="False"/>
+                <!-- 탈출구 마커 컨테이너 -->
+                <Canvas x:Name="ExtractMarkersContainer" ClipToBounds="False" IsHitTestVisible="False"/>
+
+                <!-- 퀘스트 마커 컨테이너 (현재 지도 탭에서 비활성화된 레거시 계층) -->
+                <Canvas x:Name="QuestMarkersContainer" ClipToBounds="False" IsHitTestVisible="False" Visibility="Collapsed"/>
 
                 <!-- 플레이어 마커 -->
                 <Canvas x:Name="PlayerMarkerContainer" Visibility="Collapsed">
@@ -79,6 +82,28 @@
                     </Polygon>
                 </Canvas>
             </Canvas>
+
+            <!-- 현재 층 및 자동/수동 모드 표시 -->
+            <Border x:Name="FloorIndicator"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
+                    Margin="8"
+                    Padding="7,4"
+                    Background="#B0202020"
+                    CornerRadius="4"
+                    IsHitTestVisible="False"
+                    Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="TxtFloorName"
+                               Foreground="White"
+                               FontSize="12"
+                               FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtFloorMode"
+                               Foreground="#A0C4FF"
+                               FontSize="10"
+                               Margin="6,1,0,0"/>
+                </StackPanel>
+            </Border>
 
             <!-- 맵 없음 메시지 -->
             <TextBlock x:Name="TxtNoMap"
