@@ -11,10 +11,14 @@ namespace TarkovHelper.Windows.Dialogs;
 /// </summary>
 public partial class OverlaySettingsWindow : Window
 {
+    private const double DefaultOtherFloorOpacityPercent = 30.0;
+
     private readonly OverlayMiniMapSettings _settings;
     private readonly OverlayMiniMapService _overlayService;
     private readonly Dictionary<OverlayMiniMapHotkeyAction, Button> _hotkeyButtons;
     private bool _isInitializing = true;
+    private bool _isSyncingCurrentFloorOnly;
+    private double _lastOtherFloorOpacityPercent = DefaultOtherFloorOpacityPercent;
     private OverlayMiniMapHotkeyAction? _captureAction;
 
     public event Action<OverlayMiniMapSettings>? SettingsApplied;
@@ -47,9 +51,24 @@ public partial class OverlaySettingsWindow : Window
 
     private void LoadSettings()
     {
-        SliderOpacity.Value = Math.Clamp(_settings.Opacity, OverlayMiniMapSettings.MinOpacity, OverlayMiniMapSettings.MaxOpacity) * 100;
-        SliderOtherFloorOpacity.Value = Math.Clamp(_settings.OtherFloorOpacity, OverlayMiniMapSettings.MinOtherFloorOpacity, OverlayMiniMapSettings.MaxOtherFloorOpacity) * 100;
-        SliderZoom.Value = Math.Clamp(_settings.ZoomLevel, OverlayMiniMapSettings.MinZoom, OverlayMiniMapSettings.MaxZoom) * 100;
+        SliderOpacity.Value = Math.Clamp(
+            _settings.Opacity,
+            OverlayMiniMapSettings.MinOpacity,
+            OverlayMiniMapSettings.MaxOpacity) * 100;
+
+        var otherFloorOpacityPercent = Math.Clamp(
+            _settings.OtherFloorOpacity,
+            OverlayMiniMapSettings.MinOtherFloorOpacity,
+            OverlayMiniMapSettings.MaxOtherFloorOpacity) * 100;
+        SliderOtherFloorOpacity.Value = otherFloorOpacityPercent;
+        if (otherFloorOpacityPercent > 0.5)
+            _lastOtherFloorOpacityPercent = otherFloorOpacityPercent;
+        SyncCurrentFloorOnlyUi(otherFloorOpacityPercent <= 0.5);
+
+        SliderZoom.Value = Math.Clamp(
+            _settings.ZoomLevel,
+            OverlayMiniMapSettings.MinZoom,
+            OverlayMiniMapSettings.MaxZoom) * 100;
         SliderMarkerSize.Value = Math.Clamp(_settings.PlayerMarkerSize, 0.5, 3.0) * 100;
 
         ChkAutoFloorSelection.IsChecked = _settings.AutoFloorSelection;
@@ -105,22 +124,22 @@ public partial class OverlaySettingsWindow : Window
     }
 
     private void ApplySettings()
-{
-    if (_isInitializing)
-        return;
+    {
+        if (_isInitializing)
+            return;
 
-    _settings.Opacity = SliderOpacity.Value / 100.0;
-    _settings.OtherFloorOpacity = SliderOtherFloorOpacity.Value / 100.0;
-    _settings.ZoomLevel = SliderZoom.Value / 100.0;
-    _settings.PlayerMarkerSize = SliderMarkerSize.Value / 100.0;
-    _settings.AutoFloorSelection = ChkAutoFloorSelection.IsChecked == true;
-    _settings.ViewMode = RbTracking.IsChecked == true
-        ? MiniMapViewMode.PlayerTracking
-        : MiniMapViewMode.Fixed;
-    _settings.ClickThrough = ChkClickThrough.IsChecked == true;
+        _settings.Opacity = SliderOpacity.Value / 100.0;
+        _settings.OtherFloorOpacity = SliderOtherFloorOpacity.Value / 100.0;
+        _settings.ZoomLevel = SliderZoom.Value / 100.0;
+        _settings.PlayerMarkerSize = SliderMarkerSize.Value / 100.0;
+        _settings.AutoFloorSelection = ChkAutoFloorSelection.IsChecked == true;
+        _settings.ViewMode = RbTracking.IsChecked == true
+            ? MiniMapViewMode.PlayerTracking
+            : MiniMapViewMode.Fixed;
+        _settings.ClickThrough = ChkClickThrough.IsChecked == true;
 
-    SettingsApplied?.Invoke(_settings);
-}
+        SettingsApplied?.Invoke(_settings);
+    }
 
     private void SliderOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -131,6 +150,13 @@ public partial class OverlaySettingsWindow : Window
     private void SliderOtherFloorOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         UpdateDisplays();
+        if (_isInitializing || _isSyncingCurrentFloorOnly)
+            return;
+
+        var currentFloorOnly = e.NewValue <= 0.5;
+        if (!currentFloorOnly)
+            _lastOtherFloorOpacityPercent = e.NewValue;
+        SyncCurrentFloorOnlyUi(currentFloorOnly);
         ApplySettings();
     }
 
@@ -144,6 +170,57 @@ public partial class OverlaySettingsWindow : Window
     {
         UpdateDisplays();
         ApplySettings();
+    }
+
+    private void CurrentFloorOnly_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isInitializing || _isSyncingCurrentFloorOnly)
+            return;
+
+        var currentFloorOnly = ChkCurrentFloorOnly.IsChecked == true;
+        _isSyncingCurrentFloorOnly = true;
+        try
+        {
+            if (currentFloorOnly)
+            {
+                if (SliderOtherFloorOpacity.Value > 0.5)
+                    _lastOtherFloorOpacityPercent = SliderOtherFloorOpacity.Value;
+                SliderOtherFloorOpacity.Value = 0;
+                SliderOtherFloorOpacity.IsEnabled = false;
+            }
+            else
+            {
+                SliderOtherFloorOpacity.IsEnabled = true;
+                if (SliderOtherFloorOpacity.Value <= 0.5)
+                {
+                    SliderOtherFloorOpacity.Value = Math.Clamp(
+                        _lastOtherFloorOpacityPercent,
+                        1.0,
+                        100.0);
+                }
+            }
+        }
+        finally
+        {
+            _isSyncingCurrentFloorOnly = false;
+        }
+
+        UpdateDisplays();
+        ApplySettings();
+    }
+
+    private void SyncCurrentFloorOnlyUi(bool currentFloorOnly)
+    {
+        _isSyncingCurrentFloorOnly = true;
+        try
+        {
+            ChkCurrentFloorOnly.IsChecked = currentFloorOnly;
+            SliderOtherFloorOpacity.IsEnabled = !currentFloorOnly;
+        }
+        finally
+        {
+            _isSyncingCurrentFloorOnly = false;
+        }
     }
 
     private void AutoFloorSelection_Changed(object sender, RoutedEventArgs e) => ApplySettings();
@@ -263,9 +340,9 @@ public partial class OverlaySettingsWindow : Window
     private void BtnClose_Click(object sender, RoutedEventArgs e) => Close();
 
     protected override void OnClosed(EventArgs e)
-{
-    GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
-    _overlayService.SettingsChanged -= OnOverlaySettingsChanged;
-    base.OnClosed(e);
-}
+    {
+        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+        _overlayService.SettingsChanged -= OnOverlaySettingsChanged;
+        base.OnClosed(e);
+    }
 }
