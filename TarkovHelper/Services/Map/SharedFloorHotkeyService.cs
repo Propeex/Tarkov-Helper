@@ -5,8 +5,8 @@ using TarkovHelper.Services.Logging;
 namespace TarkovHelper.Services.Map;
 
 /// <summary>
-/// 미니맵 표시 여부와 무관하게 지도 층 이동 단축키를 전달합니다.
-/// 기존 키보드 훅과 동일하게 입력을 소비하지 않고 관찰만 합니다.
+/// 미니맵이 숨겨져 있을 때 일반 지도에 층 이동 단축키를 전달합니다.
+/// 미니맵이 보이면 기존 미니맵 훅이 처리하고 공용 층 상태를 통해 일반 지도를 갱신합니다.
 /// </summary>
 public sealed class SharedFloorHotkeyService : IDisposable
 {
@@ -93,6 +93,7 @@ public sealed class SharedFloorHotkeyService : IDisposable
 
         if (!_pressedKeys.Add(virtualKey) ||
             GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed ||
+            OverlayMiniMapService.Instance.IsOverlayVisible ||
             !IsTarkovOrHelperForeground())
         {
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
