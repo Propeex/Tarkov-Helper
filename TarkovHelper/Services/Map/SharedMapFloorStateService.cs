@@ -32,7 +32,7 @@ public sealed class SharedMapFloorStateService
         if (string.IsNullOrWhiteSpace(mapKey))
             return;
 
-        SharedMapFloorChangedEventArgs? args = null;
+        SharedMapFloorChangedEventArgs args;
         lock (_syncRoot)
         {
             var changed = !string.Equals(MapKey, mapKey, StringComparison.OrdinalIgnoreCase) ||
