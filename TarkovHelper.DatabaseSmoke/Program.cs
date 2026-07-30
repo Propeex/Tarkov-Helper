@@ -4,6 +4,7 @@ using TarkovHelper.Models;
 using TarkovHelper.Models.Map;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Map;
+using TarkovHelper.Services.Settings;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
@@ -266,6 +267,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     await RunPersistenceWriteQueueSmokeAsync();
     await RunObjectiveProfileIsolationSmokeAsync();
     await RunUserProgressResetSmokeAsync();
+    RunMiniMapVisibilitySourceSmoke();
     RunApplicationBehaviorSmoke();
 
     Console.WriteLine(
@@ -474,6 +476,61 @@ static async Task RunOutageHandlingSmokeAsync(string databasePath)
     Console.WriteLine(
         $"Outage handling smoke passed: elapsed={stopwatch.Elapsed.TotalMilliseconds:F0}ms, " +
         $"static={outageHandler.StaticRequestCount}, graphql={outageHandler.GraphQlRequestCount}, etaHidden=true");
+}
+
+static void RunMiniMapVisibilitySourceSmoke()
+{
+    var markerSettings = MapSettings.Instance;
+    var applicationSettings = SettingsService.Instance;
+    var original = (
+        markerSettings.ShowPmcSpawns,
+        markerSettings.ShowSniperScavs,
+        markerSettings.ShowRogues,
+        markerSettings.ShowCultists,
+        markerSettings.ShowLevers,
+        markerSettings.ShowBosses,
+        applicationSettings.MapShowExtracts,
+        applicationSettings.MapShowPmcExtracts,
+        applicationSettings.MapShowScavExtracts,
+        applicationSettings.MapShowTransits);
+
+    try
+    {
+        markerSettings.ShowPmcSpawns = true;
+        markerSettings.ShowSniperScavs = false;
+        markerSettings.ShowRogues = true;
+        markerSettings.ShowCultists = false;
+        markerSettings.ShowLevers = true;
+        markerSettings.ShowBosses = false;
+        applicationSettings.MapShowExtracts = true;
+        applicationSettings.MapShowPmcExtracts = false;
+        applicationSettings.MapShowScavExtracts = true;
+        applicationSettings.MapShowTransits = false;
+
+        var captured = MiniMapMarkerVisibilityState.Capture(markerSettings);
+        if (!captured.ShowPmcSpawns || captured.ShowSniperScavs ||
+            !captured.ShowRogues || captured.ShowCultists ||
+            !captured.ShowLevers || captured.ShowBosses ||
+            !captured.ShowExtracts || captured.ShowPmcExtracts ||
+            !captured.ShowScavExtracts || captured.ShowTransits)
+        {
+            throw new InvalidDataException(
+                "Minimap visibility snapshot did not read the live map-tab setting sources.");
+        }
+    }
+    finally
+    {
+        markerSettings.ShowPmcSpawns = original.ShowPmcSpawns;
+        markerSettings.ShowSniperScavs = original.ShowSniperScavs;
+        markerSettings.ShowRogues = original.ShowRogues;
+        markerSettings.ShowCultists = original.ShowCultists;
+        markerSettings.ShowLevers = original.ShowLevers;
+        markerSettings.ShowBosses = original.ShowBosses;
+        applicationSettings.MapShowExtracts = original.MapShowExtracts;
+        applicationSettings.MapShowPmcExtracts = original.MapShowPmcExtracts;
+        applicationSettings.MapShowScavExtracts = original.MapShowScavExtracts;
+        applicationSettings.MapShowTransits = original.MapShowTransits;
+    }
 }
 
 static void RunApplicationBehaviorSmoke()
