@@ -67,4 +67,23 @@ public readonly record struct MiniMapMarkerVisibilityState(
             _ => true
         };
     }
+
+    /// <summary>
+    /// Unknown floor detection must not be treated as the main floor. Some maps
+    /// contain floor-tagged markers without detection ranges, so an unknown floor
+    /// keeps every marker fully visible until a reliable floor is available.
+    /// </summary>
+    public static bool IsCurrentFloor(string? markerFloorId, string? detectedFloorId)
+    {
+        if (string.IsNullOrWhiteSpace(detectedFloorId))
+            return true;
+
+        var effectiveMarkerFloor = string.IsNullOrWhiteSpace(markerFloorId)
+            ? "main"
+            : markerFloorId;
+        return string.Equals(
+            effectiveMarkerFloor,
+            detectedFloorId,
+            StringComparison.OrdinalIgnoreCase);
+    }
 }
