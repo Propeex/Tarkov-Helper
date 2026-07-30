@@ -1,0 +1,260 @@
+name: Fix v1.6.4 Extract Grouping and Overlay Routing
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'agent/v1.6.4-quest-active-minimap-markers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.6.4-quest-active-minimap-markers
+          fetch-depth: 0
+
+      - name: Apply extract grouping and service-routed settings
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one match, found {count}: {old[:120]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          window = Path('TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs')
+          replace_once(
+              window,
+              '''        var addedCount = 0;
+
+                      foreach (var extract in extracts)
+                      {
+                          ct.ThrowIfCancellationRequested();
+                          if (!visibility.IsExtractVisible(extract.Faction))
+                              continue;
+
+                          var (screenX, screenY) = _currentMapConfig!.GameToScreenForPlayer(extract.X, extract.Z);
+                          const double markerSize = 10.0;
+                          var marker = CreateMarkerEllipse(GetExtractColor(extract.Faction), markerSize);
+                          marker.ToolTip = extract.Name;
+                          marker.IsHitTestVisible = false;
+                          marker.Opacity = IsCurrentFloor(extract.FloorId, currentFloorId)
+                              ? 0.9
+                              : Math.Clamp(_settings.OtherFloorOpacity, 0.0, 1.0);
+                          Canvas.SetLeft(marker, screenX - markerSize / 2);
+                          Canvas.SetTop(marker, screenY - markerSize / 2);
+                          ExtractMarkersContainer.Children.Add(marker);
+                          addedCount++;
+                      }
+              ''',
+              '''        var addedCount = 0;
+                      var displayExtracts = MapExtractDisplayGrouping.GroupForDisplay(extracts);
+
+                      foreach (var display in displayExtracts)
+                      {
+                          ct.ThrowIfCancellationRequested();
+                          if (!visibility.IsExtractVisible(display.Faction))
+                              continue;
+
+                          var extract = display.Extract;
+                          var (screenX, screenY) = _currentMapConfig!.GameToScreenForPlayer(extract.X, extract.Z);
+                          const double markerSize = 10.0;
+                          var marker = CreateMarkerEllipse(GetExtractColor(display.Faction), markerSize);
+                          marker.ToolTip = extract.Name;
+                          marker.IsHitTestVisible = false;
+                          marker.Opacity = IsCurrentFloor(extract.FloorId, currentFloorId)
+                              ? 0.9
+                              : Math.Clamp(_settings.OtherFloorOpacity, 0.0, 1.0);
+                          Canvas.SetLeft(marker, screenX - markerSize / 2);
+                          Canvas.SetTop(marker, screenY - markerSize / 2);
+                          ExtractMarkersContainer.Children.Add(marker);
+                          addedCount++;
+                      }
+              ''')
+
+          service = Path('TarkovHelper/Services/OverlayMiniMapService.cs')
+          text = service.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  '''    private void OnZoomInPressed() => DispatchOverlay(window => window.ZoomIn());
+                      private void OnZoomOutPressed() => DispatchOverlay(window => window.ZoomOut());
+                      private void OnFloorUpPressed() => DispatchOverlay(window => window.MoveFloorUp());
+                      private void OnFloorDownPressed() => DispatchOverlay(window => window.MoveFloorDown());
+                      private void OnOpacityIncreasePressed() => DispatchOverlay(window => window.IncreaseOpacity());
+                      private void OnOpacityDecreasePressed() => DispatchOverlay(window => window.DecreaseOpacity());
+                      private void OnCenterPlayerPressed() => DispatchOverlay(window => window.CenterPlayer());
+                      private void OnToggleViewModePressed() => DispatchOverlay(window => window.ToggleViewMode());
+                      private void OnToggleClickThroughPressed() => DispatchOverlay(window => window.ToggleClickThrough());
+                      private void OnResetViewPressed() => DispatchOverlay(window => window.ResetView());
+                      private void OnResumeAutoFloorPressed() => DispatchOverlay(window => window.ResumeAutomaticFloorTracking());
+              ''',
+                  '''    private void OnZoomInPressed() => ZoomIn();
+                      private void OnZoomOutPressed() => ZoomOut();
+                      private void OnFloorUpPressed() => MoveFloorUp();
+                      private void OnFloorDownPressed() => MoveFloorDown();
+                      private void OnOpacityIncreasePressed() => IncreaseOpacity();
+                      private void OnOpacityDecreasePressed() => DecreaseOpacity();
+                      private void OnCenterPlayerPressed() => CenterPlayer();
+                      private void OnToggleViewModePressed() => ToggleViewMode();
+                      private void OnToggleClickThroughPressed() => ToggleClickThrough();
+                      private void OnResetViewPressed() => ResetView();
+                      private void OnResumeAutoFloorPressed() => ResumeAutomaticFloorTracking();
+
+                      public void ZoomIn() => DispatchOverlay(window => window.ZoomIn());
+                      public void ZoomOut() => DispatchOverlay(window => window.ZoomOut());
+                      public void MoveFloorUp() => DispatchOverlay(window => window.MoveFloorUp());
+                      public void MoveFloorDown() => DispatchOverlay(window => window.MoveFloorDown());
+                      public void IncreaseOpacity() => DispatchOverlay(window => window.IncreaseOpacity());
+                      public void DecreaseOpacity() => DispatchOverlay(window => window.DecreaseOpacity());
+                      public void CenterPlayer() => DispatchOverlay(window => window.CenterPlayer());
+                      public void ToggleViewMode() => DispatchOverlay(window => window.ToggleViewMode());
+                      public void ToggleClickThrough() => DispatchOverlay(window => window.ToggleClickThrough());
+                      public void ResetView() => DispatchOverlay(window => window.ResetView());
+                      public void ResumeAutomaticFloorTracking() =>
+                          DispatchOverlay(window => window.ResumeAutomaticFloorTracking());
+              '''),
+              (
+                  '            _settingsWindow = new OverlaySettingsWindow(_settings, _overlayWindow);\n',
+                  '            _settingsWindow = new OverlaySettingsWindow(_settings, this);\n'),
+              (
+                  '''        QueueSettingsSave();
+                      SettingsChanged?.Invoke(_settings);
+                  }
+              ''',
+                  '''        QueueSettingsSave();
+                      _overlayWindow?.ApplyConfiguredSettings();
+                      SettingsChanged?.Invoke(_settings);
+                  }
+              ''')
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{service}: expected one match, found {count}: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+          service.write_text(text, encoding='utf-8', newline='\n')
+
+          dialog = Path('TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs')
+          text = dialog.read_text(encoding='utf-8')
+          replacements = [
+              ('    private readonly OverlayMiniMapWindow? _overlayWindow;\n',
+               '    private readonly OverlayMiniMapService _overlayService;\n'),
+              ('    public OverlaySettingsWindow(OverlayMiniMapSettings settings, OverlayMiniMapWindow? overlayWindow)\n',
+               '    public OverlaySettingsWindow(OverlayMiniMapSettings settings, OverlayMiniMapService overlayService)\n'),
+              ('''        _settings = settings.Clone();
+                      _overlayWindow = overlayWindow;
+                      if (_overlayWindow != null)
+                          _overlayWindow.SettingsChanged += OnOverlaySettingsChanged;
+              ''',
+               '''        _settings = settings.Clone();
+                      _overlayService = overlayService ?? throw new ArgumentNullException(nameof(overlayService));
+                      _overlayService.SettingsChanged += OnOverlaySettingsChanged;
+              '''),
+              ('''        SettingsApplied?.Invoke(_settings);
+                      ApplyToOverlay();
+                  }
+
+                  private void ApplyToOverlay()
+                  {
+                      if (_overlayWindow == null)
+                          return;
+
+                      try
+                      {
+                          _overlayWindow.ApplyConfiguredSettings();
+                      }
+                      catch (InvalidOperationException)
+                      {
+                          // 설정 창이 열린 상태에서 오버레이가 닫힌 경우에는 저장만 유지합니다.
+                      }
+                  }
+              ''',
+               '''        SettingsApplied?.Invoke(_settings);
+                  }
+              '''),
+              ('    private void BtnFloorUp_Click(object sender, RoutedEventArgs e) => _overlayWindow?.MoveFloorUp();\n',
+               '    private void BtnFloorUp_Click(object sender, RoutedEventArgs e) => _overlayService.MoveFloorUp();\n'),
+              ('    private void BtnFloorDown_Click(object sender, RoutedEventArgs e) => _overlayWindow?.MoveFloorDown();\n',
+               '    private void BtnFloorDown_Click(object sender, RoutedEventArgs e) => _overlayService.MoveFloorDown();\n'),
+              ('    private void BtnCenterPlayer_Click(object sender, RoutedEventArgs e) => _overlayWindow?.CenterPlayer();\n',
+               '    private void BtnCenterPlayer_Click(object sender, RoutedEventArgs e) => _overlayService.CenterPlayer();\n'),
+              ('        _overlayWindow?.ResumeAutomaticFloorTracking();\n',
+               '        _overlayService.ResumeAutomaticFloorTracking();\n'),
+              ('    private void BtnResetView_Click(object sender, RoutedEventArgs e) => _overlayWindow?.ResetView();\n',
+               '    private void BtnResetView_Click(object sender, RoutedEventArgs e) => _overlayService.ResetView();\n'),
+              ('''        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+                      if (_overlayWindow != null)
+                          _overlayWindow.SettingsChanged -= OnOverlaySettingsChanged;
+                      base.OnClosed(e);
+              ''',
+               '''        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+                      _overlayService.SettingsChanged -= OnOverlaySettingsChanged;
+                      base.OnClosed(e);
+              ''')
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{dialog}: expected one match, found {count}: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+          dialog.write_text(text, encoding='utf-8', newline='\n')
+
+          smoke = Path('TarkovHelper.DatabaseSmoke/Program.cs')
+          text = smoke.read_text(encoding='utf-8')
+          marker = '    var extractsDisabled = markerVisibility with { ShowExtracts = false };\n'
+          test = '''    var pairedExtracts = MapExtractDisplayGrouping.GroupForDisplay(new[]
+              {
+                  new MapExtract
+                  {
+                      Id = "paired-pmc",
+                      Name = "Crossroads",
+                      Faction = ExtractFaction.Pmc,
+                      X = 100,
+                      Z = 200
+                  },
+                  new MapExtract
+                  {
+                      Id = "paired-scav",
+                      Name = "Crossroads",
+                      Faction = ExtractFaction.Scav,
+                      X = 104,
+                      Z = 204
+                  }
+              });
+              if (pairedExtracts.Count != 1 ||
+                  pairedExtracts[0].Faction != ExtractFaction.Pmc ||
+                  pairedExtracts[0].SourceCount != 2 ||
+                  scavOnlyExtracts.IsExtractVisible(pairedExtracts[0].Faction))
+              {
+                  throw new InvalidDataException(
+                      "Paired PMC/Scav extracts were not grouped and classified as PMC.");
+              }
+
+              '''
+          if 'Paired PMC/Scav extracts were not grouped' not in text:
+              if text.count(marker) != 1:
+                  raise RuntimeError('Could not identify paired extract smoke insertion point.')
+              text = text.replace(marker, test + marker, 1)
+          smoke.write_text(text, encoding='utf-8', newline='\n')
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs \
+            TarkovHelper/Services/OverlayMiniMapService.cs \
+            TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs \
+            TarkovHelper.DatabaseSmoke/Program.cs
+          git commit -m "fix: group paired extracts and route settings through service"
+          git push origin HEAD:agent/v1.6.4-quest-active-minimap-markers
