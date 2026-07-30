@@ -269,5 +269,3 @@ public partial class OverlaySettingsWindow : Window
     base.OnClosed(e);
 }
 }
-}
-}
