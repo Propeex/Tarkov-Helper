@@ -1,0 +1,30 @@
+name: Export v1.6.4 Source Snapshot
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'agent/v1.6.4-quest-active-minimap-markers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: v164-source-snapshot
+          path: |
+            TarkovHelper
+            TarkovHelper.DatabaseSmoke
+            TarkovHelper.IconDownloader
+            TarkovHelper.sln
+            update.xml
+            .github/workflows/build.yml
+            .github/workflows/release.yml
+          if-no-files-found: error
