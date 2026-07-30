@@ -16,7 +16,7 @@ public sealed class SharedFloorHotkeyService : IDisposable
     private const int WmKeyUp = 0x0101;
     private const int WmSysKeyUp = 0x0105;
 
-    private static readonly ILogger Log = Logging.Log.For<SharedFloorHotkeyService>();
+    private static readonly ILogger Log = TarkovHelper.Services.Logging.Log.For<SharedFloorHotkeyService>();
     private static readonly Lazy<SharedFloorHotkeyService> LazyInstance =
         new(() => new SharedFloorHotkeyService());
 
