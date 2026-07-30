@@ -682,6 +682,17 @@ static void RunApplicationBehaviorSmoke()
             "Minimap marker visibility did not mirror the map-tab category settings.");
     }
 
+    var scavOnlyExtracts = markerVisibility with
+{
+    ShowPmcExtracts = false,
+    ShowScavExtracts = true
+};
+if (scavOnlyExtracts.IsExtractVisible(ExtractFaction.Shared))
+{
+    throw new InvalidDataException(
+        "Shared extracts must follow the PMC filter exactly like the map tab.");
+}
+
     var extractsDisabled = markerVisibility with { ShowExtracts = false };
     if (extractsDisabled.IsExtractVisible(ExtractFaction.Pmc) ||
         extractsDisabled.IsExtractVisible(ExtractFaction.Transit))
