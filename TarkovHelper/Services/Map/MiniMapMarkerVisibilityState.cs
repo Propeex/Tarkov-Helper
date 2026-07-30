@@ -21,20 +21,25 @@ public readonly record struct MiniMapMarkerVisibilityState(
     bool ShowScavExtracts,
     bool ShowTransits)
 {
-    public static MiniMapMarkerVisibilityState Capture(MapSettings settings)
+    public static MiniMapMarkerVisibilityState Capture(MapSettings markerSettings)
     {
-        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(markerSettings);
+
+        // Standard marker toggles are owned by MapSettings. Extract toggles on
+        // MapPage are still owned by SettingsService, so read that same live
+        // source instead of a separately cached MapSettings copy.
+        var applicationSettings = SettingsService.Instance;
         return new MiniMapMarkerVisibilityState(
-            settings.ShowPmcSpawns,
-            settings.ShowSniperScavs,
-            settings.ShowRogues,
-            settings.ShowCultists,
-            settings.ShowLevers,
-            settings.ShowBosses,
-            settings.ShowExtracts,
-            settings.ShowPmcExtracts,
-            settings.ShowScavExtracts,
-            settings.ShowTransits);
+            markerSettings.ShowPmcSpawns,
+            markerSettings.ShowSniperScavs,
+            markerSettings.ShowRogues,
+            markerSettings.ShowCultists,
+            markerSettings.ShowLevers,
+            markerSettings.ShowBosses,
+            applicationSettings.MapShowExtracts,
+            applicationSettings.MapShowPmcExtracts,
+            applicationSettings.MapShowScavExtracts,
+            applicationSettings.MapShowTransits);
     }
 
     public bool IsMapMarkerVisible(MarkerType type) => type switch
