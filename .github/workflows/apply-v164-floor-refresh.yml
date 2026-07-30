@@ -30,7 +30,7 @@ jobs:
               global text
               count = text.count(old)
               if count != 1:
-                  raise RuntimeError(f'Expected one match, found {count}: {old[:100]!r}')
+                  raise RuntimeError(f'Expected one match, found {count}: {old[:120]!r}')
               text = text.replace(old, new, 1)
 
           replace_once(
@@ -38,125 +38,93 @@ jobs:
               '    private CancellationTokenSource? _markerLoadCts;\n'
               '    private string? _currentMarkerFloorId;\n')
 
-          replace_once(
-              '''    private void OnPositionUpdated(object? sender, ScreenPosition position)
-              {
-                  Dispatcher.BeginInvoke(() =>
-                  {
-                      UpdatePlayerMarker(position);
-
-                      if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
-                      {
-                          CenterOnPlayer(position);
-                      }
-                  });
-              }
-              ''',
-              '''    private void OnPositionUpdated(object? sender, ScreenPosition position)
-              {
-                  Dispatcher.BeginInvoke(() =>
-                  {
-                      UpdatePlayerMarker(position);
-
-                      if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
-                      {
-                          CenterOnPlayer(position);
-                      }
-
-                      var detectedFloorId = DetectCurrentFloor(position);
-                      if (!string.Equals(
-                              _currentMarkerFloorId,
-                              detectedFloorId,
-                              StringComparison.OrdinalIgnoreCase))
-                      {
-                          _currentMarkerFloorId = detectedFloorId;
-                          QueueMarkerRefresh();
-                      }
-                  });
-              }
-              ''')
+          start = text.index('    private void OnPositionUpdated(object? sender, ScreenPosition position)')
+          end = text.index('\n    private void OnMapChanged', start)
+          position_block = (
+              '    private void OnPositionUpdated(object? sender, ScreenPosition position)\n'
+              '    {\n'
+              '        Dispatcher.BeginInvoke(() =>\n'
+              '        {\n'
+              '            UpdatePlayerMarker(position);\n\n'
+              '            if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)\n'
+              '            {\n'
+              '                CenterOnPlayer(position);\n'
+              '            }\n\n'
+              '            var detectedFloorId = DetectCurrentFloor(position);\n'
+              '            if (!string.Equals(\n'
+              '                    _currentMarkerFloorId,\n'
+              '                    detectedFloorId,\n'
+              '                    StringComparison.OrdinalIgnoreCase))\n'
+              '            {\n'
+              '                _currentMarkerFloorId = detectedFloorId;\n'
+              '                QueueMarkerRefresh();\n'
+              '            }\n'
+              '        });\n'
+              '    }\n'
+          )
+          text = text[:start] + position_block + text[end:]
 
           replace_once(
-              '''            _currentMapKey = mapKey;
-                          _currentMapConfig = _trackerService?.GetMapConfig(mapKey);
-              ''',
-              '''            _currentMapKey = mapKey;
-                          _currentMapConfig = _trackerService?.GetMapConfig(mapKey);
-                          _currentMarkerFloorId = null;
-              ''')
+              '            _currentMapKey = mapKey;\n'
+              '            _currentMapConfig = _trackerService?.GetMapConfig(mapKey);\n',
+              '            _currentMapKey = mapKey;\n'
+              '            _currentMapConfig = _trackerService?.GetMapConfig(mapKey);\n'
+              '            _currentMarkerFloorId = null;\n')
 
           replace_once(
-              '''            var mapSettings = MapSettings.Instance;
-                          var visibility = MiniMapMarkerVisibilityState.Capture(mapSettings);
-
-                          await LoadMapMarkersAsync(visibility, ct);
-                          if (visibility.ShowExtracts)
-                              await LoadExtractMarkersAsync(visibility, ct);
-              ''',
-              '''            var mapSettings = MapSettings.Instance;
-                          var visibility = MiniMapMarkerVisibilityState.Capture(mapSettings);
-                          var currentFloorId = DetectCurrentFloor();
-                          _currentMarkerFloorId = currentFloorId;
-
-                          await LoadMapMarkersAsync(visibility, currentFloorId, ct);
-                          if (visibility.ShowExtracts)
-                              await LoadExtractMarkersAsync(visibility, currentFloorId, ct);
-              ''')
+              '            var visibility = MiniMapMarkerVisibilityState.Capture(mapSettings);\n\n'
+              '            await LoadMapMarkersAsync(visibility, ct);\n'
+              '            if (visibility.ShowExtracts)\n'
+              '                await LoadExtractMarkersAsync(visibility, ct);\n',
+              '            var visibility = MiniMapMarkerVisibilityState.Capture(mapSettings);\n'
+              '            var currentFloorId = DetectCurrentFloor();\n'
+              '            _currentMarkerFloorId = currentFloorId;\n\n'
+              '            await LoadMapMarkersAsync(visibility, currentFloorId, ct);\n'
+              '            if (visibility.ShowExtracts)\n'
+              '                await LoadExtractMarkersAsync(visibility, currentFloorId, ct);\n')
 
           replace_once(
-              '''    private async Task LoadMapMarkersAsync(
-                      MiniMapMarkerVisibilityState visibility,
-                      CancellationToken ct)
-              ''',
-              '''    private async Task LoadMapMarkersAsync(
-                      MiniMapMarkerVisibilityState visibility,
-                      string? currentFloorId,
-                      CancellationToken ct)
-              ''')
+              '    private async Task LoadMapMarkersAsync(\n'
+              '        MiniMapMarkerVisibilityState visibility,\n'
+              '        CancellationToken ct)\n',
+              '    private async Task LoadMapMarkersAsync(\n'
+              '        MiniMapMarkerVisibilityState visibility,\n'
+              '        string? currentFloorId,\n'
+              '        CancellationToken ct)\n')
+
+          map_start = text.index('    private async Task LoadMapMarkersAsync(')
+          map_end = text.index('\n    private async Task LoadExtractMarkersAsync(', map_start)
+          map_segment = text[map_start:map_end]
+          old_floor = '        var currentFloorId = DetectCurrentFloor();\n'
+          if map_segment.count(old_floor) != 1:
+              raise RuntimeError('Could not identify map-marker floor capture.')
+          map_segment = map_segment.replace(old_floor, '', 1)
+          text = text[:map_start] + map_segment + text[map_end:]
 
           replace_once(
-              '''        ct.ThrowIfCancellationRequested();
-                      var currentFloorId = DetectCurrentFloor();
-                      var addedCount = 0;
-              ''',
-              '''        ct.ThrowIfCancellationRequested();
-                      var addedCount = 0;
-              ''')
+              '    private async Task LoadExtractMarkersAsync(\n'
+              '        MiniMapMarkerVisibilityState visibility,\n'
+              '        CancellationToken ct)\n',
+              '    private async Task LoadExtractMarkersAsync(\n'
+              '        MiniMapMarkerVisibilityState visibility,\n'
+              '        string? currentFloorId,\n'
+              '        CancellationToken ct)\n')
+
+          extract_start = text.index('    private async Task LoadExtractMarkersAsync(')
+          extract_end = text.index('\n    private FrameworkElement CreateMapMarkerElement(', extract_start)
+          extract_segment = text[extract_start:extract_end]
+          if extract_segment.count(old_floor) != 1:
+              raise RuntimeError('Could not identify extract-marker floor capture.')
+          extract_segment = extract_segment.replace(old_floor, '', 1)
+          text = text[:extract_start] + extract_segment + text[extract_end:]
 
           replace_once(
-              '''    private async Task LoadExtractMarkersAsync(
-                      MiniMapMarkerVisibilityState visibility,
-                      CancellationToken ct)
-              ''',
-              '''    private async Task LoadExtractMarkersAsync(
-                      MiniMapMarkerVisibilityState visibility,
-                      string? currentFloorId,
-                      CancellationToken ct)
-              ''')
-
+              '    private string? DetectCurrentFloor()\n',
+              '    private string? DetectCurrentFloor(ScreenPosition? position = null)\n')
           replace_once(
-              '''        var currentFloorId = DetectCurrentFloor();
-                      var addedCount = 0;
-              ''',
-              '''        var addedCount = 0;
-              ''')
-
-          replace_once(
-              '''    private string? DetectCurrentFloor()
-              {
-                  if (string.IsNullOrEmpty(_currentMapKey))
-                      return null;
-
-                  var original = _trackerService?.LastPosition?.OriginalPosition;
-              ''',
-              '''    private string? DetectCurrentFloor(ScreenPosition? position = null)
-              {
-                  if (string.IsNullOrEmpty(_currentMapKey))
-                      return null;
-
-                  var original = position?.OriginalPosition ??
-                                 _trackerService?.LastPosition?.OriginalPosition;
-              ''')
+              '        var original = _trackerService?.LastPosition?.OriginalPosition;\n',
+              '        var original = position?.OriginalPosition ??\n'
+              '                       _trackerService?.LastPosition?.OriginalPosition;\n')
 
           path.write_text(text, encoding='utf-8', newline='\n')
 
