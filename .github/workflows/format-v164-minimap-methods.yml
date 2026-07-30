@@ -1,0 +1,132 @@
+name: Format v1.6.4 Minimap Methods
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.head_ref == 'agent/v1.6.4-quest-active-minimap-markers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.6.4-quest-active-minimap-markers
+          fetch-depth: 0
+
+      - name: Normalize generated method indentation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_method(text: str, start_marker: str, end_marker: str, lines: list[str]) -> str:
+              start = text.index(start_marker)
+              end = text.index(end_marker, start)
+              replacement = '\n'.join(lines) + '\n\n'
+              return text[:start] + replacement + text[end:]
+
+          window = Path('TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs')
+          text = window.read_text(encoding='utf-8')
+          text = replace_method(text,
+              '    private void OnPositionUpdated(object? sender, ScreenPosition position)',
+              '    private void OnMapChanged(string mapKey)', [
+              '    private void OnPositionUpdated(object? sender, ScreenPosition position)',
+              '    {',
+              '        Dispatcher.BeginInvoke(() =>',
+              '        {',
+              '            UpdatePlayerMarker(position);',
+              '',
+              '            if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)',
+              '                CenterOnPlayer(position);',
+              '',
+              '            if (!_settings.AutoFloorSelection || _manualFloorSelection)',
+              '                return;',
+              '',
+              '            var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(',
+              '                _currentMapConfig?.Floors,',
+              '                DetectCurrentFloor(position));',
+              '            if (string.Equals(',
+              '                    _selectedFloorId,',
+              '                    automaticFloorId,',
+              '                    StringComparison.OrdinalIgnoreCase))',
+              '            {',
+              '                return;',
+              '            }',
+              '',
+              '            _selectedFloorId = automaticFloorId;',
+              '            UpdateFloorIndicator();',
+              '            QueueFloorRender(fitMap: false);',
+              '        });',
+              '    }'])
+
+          text = replace_method(text,
+              '    private void SelectInitialFloor()',
+              '    private IReadOnlyList<MapFloorConfig> GetOrderedFloors()', [
+              '    private void SelectInitialFloor()',
+              '    {',
+              '        _selectedFloorId = _settings.AutoFloorSelection',
+              '            ? MiniMapFloorSelection.SelectAutomatic(',
+              '                _currentMapConfig?.Floors,',
+              '                DetectCurrentFloor())',
+              '            : MiniMapFloorSelection.SelectInitial(',
+              '                _currentMapConfig?.Floors,',
+              '                preferredFloorId: null);',
+              '        UpdateFloorIndicator();',
+              '    }'])
+
+          text = replace_method(text,
+              '    private bool ApplyAutomaticFloorSelection()',
+              '    public void CenterPlayer()', [
+              '    private bool ApplyAutomaticFloorSelection()',
+              '    {',
+              '        var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(',
+              '            _currentMapConfig?.Floors,',
+              '            DetectCurrentFloor());',
+              '        if (string.Equals(',
+              '                _selectedFloorId,',
+              '                automaticFloorId,',
+              '                StringComparison.OrdinalIgnoreCase))',
+              '        {',
+              '            return false;',
+              '        }',
+              '',
+              '        _selectedFloorId = automaticFloorId;',
+              '        return true;',
+              '    }'])
+          window.write_text(text, encoding='utf-8', newline='\n')
+
+          settings = Path('TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs')
+          text = settings.read_text(encoding='utf-8')
+          text = replace_method(text,
+              '    private void OnOverlaySettingsChanged(OverlayMiniMapSettings settings)',
+              '    private void UpdateDisplays()', [
+              '    private void OnOverlaySettingsChanged(OverlayMiniMapSettings settings)',
+              '    {',
+              '        if (!Dispatcher.CheckAccess())',
+              '        {',
+              '            Dispatcher.BeginInvoke(() => OnOverlaySettingsChanged(settings));',
+              '            return;',
+              '        }',
+              '',
+              '        _settings.CopyFrom(settings);',
+              '        _isInitializing = true;',
+              '        LoadSettings();',
+              '        _isInitializing = false;',
+              '    }'])
+          settings.write_text(text, encoding='utf-8', newline='\n')
+
+      - name: Commit formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs \
+            TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs
+          git commit -m "style: normalize minimap control method formatting"
+          git push origin HEAD:agent/v1.6.4-quest-active-minimap-markers
