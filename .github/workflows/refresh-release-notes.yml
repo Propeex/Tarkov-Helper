@@ -31,8 +31,8 @@ jobs:
           }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Update v1.6.6 release notes
-        if: steps.version.outputs.version == '1.6.6'
+      - name: Update v1.6.7 release notes
+        if: steps.version.outputs.version == '1.6.7'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,14 +43,12 @@ jobs:
 
           Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
 
-          ### v1.6.6 수정
-          - 아이템 화면과 중복되는 `수집가 - 카파` 탭을 내비게이션에서 제거
-          - 퀘스트 화면의 카파 체크 필터를 제거하고 카파 진행도 추적과 퀘스트 배지는 유지
-          - 퀘스트·아이템 탭을 나갔다가 돌아와도 세부 필터·체크·정렬 상태를 복구
-          - 미니맵의 다른 층 투명도와 불필요한 단축키·즉시 작업 UI를 제거하고 다른 층을 항상 숨김
-          - 일반 지도에서도 선택하지 않은 층의 지도 레이어와 마커를 숨김
-          - 위층·아래층·자동 층 추적 복귀 단축키를 일반 지도에서도 사용할 수 있도록 확장
-          - 일반 지도와 미니맵의 맵·층·자동 추적 상태를 양방향으로 연동
+          ### v1.6.7 수정
+          - 퀘스트 탭 지도 분류에서 조건별 변형 맵 키를 기본 맵으로 통합
+          - `ground-zero-21` 등 Ground Zero 레벨 변형을 `Ground Zero` 하나로 표시
+          - `night-factory` 등 Factory 주·야간 변형을 `Factory` 하나로 표시
+          - 변형 맵에 연결된 퀘스트도 기본 맵 필터에서 함께 조회되도록 개선
+          - 기존에 선택한 변형 지도 필터를 기본 맵 선택으로 자동 승계
 
           ### 설치
           1. TarkovHelper_JH.zip을 원하는 폴더에 압축 해제합니다.
