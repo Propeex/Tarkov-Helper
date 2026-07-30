@@ -1,0 +1,98 @@
+name: Apply v1.6.4 Unknown Floor Handling
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'agent/v1.6.4-quest-active-minimap-markers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.6.4-quest-active-minimap-markers
+          fetch-depth: 0
+
+      - name: Preserve unknown floor state and add regression smoke
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one match, found {count}: {old[:120]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          window = Path('TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs')
+          replace_once(
+              window,
+              '''        return FloorDetectionService.Instance.DetectFloor(
+                      _currentMapKey,
+                      original.X,
+                      original.Y,
+                      original.Z ?? 0) ?? "main";
+              ''',
+              '''        return FloorDetectionService.Instance.DetectFloor(
+                      _currentMapKey,
+                      original.X,
+                      original.Y,
+                      original.Z ?? 0);
+              ''')
+
+          replace_once(
+              window,
+              '''    private static bool IsCurrentFloor(string? markerFloorId, string? currentFloorId)
+              {
+                  if (string.IsNullOrEmpty(currentFloorId))
+                      return true;
+
+                  var effectiveMarkerFloor = string.IsNullOrEmpty(markerFloorId) ? "main" : markerFloorId;
+                  return string.Equals(
+                      effectiveMarkerFloor,
+                      currentFloorId,
+                      StringComparison.OrdinalIgnoreCase);
+              }
+              ''',
+              '''    private static bool IsCurrentFloor(string? markerFloorId, string? currentFloorId) =>
+                  MiniMapMarkerVisibilityState.IsCurrentFloor(markerFloorId, currentFloorId);
+              ''')
+
+          smoke = Path('TarkovHelper.DatabaseSmoke/Program.cs')
+          text = smoke.read_text(encoding='utf-8')
+          marker = '''    var categories = ItemsDataService.Instance;
+              if (categories.GetParentCategory("Scopes") != "WeaponParts" ||
+          '''
+          insertion = '''    if (!MiniMapMarkerVisibilityState.IsCurrentFloor("basement", null) ||
+                  !MiniMapMarkerVisibilityState.IsCurrentFloor("level3", null) ||
+                  !MiniMapMarkerVisibilityState.IsCurrentFloor(null, "main") ||
+                  MiniMapMarkerVisibilityState.IsCurrentFloor("basement", "main") ||
+                  !MiniMapMarkerVisibilityState.IsCurrentFloor("basement", "basement"))
+              {
+                  throw new InvalidDataException(
+                      "Unknown minimap floor detection must keep all marker floors visible without assuming main.");
+              }
+
+              var categories = ItemsDataService.Instance;
+              if (categories.GetParentCategory("Scopes") != "WeaponParts" ||
+          '''
+          count = text.count(marker)
+          if count != 1:
+              raise RuntimeError(f'{smoke}: expected one insertion point, found {count}')
+          smoke.write_text(text.replace(marker, insertion, 1), encoding='utf-8', newline='\n')
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs TarkovHelper.DatabaseSmoke/Program.cs
+          git commit -m "fix: avoid assuming main floor when detection is unknown"
+          git push origin HEAD:agent/v1.6.4-quest-active-minimap-markers
