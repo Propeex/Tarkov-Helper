@@ -202,33 +202,33 @@ public partial class OverlayMiniMapWindow : Window
     }
 
     private void OnPositionUpdated(object? sender, ScreenPosition position)
-{
-    Dispatcher.BeginInvoke(() =>
     {
-        UpdatePlayerMarker(position);
-
-        if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
-            CenterOnPlayer(position);
-
-        if (!_settings.AutoFloorSelection || _manualFloorSelection)
-            return;
-
-        var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
-            _currentMapConfig?.Floors,
-            DetectCurrentFloor(position));
-        if (string.Equals(
-                _selectedFloorId,
-                automaticFloorId,
-                StringComparison.OrdinalIgnoreCase))
+        Dispatcher.BeginInvoke(() =>
         {
-            return;
-        }
+            UpdatePlayerMarker(position);
 
-        _selectedFloorId = automaticFloorId;
-        UpdateFloorIndicator();
-        QueueFloorRender(fitMap: false);
-    });
-}
+            if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
+                CenterOnPlayer(position);
+
+            if (!_settings.AutoFloorSelection || _manualFloorSelection)
+                return;
+
+            var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
+                _currentMapConfig?.Floors,
+                DetectCurrentFloor(position));
+            if (string.Equals(
+                    _selectedFloorId,
+                    automaticFloorId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _selectedFloorId = automaticFloorId;
+            UpdateFloorIndicator();
+            QueueFloorRender(fitMap: false);
+        });
+    }
 
     private void OnMapChanged(string mapKey)
     {
@@ -300,16 +300,16 @@ public partial class OverlayMiniMapWindow : Window
     }
 
     private void SelectInitialFloor()
-{
-    _selectedFloorId = _settings.AutoFloorSelection
-        ? MiniMapFloorSelection.SelectAutomatic(
-            _currentMapConfig?.Floors,
-            DetectCurrentFloor())
-        : MiniMapFloorSelection.SelectInitial(
-            _currentMapConfig?.Floors,
-            preferredFloorId: null);
-    UpdateFloorIndicator();
-}
+    {
+        _selectedFloorId = _settings.AutoFloorSelection
+            ? MiniMapFloorSelection.SelectAutomatic(
+                _currentMapConfig?.Floors,
+                DetectCurrentFloor())
+            : MiniMapFloorSelection.SelectInitial(
+                _currentMapConfig?.Floors,
+                preferredFloorId: null);
+        UpdateFloorIndicator();
+    }
 
     private IReadOnlyList<MapFloorConfig> GetOrderedFloors() =>
         MiniMapFloorSelection.Order(_currentMapConfig?.Floors);
@@ -1145,21 +1145,21 @@ public partial class OverlayMiniMapWindow : Window
     }
 
     private bool ApplyAutomaticFloorSelection()
-{
-    var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
-        _currentMapConfig?.Floors,
-        DetectCurrentFloor());
-    if (string.Equals(
-            _selectedFloorId,
-            automaticFloorId,
-            StringComparison.OrdinalIgnoreCase))
     {
-        return false;
-    }
+        var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
+            _currentMapConfig?.Floors,
+            DetectCurrentFloor());
+        if (string.Equals(
+                _selectedFloorId,
+                automaticFloorId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
 
-    _selectedFloorId = automaticFloorId;
-    return true;
-}
+        _selectedFloorId = automaticFloorId;
+        return true;
+    }
 
     public void CenterPlayer()
     {

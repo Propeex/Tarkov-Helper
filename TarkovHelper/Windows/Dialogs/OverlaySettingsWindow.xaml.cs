@@ -63,18 +63,18 @@ public partial class OverlaySettingsWindow : Window
     }
 
     private void OnOverlaySettingsChanged(OverlayMiniMapSettings settings)
-{
-    if (!Dispatcher.CheckAccess())
     {
-        Dispatcher.BeginInvoke(() => OnOverlaySettingsChanged(settings));
-        return;
-    }
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => OnOverlaySettingsChanged(settings));
+            return;
+        }
 
-    _settings.CopyFrom(settings);
-    _isInitializing = true;
-    LoadSettings();
-    _isInitializing = false;
-}
+        _settings.CopyFrom(settings);
+        _isInitializing = true;
+        LoadSettings();
+        _isInitializing = false;
+    }
 
     private void UpdateDisplays()
     {
