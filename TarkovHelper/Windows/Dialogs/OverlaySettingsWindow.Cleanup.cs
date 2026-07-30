@@ -5,14 +5,16 @@ namespace TarkovHelper.Windows.Dialogs;
 
 public partial class OverlaySettingsWindow
 {
+    private static readonly bool CleanupRegistered = RegisterCleanup();
     private bool _cleanupApplied;
 
-    static OverlaySettingsWindow()
+    private static bool RegisterCleanup()
     {
         EventManager.RegisterClassHandler(
             typeof(OverlaySettingsWindow),
             FrameworkElement.LoadedEvent,
             new RoutedEventHandler(OnCleanupLoaded));
+        return true;
     }
 
     private static void OnCleanupLoaded(object sender, RoutedEventArgs e)
