@@ -16,6 +16,18 @@ public sealed class QuestDbService
     private static QuestDbService? _instance;
     public static QuestDbService Instance => _instance ??= new QuestDbService();
 
+    private static readonly IReadOnlyDictionary<string, string[]> EquivalentAlternativePrerequisitesByQuestName =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Dangerous Road"] = ["Supply Plans", "Kind of Sabotage"],
+            ["Dragnet"] = ["One Less Loose End", "A Healthy Alternative"],
+            ["Safe Corridor"] = ["Chemical - Part 4", "Out of Curiosity", "Big Customer"],
+            ["Swift One"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
+            ["TerraGroup Employee"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
+            ["The Huntsman Path - Relentless"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
+            ["The Huntsman Path - Woods Keeper"] = ["Supply Plans", "Kind of Sabotage"]
+        };
+
     private readonly string _databasePath;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private List<TarkovTask> _allQuests = new();
@@ -126,9 +138,8 @@ public sealed class QuestDbService
             // 5. 대체 퀘스트 로드
             await LoadOptionalQuestsAsync(connection, questLookup);
 
-            // 6. 데이터 소스에서 생략된 OR 분기와 과도한 카파 플래그 보정
-            NormalizeAlternativeRequirementGroups(quests, questLookup);
-            NormalizeKappaRequirements(quests, questLookup);
+            // 6. 데이터 소스에서 한 분기만 저장한 공통 후속 퀘스트의 OR 조건 보정
+            NormalizeEquivalentAlternativeRequirementGroups(quests, questLookup);
 
             // 7. LeadsTo 역참조 구축
             BuildLeadsToReferences(quests);
@@ -568,154 +579,118 @@ public sealed class QuestDbService
     }
 
     /// <summary>
-    /// OR 그룹의 대표 선행 퀘스트가 상호 배타적 선택지인 경우 같은 그룹의 대체 퀘스트를 보충합니다.
-    /// 일부 데이터 소스는 대표 퀘스트 한 개만 저장하므로, 보정하지 않으면 정상적으로 선택한 분기가
-    /// 완료되어도 후속 퀘스트가 영구적으로 잠길 수 있습니다.
+    /// 공통 후속 퀘스트가 선택지 중 한 퀘스트만 선행 조건으로 저장된 경우, 확인된 동등 선택지만
+    /// 같은 OR 그룹에 보충합니다. 실패 상태를 요구하는 평판 복구 퀘스트 등 분기 전용 조건은
+    /// 명시 목록에 포함하지 않아 기존 판정을 유지합니다.
     /// </summary>
-    private void NormalizeAlternativeRequirementGroups(
+    private void NormalizeEquivalentAlternativeRequirementGroups(
         List<TarkovTask> quests,
         Dictionary<string, TarkovTask> questLookup)
     {
-        var questsByNormalizedName = quests
-            .Where(q => !string.IsNullOrWhiteSpace(q.NormalizedName))
-            .GroupBy(q => q.NormalizedName!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var questsByName = quests
+            .GroupBy(quest => quest.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
         var addedRequirements = 0;
 
-        foreach (var quest in quests)
+        foreach (var pair in EquivalentAlternativePrerequisitesByQuestName)
         {
-            if (quest.TaskRequirements == null || quest.TaskRequirements.Count == 0)
+            if (!questsByName.TryGetValue(pair.Key, out var targetQuest) ||
+                targetQuest.TaskRequirements == null)
+            {
                 continue;
+            }
 
-            var groupedRequirements = quest.TaskRequirements
+            var allowedNames = new HashSet<string>(pair.Value, StringComparer.OrdinalIgnoreCase);
+            var matchingRequirements = targetQuest.TaskRequirements
                 .Where(requirement => requirement.GroupId > 0)
+                .Select(requirement => new
+                {
+                    Requirement = requirement,
+                    RequiredQuest = ResolveRequiredQuest(requirement, questLookup, quests)
+                })
+                .Where(value => value.RequiredQuest != null && allowedNames.Contains(value.RequiredQuest.Name))
                 .ToList();
 
-            foreach (var requirement in groupedRequirements)
+            if (matchingRequirements.Count == 0)
             {
-                TarkovTask? requiredQuest = null;
-                if (!string.IsNullOrWhiteSpace(requirement.TaskId))
-                    questLookup.TryGetValue(requirement.TaskId, out requiredQuest);
+                _log.Warning($"Equivalent prerequisite group was not found for {targetQuest.Name}.");
+                continue;
+            }
 
-                if (requiredQuest == null &&
-                    !string.IsNullOrWhiteSpace(requirement.TaskNormalizedName))
-                {
-                    questsByNormalizedName.TryGetValue(requirement.TaskNormalizedName, out requiredQuest);
-                }
+            var groupId = matchingRequirements[0].Requirement.GroupId;
+            var templateStatus = matchingRequirements[0].Requirement.Status?.ToList()
+                ?? new List<string> { "complete" };
 
-                if (requiredQuest?.AlternativeQuests == null ||
-                    requiredQuest.AlternativeQuests.Count == 0)
+            foreach (var requiredName in pair.Value)
+            {
+                if (!questsByName.TryGetValue(requiredName, out var requiredQuest))
+                    continue;
+
+                var requiredId = requiredQuest.Ids?.FirstOrDefault();
+                if (string.IsNullOrWhiteSpace(requiredId) ||
+                    string.IsNullOrWhiteSpace(requiredQuest.NormalizedName))
                 {
                     continue;
                 }
 
-                foreach (var alternativeName in requiredQuest.AlternativeQuests)
+                var alreadyExists = targetQuest.TaskRequirements.Any(existing =>
+                    existing.GroupId == groupId &&
+                    (string.Equals(existing.TaskId, requiredId, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(
+                         existing.TaskNormalizedName,
+                         requiredQuest.NormalizedName,
+                         StringComparison.OrdinalIgnoreCase)));
+
+                if (alreadyExists)
+                    continue;
+
+                targetQuest.TaskRequirements.Add(new TaskRequirement
                 {
-                    if (!questsByNormalizedName.TryGetValue(alternativeName, out var alternativeQuest))
-                        continue;
+                    TaskId = requiredId,
+                    TaskNormalizedName = requiredQuest.NormalizedName,
+                    Status = templateStatus.ToList(),
+                    GroupId = groupId
+                });
 
-                    var alternativeId = alternativeQuest.Ids?.FirstOrDefault();
-                    if (string.IsNullOrWhiteSpace(alternativeId) ||
-                        string.IsNullOrWhiteSpace(alternativeQuest.NormalizedName))
-                    {
-                        continue;
-                    }
-
-                    var alreadyExists = quest.TaskRequirements.Any(existing =>
-                        existing.GroupId == requirement.GroupId &&
-                        (string.Equals(existing.TaskId, alternativeId, StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(
-                             existing.TaskNormalizedName,
-                             alternativeQuest.NormalizedName,
-                             StringComparison.OrdinalIgnoreCase)));
-
-                    if (alreadyExists)
-                        continue;
-
-                    quest.TaskRequirements.Add(new TaskRequirement
-                    {
-                        TaskId = alternativeId,
-                        TaskNormalizedName = alternativeQuest.NormalizedName,
-                        Status = requirement.Status?.ToList() ?? new List<string> { "complete" },
-                        GroupId = requirement.GroupId
-                    });
-
-                    quest.Previous ??= new List<string>();
-                    if (!quest.Previous.Contains(
-                            alternativeQuest.NormalizedName,
-                            StringComparer.OrdinalIgnoreCase))
-                    {
-                        quest.Previous.Add(alternativeQuest.NormalizedName);
-                    }
-
-                    addedRequirements++;
+                targetQuest.Previous ??= new List<string>();
+                if (!targetQuest.Previous.Contains(
+                        requiredQuest.NormalizedName,
+                        StringComparer.OrdinalIgnoreCase))
+                {
+                    targetQuest.Previous.Add(requiredQuest.NormalizedName);
                 }
+
+                addedRequirements++;
             }
         }
 
         if (addedRequirements > 0)
         {
             _log.Info(
-                $"Expanded {addedRequirements} alternative quest requirements into OR groups.");
+                $"Expanded {addedRequirements} verified alternative prerequisites into OR groups.");
         }
     }
 
-    /// <summary>
-    /// 카파 필수 여부는 광범위한 KappaRequired 플래그보다 수집가 퀘스트의 실제 선행 조건을
-    /// 기준으로 정규화합니다. 상호 배타적인 선택지 전체가 카파 필수로 집계되는 문제를 방지합니다.
-    /// </summary>
-    private void NormalizeKappaRequirements(
-        List<TarkovTask> quests,
-        Dictionary<string, TarkovTask> questLookup)
+    private static TarkovTask? ResolveRequiredQuest(
+        TaskRequirement requirement,
+        Dictionary<string, TarkovTask> questLookup,
+        List<TarkovTask> quests)
     {
-        var collectorQuest = quests.FirstOrDefault(quest =>
-            string.Equals(quest.NormalizedName, "collector", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(quest.Name, "Collector", StringComparison.OrdinalIgnoreCase));
-
-        if (collectorQuest?.TaskRequirements == null ||
-            collectorQuest.TaskRequirements.Count == 0)
+        if (!string.IsNullOrWhiteSpace(requirement.TaskId) &&
+            questLookup.TryGetValue(requirement.TaskId, out var requiredById))
         {
-            _log.Warning(
-                "Collector prerequisites were not found; retaining database KappaRequired flags.");
-            return;
+            return requiredById;
         }
 
-        var requiredQuests = new HashSet<TarkovTask>();
-        foreach (var requirement in collectorQuest.TaskRequirements)
-        {
-            TarkovTask? requiredQuest = null;
-            if (!string.IsNullOrWhiteSpace(requirement.TaskId))
-                questLookup.TryGetValue(requirement.TaskId, out requiredQuest);
+        if (string.IsNullOrWhiteSpace(requirement.TaskNormalizedName))
+            return null;
 
-            if (requiredQuest == null &&
-                !string.IsNullOrWhiteSpace(requirement.TaskNormalizedName))
-            {
-                requiredQuest = quests.FirstOrDefault(quest =>
-                    string.Equals(
-                        quest.NormalizedName,
-                        requirement.TaskNormalizedName,
-                        StringComparison.OrdinalIgnoreCase));
-            }
-
-            if (requiredQuest != null)
-                requiredQuests.Add(requiredQuest);
-        }
-
-        if (requiredQuests.Count == 0)
-        {
-            _log.Warning(
-                "Collector prerequisites could not be resolved; retaining database KappaRequired flags.");
-            return;
-        }
-
-        var previousCount = quests.Count(quest => quest.ReqKappa);
-        foreach (var quest in quests)
-            quest.ReqKappa = requiredQuests.Contains(quest);
-
-        _log.Info(
-            $"Normalized Kappa requirements from {previousCount} flags to " +
-            $"{requiredQuests.Count} Collector prerequisites.");
+        return quests.FirstOrDefault(quest =>
+            string.Equals(
+                quest.NormalizedName,
+                requirement.TaskNormalizedName,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
