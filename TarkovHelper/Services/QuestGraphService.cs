@@ -329,7 +329,7 @@ namespace TarkovHelper.Services
                 QuestsWithItemRequirements = _tasks.Count(t => t.RequiredItems != null && t.RequiredItems.Count > 0),
                 QuestsWithSkillRequirements = _tasks.Count(t => t.RequiredSkills != null && t.RequiredSkills.Count > 0),
                 QuestsWithLevelRequirements = _tasks.Count(t => t.RequiredLevel.HasValue),
-                KappaQuests = _tasks.Count(t => t.ReqKappa)
+                KappaQuests = GetKappaQuestSlots().Count
             };
 
             // Find starter quests (no prerequisites)
@@ -360,42 +360,101 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Get Collector quest progress statistics
-        /// Returns the count and percentage of completed reqKappa quests
+        /// Get Collector quest progress statistics.
+        /// Mutually exclusive Kappa quests are counted as one slot and the slot is complete
+        /// when any quest in the choice group is complete.
         /// </summary>
-        /// <param name="isQuestCompleted">Function to check if a quest is completed by its normalizedName</param>
-        /// <returns>Tuple of (completed count, total count, percentage)</returns>
         public (int Completed, int Total, int Percentage) GetCollectorProgress(Func<string, bool> isQuestCompleted)
         {
             EnsureInitialized();
 
-            var kappaQuests = _tasks!
-                .Where(t => t.ReqKappa && !string.IsNullOrEmpty(t.NormalizedName))
-                .ToList();
-
-            var completedCount = kappaQuests.Count(t => isQuestCompleted(t.NormalizedName!));
-            var total = kappaQuests.Count;
+            var kappaSlots = GetKappaQuestSlots();
+            var completedCount = kappaSlots.Count(slot => slot.Any(quest =>
+                !string.IsNullOrEmpty(quest.NormalizedName) &&
+                isQuestCompleted(quest.NormalizedName)));
+            var total = kappaSlots.Count;
             var percentage = total > 0 ? (completedCount * 100 / total) : 0;
 
             return (completedCount, total, percentage);
         }
 
         /// <summary>
-        /// Get all reqKappa quests with their completion status
+        /// Get all Kappa requirement slots with their completion status.
+        /// A mutually exclusive group is represented by the completed choice, or by one
+        /// deterministic representative until a choice has been completed.
         /// </summary>
-        /// <param name="isQuestCompleted">Function to check if a quest is completed</param>
-        /// <returns>List of tuples (quest, isCompleted)</returns>
         public List<(TarkovTask Quest, bool IsCompleted)> GetKappaRequiredQuestsWithStatus(Func<string, bool> isQuestCompleted)
         {
             EnsureInitialized();
 
-            return _tasks!
-                .Where(t => t.ReqKappa && !string.IsNullOrEmpty(t.NormalizedName))
-                .Select(t => (t, isQuestCompleted(t.NormalizedName!)))
-                .OrderBy(x => x.Item2) // Incomplete first
-                .ThenBy(x => x.t.Trader)
-                .ThenBy(x => x.t.Name)
+            return GetKappaQuestSlots()
+                .Select(slot =>
+                {
+                    var completedQuest = slot.FirstOrDefault(quest =>
+                        !string.IsNullOrEmpty(quest.NormalizedName) &&
+                        isQuestCompleted(quest.NormalizedName));
+                    var representative = completedQuest ?? slot
+                        .OrderBy(quest => quest.Trader)
+                        .ThenBy(quest => quest.Name)
+                        .First();
+
+                    return (Quest: representative, IsCompleted: completedQuest != null);
+                })
+                .OrderBy(item => item.IsCompleted) // Incomplete first
+                .ThenBy(item => item.Quest.Trader)
+                .ThenBy(item => item.Quest.Name)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Builds Kappa requirement slots. Normal quests occupy one slot each, while all
+        /// Kappa-required quests connected through AlternativeQuests share one slot.
+        /// </summary>
+        private List<List<TarkovTask>> GetKappaQuestSlots()
+        {
+            EnsureInitialized();
+
+            var kappaQuests = _tasks!
+                .Where(task => task.ReqKappa && !string.IsNullOrEmpty(task.NormalizedName))
+                .ToList();
+            var kappaByName = kappaQuests.ToDictionary(
+                task => task.NormalizedName!,
+                task => task,
+                StringComparer.OrdinalIgnoreCase);
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var slots = new List<List<TarkovTask>>();
+
+            foreach (var quest in kappaQuests)
+            {
+                var questName = quest.NormalizedName!;
+                if (!visited.Add(questName))
+                    continue;
+
+                var slot = new List<TarkovTask>();
+                var queue = new Queue<TarkovTask>();
+                queue.Enqueue(quest);
+
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    slot.Add(current);
+
+                    foreach (var alternativeName in current.AlternativeQuests ?? [])
+                    {
+                        if (!kappaByName.TryGetValue(alternativeName, out var alternative) ||
+                            !visited.Add(alternativeName))
+                        {
+                            continue;
+                        }
+
+                        queue.Enqueue(alternative);
+                    }
+                }
+
+                slots.Add(slot);
+            }
+
+            return slots;
         }
 
         /// <summary>

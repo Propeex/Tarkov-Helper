@@ -16,6 +16,18 @@ public sealed class QuestDbService
     private static QuestDbService? _instance;
     public static QuestDbService Instance => _instance ??= new QuestDbService();
 
+    private static readonly IReadOnlyDictionary<string, string[]> EquivalentAlternativePrerequisitesByQuestName =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Dangerous Road"] = ["Supply Plans", "Kind of Sabotage"],
+            ["Dragnet"] = ["One Less Loose End", "A Healthy Alternative"],
+            ["Safe Corridor"] = ["Chemical - Part 4", "Out of Curiosity", "Big Customer"],
+            ["Swift One"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
+            ["TerraGroup Employee"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
+            ["The Huntsman Path - Relentless"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
+            ["The Huntsman Path - Woods Keeper"] = ["Supply Plans", "Kind of Sabotage"]
+        };
+
     private readonly string _databasePath;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private List<TarkovTask> _allQuests = new();
@@ -126,7 +138,10 @@ public sealed class QuestDbService
             // 5. 대체 퀘스트 로드
             await LoadOptionalQuestsAsync(connection, questLookup);
 
-            // 6. LeadsTo 역참조 구축
+            // 6. 데이터 소스에서 한 분기만 저장한 공통 후속 퀘스트의 OR 조건 보정
+            NormalizeEquivalentAlternativeRequirementGroups(quests, questLookup);
+
+            // 7. LeadsTo 역참조 구축
             BuildLeadsToReferences(quests);
 
             // 새 딕셔너리 빌드 (기존 데이터 유지하면서)
@@ -561,6 +576,121 @@ public sealed class QuestDbService
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// 공통 후속 퀘스트가 선택지 중 한 퀘스트만 선행 조건으로 저장된 경우, 확인된 동등 선택지만
+    /// 같은 OR 그룹에 보충합니다. 실패 상태를 요구하는 평판 복구 퀘스트 등 분기 전용 조건은
+    /// 명시 목록에 포함하지 않아 기존 판정을 유지합니다.
+    /// </summary>
+    private void NormalizeEquivalentAlternativeRequirementGroups(
+        List<TarkovTask> quests,
+        Dictionary<string, TarkovTask> questLookup)
+    {
+        var questsByName = quests
+            .GroupBy(quest => quest.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        var addedRequirements = 0;
+
+        foreach (var pair in EquivalentAlternativePrerequisitesByQuestName)
+        {
+            if (!questsByName.TryGetValue(pair.Key, out var targetQuest) ||
+                targetQuest.TaskRequirements == null)
+            {
+                continue;
+            }
+
+            var allowedNames = new HashSet<string>(pair.Value, StringComparer.OrdinalIgnoreCase);
+            var matchingRequirements = targetQuest.TaskRequirements
+                .Where(requirement => requirement.GroupId > 0)
+                .Select(requirement => new
+                {
+                    Requirement = requirement,
+                    RequiredQuest = ResolveRequiredQuest(requirement, questLookup, quests)
+                })
+                .Where(value => value.RequiredQuest != null && allowedNames.Contains(value.RequiredQuest.Name))
+                .ToList();
+
+            if (matchingRequirements.Count == 0)
+            {
+                _log.Warning($"Equivalent prerequisite group was not found for {targetQuest.Name}.");
+                continue;
+            }
+
+            var groupId = matchingRequirements[0].Requirement.GroupId;
+            var templateStatus = matchingRequirements[0].Requirement.Status?.ToList()
+                ?? new List<string> { "complete" };
+
+            foreach (var requiredName in pair.Value)
+            {
+                if (!questsByName.TryGetValue(requiredName, out var requiredQuest))
+                    continue;
+
+                var requiredId = requiredQuest.Ids?.FirstOrDefault();
+                if (string.IsNullOrWhiteSpace(requiredId) ||
+                    string.IsNullOrWhiteSpace(requiredQuest.NormalizedName))
+                {
+                    continue;
+                }
+
+                var alreadyExists = targetQuest.TaskRequirements.Any(existing =>
+                    existing.GroupId == groupId &&
+                    (string.Equals(existing.TaskId, requiredId, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(
+                         existing.TaskNormalizedName,
+                         requiredQuest.NormalizedName,
+                         StringComparison.OrdinalIgnoreCase)));
+
+                if (alreadyExists)
+                    continue;
+
+                targetQuest.TaskRequirements.Add(new TaskRequirement
+                {
+                    TaskId = requiredId,
+                    TaskNormalizedName = requiredQuest.NormalizedName,
+                    Status = templateStatus.ToList(),
+                    GroupId = groupId
+                });
+
+                targetQuest.Previous ??= new List<string>();
+                if (!targetQuest.Previous.Contains(
+                        requiredQuest.NormalizedName,
+                        StringComparer.OrdinalIgnoreCase))
+                {
+                    targetQuest.Previous.Add(requiredQuest.NormalizedName);
+                }
+
+                addedRequirements++;
+            }
+        }
+
+        if (addedRequirements > 0)
+        {
+            _log.Info(
+                $"Expanded {addedRequirements} verified alternative prerequisites into OR groups.");
+        }
+    }
+
+    private static TarkovTask? ResolveRequiredQuest(
+        TaskRequirement requirement,
+        Dictionary<string, TarkovTask> questLookup,
+        List<TarkovTask> quests)
+    {
+        if (!string.IsNullOrWhiteSpace(requirement.TaskId) &&
+            questLookup.TryGetValue(requirement.TaskId, out var requiredById))
+        {
+            return requiredById;
+        }
+
+        if (string.IsNullOrWhiteSpace(requirement.TaskNormalizedName))
+            return null;
+
+        return quests.FirstOrDefault(quest =>
+            string.Equals(
+                quest.NormalizedName,
+                requirement.TaskNormalizedName,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
