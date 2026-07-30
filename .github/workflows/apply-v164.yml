@@ -23,6 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           gzip -dc .github/patches/v164.patch.gz | patch -p1 --batch --forward
+          git restore .github/workflows/release.yml
 
       - name: Commit product changes
         shell: bash
@@ -31,7 +32,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
-            .github/workflows/release.yml \
             update.xml \
             TarkovHelper/TarkovHelper.csproj \
             TarkovHelper/Models/QuestStatus.cs \
