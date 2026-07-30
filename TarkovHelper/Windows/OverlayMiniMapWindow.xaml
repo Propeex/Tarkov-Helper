@@ -83,6 +83,28 @@
                 </Canvas>
             </Canvas>
 
+            <!-- 현재 층 및 자동/수동 모드 표시 -->
+            <Border x:Name="FloorIndicator"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
+                    Margin="8"
+                    Padding="7,4"
+                    Background="#B0202020"
+                    CornerRadius="4"
+                    IsHitTestVisible="False"
+                    Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="TxtFloorName"
+                               Foreground="White"
+                               FontSize="12"
+                               FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtFloorMode"
+                               Foreground="#A0C4FF"
+                               FontSize="10"
+                               Margin="6,1,0,0"/>
+                </StackPanel>
+            </Border>
+
             <!-- 맵 없음 메시지 -->
             <TextBlock x:Name="TxtNoMap"
                        Text="지도가 선택되지 않았습니다"

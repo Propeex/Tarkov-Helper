@@ -1,24 +1,22 @@
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using TarkovHelper.Models.Map;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Windows.Dialogs;
 
 /// <summary>
-/// Overlay settings window
+/// 오버레이 미니맵의 표시 방식과 전역 단축키를 구성합니다.
 /// </summary>
 public partial class OverlaySettingsWindow : Window
 {
     private readonly OverlayMiniMapSettings _settings;
     private readonly OverlayMiniMapWindow? _overlayWindow;
+    private readonly Dictionary<OverlayMiniMapHotkeyAction, Button> _hotkeyButtons;
     private bool _isInitializing = true;
-    
-    private enum KeyCaptureMode { None, ZoomIn, ZoomOut }
-    private KeyCaptureMode _captureMode = KeyCaptureMode.None;
+    private OverlayMiniMapHotkeyAction? _captureAction;
 
-    /// <summary>
-    /// Settings applied event
-    /// </summary>
     public event Action<OverlayMiniMapSettings>? SettingsApplied;
 
     public OverlaySettingsWindow(OverlayMiniMapSettings settings, OverlayMiniMapWindow? overlayWindow)
@@ -27,6 +25,20 @@ public partial class OverlaySettingsWindow : Window
 
         _settings = settings.Clone();
         _overlayWindow = overlayWindow;
+        _hotkeyButtons = new Dictionary<OverlayMiniMapHotkeyAction, Button>
+        {
+            [OverlayMiniMapHotkeyAction.ZoomIn] = BtnZoomInKey,
+            [OverlayMiniMapHotkeyAction.ZoomOut] = BtnZoomOutKey,
+            [OverlayMiniMapHotkeyAction.FloorUp] = BtnFloorUpKey,
+            [OverlayMiniMapHotkeyAction.FloorDown] = BtnFloorDownKey,
+            [OverlayMiniMapHotkeyAction.OpacityIncrease] = BtnOpacityIncreaseKey,
+            [OverlayMiniMapHotkeyAction.OpacityDecrease] = BtnOpacityDecreaseKey,
+            [OverlayMiniMapHotkeyAction.CenterPlayer] = BtnCenterPlayerKey,
+            [OverlayMiniMapHotkeyAction.ToggleViewMode] = BtnToggleViewModeKey,
+            [OverlayMiniMapHotkeyAction.ToggleClickThrough] = BtnToggleClickThroughKey,
+            [OverlayMiniMapHotkeyAction.ResetView] = BtnResetViewKey,
+            [OverlayMiniMapHotkeyAction.ResumeAutoFloor] = BtnResumeAutoFloorKey
+        };
 
         LoadSettings();
         _isInitializing = false;
@@ -34,13 +46,14 @@ public partial class OverlaySettingsWindow : Window
 
     private void LoadSettings()
     {
-        SliderOpacity.Value = _settings.Opacity * 100;
-        SliderZoom.Value = _settings.ZoomLevel * 100;
-        SliderMarkerSize.Value = _settings.PlayerMarkerSize * 100;
+        SliderOpacity.Value = Math.Clamp(_settings.Opacity, OverlayMiniMapSettings.MinOpacity, OverlayMiniMapSettings.MaxOpacity) * 100;
+        SliderOtherFloorOpacity.Value = Math.Clamp(_settings.OtherFloorOpacity, OverlayMiniMapSettings.MinOtherFloorOpacity, OverlayMiniMapSettings.MaxOtherFloorOpacity) * 100;
+        SliderZoom.Value = Math.Clamp(_settings.ZoomLevel, OverlayMiniMapSettings.MinZoom, OverlayMiniMapSettings.MaxZoom) * 100;
+        SliderMarkerSize.Value = Math.Clamp(_settings.PlayerMarkerSize, 0.5, 3.0) * 100;
 
+        ChkAutoFloorSelection.IsChecked = _settings.AutoFloorSelection;
         RbFixed.IsChecked = _settings.ViewMode == MiniMapViewMode.Fixed;
         RbTracking.IsChecked = _settings.ViewMode == MiniMapViewMode.PlayerTracking;
-
         ChkClickThrough.IsChecked = _settings.ClickThrough;
 
         UpdateDisplays();
@@ -51,6 +64,8 @@ public partial class OverlaySettingsWindow : Window
     {
         if (TxtOpacity != null)
             TxtOpacity.Text = $"{(int)SliderOpacity.Value}%";
+        if (TxtOtherFloorOpacity != null)
+            TxtOtherFloorOpacity.Text = $"{(int)SliderOtherFloorOpacity.Value}%";
         if (TxtZoom != null)
             TxtZoom.Text = $"{SliderZoom.Value / 100:F2}x";
         if (TxtMarkerSize != null)
@@ -59,53 +74,62 @@ public partial class OverlaySettingsWindow : Window
 
     private void UpdateKeyDisplays()
     {
-        if (BtnZoomInKey != null)
+        foreach (var (action, button) in _hotkeyButtons)
         {
-            var key = System.Windows.Input.KeyInterop.KeyFromVirtualKey(_settings.ZoomInKey);
-            BtnZoomInKey.Content = key.ToString();
-        }
-        if (BtnZoomOutKey != null)
-        {
-            var key = System.Windows.Input.KeyInterop.KeyFromVirtualKey(_settings.ZoomOutKey);
-            BtnZoomOutKey.Content = key.ToString();
+            if (_captureAction == action)
+            {
+                button.Content = "입력 대기...";
+                continue;
+            }
+
+            var virtualKey = _settings.GetHotkey(action);
+            button.Content = virtualKey == 0
+                ? "미지정"
+                : KeyInterop.KeyFromVirtualKey(virtualKey).ToString();
         }
     }
 
     private void ApplySettings()
     {
-        if (_isInitializing) return;
+        if (_isInitializing)
+            return;
 
         _settings.Opacity = SliderOpacity.Value / 100.0;
+        _settings.OtherFloorOpacity = SliderOtherFloorOpacity.Value / 100.0;
         _settings.ZoomLevel = SliderZoom.Value / 100.0;
         _settings.PlayerMarkerSize = SliderMarkerSize.Value / 100.0;
-        _settings.ViewMode = RbTracking.IsChecked == true ? MiniMapViewMode.PlayerTracking : MiniMapViewMode.Fixed;
-
+        _settings.AutoFloorSelection = ChkAutoFloorSelection.IsChecked == true;
+        _settings.ViewMode = RbTracking.IsChecked == true
+            ? MiniMapViewMode.PlayerTracking
+            : MiniMapViewMode.Fixed;
         _settings.ClickThrough = ChkClickThrough.IsChecked == true;
 
         SettingsApplied?.Invoke(_settings);
-
-        // Apply to overlay window immediately
         ApplyToOverlay();
     }
 
     private void ApplyToOverlay()
     {
-        if (_overlayWindow == null) return;
+        if (_overlayWindow == null)
+            return;
 
-        // Update opacity directly and update zoom/center
-        _overlayWindow.Dispatcher.Invoke(() =>
+        try
         {
-            if (_overlayWindow.FindName("MainBorder") is System.Windows.Controls.Border border)
-            {
-                border.Opacity = _settings.Opacity;
-            }
-            _overlayWindow.SetZoomLevel(_settings.ZoomLevel);
-        });
+            _overlayWindow.ApplyConfiguredSettings();
+        }
+        catch (InvalidOperationException)
+        {
+            // 설정 창이 열린 상태에서 오버레이가 닫힌 경우에는 저장만 유지합니다.
+        }
     }
 
-    #region Event Handlers
-
     private void SliderOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        UpdateDisplays();
+        ApplySettings();
+    }
+
+    private void SliderOtherFloorOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         UpdateDisplays();
         ApplySettings();
@@ -123,114 +147,125 @@ public partial class OverlaySettingsWindow : Window
         ApplySettings();
     }
 
-    private void ViewMode_Changed(object sender, RoutedEventArgs e)
-    {
-        ApplySettings();
-    }
+    private void AutoFloorSelection_Changed(object sender, RoutedEventArgs e) => ApplySettings();
 
-    private void ClickThrough_Changed(object sender, RoutedEventArgs e)
+    private void ViewMode_Changed(object sender, RoutedEventArgs e) => ApplySettings();
+
+    private void ClickThrough_Changed(object sender, RoutedEventArgs e) => ApplySettings();
+
+    private void HotkeyButton_Click(object sender, RoutedEventArgs e)
     {
-        var requestedState = ChkClickThrough.IsChecked == true;
-        if (OverlayClickThroughPolicy.ShouldToggle(
-                _isInitializing,
-                _settings.ClickThrough,
-                requestedState))
+        if (sender is not Button button ||
+            button.Tag is not string actionName ||
+            !Enum.TryParse<OverlayMiniMapHotkeyAction>(actionName, out var action))
         {
-            // Toggle the native window style before ApplySettings copies the requested
-            // value into the shared settings object. Initialization-time Checked events
-            // must never change the live overlay state.
-            _overlayWindow?.ToggleClickThrough();
+            return;
         }
 
-        ApplySettings();
+        _captureAction = action;
+        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = true;
+        UpdateKeyDisplays();
+        Focus();
+        Keyboard.Focus(this);
     }
 
-    private void BtnCenterPlayer_Click(object sender, RoutedEventArgs e)
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
-        _overlayWindow?.ToggleViewMode();
-
-        // Update UI to reflect the change
-        if (_overlayWindow != null)
+        if (!_captureAction.HasValue)
         {
-            RbTracking.IsChecked = true;
+            base.OnPreviewKeyDown(e);
+            return;
         }
+
+        e.Handled = true;
+        var action = _captureAction.Value;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        if (key == Key.Escape)
+        {
+            FinishCapture();
+            return;
+        }
+
+        if (key is Key.Delete or Key.Back)
+        {
+            _settings.SetHotkey(action, 0);
+            FinishCapture(apply: true);
+            return;
+        }
+
+        if (IsModifierKey(key))
+            return;
+
+        if (IsReservedKey(key))
+        {
+            MessageBox.Show(
+                "Ctrl+M, Ctrl+L 및 NumPad 0~5와 충돌할 수 있는 키는 미니맵 동작에 지정할 수 없습니다.",
+                "예약된 단축키",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        var virtualKey = KeyInterop.VirtualKeyFromKey(key);
+        if (virtualKey <= 0)
+            return;
+
+        _settings.SetHotkey(action, virtualKey);
+        FinishCapture(apply: true);
     }
+
+    private void FinishCapture(bool apply = false)
+    {
+        _captureAction = null;
+        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+        UpdateKeyDisplays();
+        if (apply)
+            ApplySettings();
+    }
+
+    private static bool IsModifierKey(Key key) => key is
+        Key.LeftCtrl or Key.RightCtrl or
+        Key.LeftShift or Key.RightShift or
+        Key.LeftAlt or Key.RightAlt or
+        Key.LWin or Key.RWin;
+
+    private static bool IsReservedKey(Key key) =>
+        key is Key.M or Key.L or
+        Key.NumPad0 or Key.NumPad1 or Key.NumPad2 or Key.NumPad3 or Key.NumPad4 or Key.NumPad5;
+
+    private void BtnFloorUp_Click(object sender, RoutedEventArgs e) => _overlayWindow?.MoveFloorUp();
+
+    private void BtnFloorDown_Click(object sender, RoutedEventArgs e) => _overlayWindow?.MoveFloorDown();
+
+    private void BtnCenterPlayer_Click(object sender, RoutedEventArgs e) => _overlayWindow?.CenterPlayer();
+
+    private void BtnResumeAutoFloor_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.AutoFloorSelection = true;
+        _isInitializing = true;
+        ChkAutoFloorSelection.IsChecked = true;
+        _isInitializing = false;
+        SettingsApplied?.Invoke(_settings);
+        _overlayWindow?.ResumeAutomaticFloorTracking();
+    }
+
+    private void BtnResetView_Click(object sender, RoutedEventArgs e) => _overlayWindow?.ResetView();
 
     private void BtnReset_Click(object sender, RoutedEventArgs e)
     {
-        var previousClickThrough = _settings.ClickThrough;
         _settings.ResetToDefaults();
-
-        if (OverlayClickThroughPolicy.ShouldToggle(
-                isInitializing: false,
-                currentState: previousClickThrough,
-                requestedState: _settings.ClickThrough))
-        {
-            _overlayWindow?.ToggleClickThrough();
-        }
-
         _isInitializing = true;
         LoadSettings();
         _isInitializing = false;
         ApplySettings();
     }
 
-    private void BtnClose_Click(object sender, RoutedEventArgs e)
+    private void BtnClose_Click(object sender, RoutedEventArgs e) => Close();
+
+    protected override void OnClosed(EventArgs e)
     {
-        Close();
+        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+        base.OnClosed(e);
     }
-
-    private void BtnZoomInKey_Click(object sender, RoutedEventArgs e)
-    {
-        _captureMode = KeyCaptureMode.ZoomIn;
-        BtnZoomInKey.Content = "입력 대기...";
-        BtnZoomOutKey.Content = System.Windows.Input.KeyInterop.KeyFromVirtualKey(_settings.ZoomOutKey).ToString();
-        this.Focus();
-    }
-
-    private void BtnZoomOutKey_Click(object sender, RoutedEventArgs e)
-    {
-        _captureMode = KeyCaptureMode.ZoomOut;
-        BtnZoomOutKey.Content = "입력 대기...";
-        BtnZoomInKey.Content = System.Windows.Input.KeyInterop.KeyFromVirtualKey(_settings.ZoomInKey).ToString();
-        this.Focus();
-    }
-
-    protected override void OnPreviewKeyDown(System.Windows.Input.KeyEventArgs e)
-    {
-        if (_captureMode != KeyCaptureMode.None)
-        {
-            e.Handled = true;
-            
-            // ESC키로 취소
-            if (e.Key == System.Windows.Input.Key.Escape)
-            {
-                _captureMode = KeyCaptureMode.None;
-                UpdateKeyDisplays();
-                return;
-            }
-
-            // 시스템 키인 경우 (예: F10 등) ImeProcessed나 System 등을 확인
-            var key = e.Key == System.Windows.Input.Key.System ? e.SystemKey : e.Key;
-            int vk = System.Windows.Input.KeyInterop.VirtualKeyFromKey(key);
-            
-            if (_captureMode == KeyCaptureMode.ZoomIn)
-            {
-                _settings.ZoomInKey = vk;
-            }
-            else if (_captureMode == KeyCaptureMode.ZoomOut)
-            {
-                _settings.ZoomOutKey = vk;
-            }
-
-            _captureMode = KeyCaptureMode.None;
-            UpdateKeyDisplays();
-            ApplySettings();
-            return;
-        }
-
-        base.OnPreviewKeyDown(e);
-    }
-
-    #endregion
 }

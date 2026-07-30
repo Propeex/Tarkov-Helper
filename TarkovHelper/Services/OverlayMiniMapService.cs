@@ -226,15 +226,21 @@ public sealed class OverlayMiniMapService : IDisposable
     private void SubscribeHotkeys()
     {
         var hooks = GlobalKeyboardHookService.Instance;
-        hooks.OverlayTogglePressed -= OnOverlayTogglePressed;
-        hooks.OverlaySettingsPressed -= OnSettingsPressed;
-        hooks.OverlayZoomInPressed -= OnZoomInPressed;
-        hooks.OverlayZoomOutPressed -= OnZoomOutPressed;
+        UnsubscribeHotkeys();
 
         hooks.OverlayTogglePressed += OnOverlayTogglePressed;
         hooks.OverlaySettingsPressed += OnSettingsPressed;
         hooks.OverlayZoomInPressed += OnZoomInPressed;
         hooks.OverlayZoomOutPressed += OnZoomOutPressed;
+        hooks.OverlayFloorUpPressed += OnFloorUpPressed;
+        hooks.OverlayFloorDownPressed += OnFloorDownPressed;
+        hooks.OverlayOpacityIncreasePressed += OnOpacityIncreasePressed;
+        hooks.OverlayOpacityDecreasePressed += OnOpacityDecreasePressed;
+        hooks.OverlayCenterPlayerPressed += OnCenterPlayerPressed;
+        hooks.OverlayToggleViewModePressed += OnToggleViewModePressed;
+        hooks.OverlayToggleClickThroughPressed += OnToggleClickThroughPressed;
+        hooks.OverlayResetViewPressed += OnResetViewPressed;
+        hooks.OverlayResumeAutoFloorPressed += OnResumeAutoFloorPressed;
         SyncHotkeys();
     }
 
@@ -245,33 +251,41 @@ public sealed class OverlayMiniMapService : IDisposable
         hooks.OverlaySettingsPressed -= OnSettingsPressed;
         hooks.OverlayZoomInPressed -= OnZoomInPressed;
         hooks.OverlayZoomOutPressed -= OnZoomOutPressed;
+        hooks.OverlayFloorUpPressed -= OnFloorUpPressed;
+        hooks.OverlayFloorDownPressed -= OnFloorDownPressed;
+        hooks.OverlayOpacityIncreasePressed -= OnOpacityIncreasePressed;
+        hooks.OverlayOpacityDecreasePressed -= OnOpacityDecreasePressed;
+        hooks.OverlayCenterPlayerPressed -= OnCenterPlayerPressed;
+        hooks.OverlayToggleViewModePressed -= OnToggleViewModePressed;
+        hooks.OverlayToggleClickThroughPressed -= OnToggleClickThroughPressed;
+        hooks.OverlayResetViewPressed -= OnResetViewPressed;
+        hooks.OverlayResumeAutoFloorPressed -= OnResumeAutoFloorPressed;
     }
 
-    private void OnOverlayTogglePressed()
-    {
+    private void OnOverlayTogglePressed() =>
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(ToggleOverlay);
-    }
 
-    private void OnSettingsPressed()
-    {
+    private void OnSettingsPressed() =>
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(ShowSettingsWindow);
-    }
 
-    private void OnZoomInPressed()
+    private void OnZoomInPressed() => DispatchOverlay(window => window.ZoomIn());
+    private void OnZoomOutPressed() => DispatchOverlay(window => window.ZoomOut());
+    private void OnFloorUpPressed() => DispatchOverlay(window => window.MoveFloorUp());
+    private void OnFloorDownPressed() => DispatchOverlay(window => window.MoveFloorDown());
+    private void OnOpacityIncreasePressed() => DispatchOverlay(window => window.IncreaseOpacity());
+    private void OnOpacityDecreasePressed() => DispatchOverlay(window => window.DecreaseOpacity());
+    private void OnCenterPlayerPressed() => DispatchOverlay(window => window.CenterPlayer());
+    private void OnToggleViewModePressed() => DispatchOverlay(window => window.ToggleViewMode());
+    private void OnToggleClickThroughPressed() => DispatchOverlay(window => window.ToggleClickThrough());
+    private void OnResetViewPressed() => DispatchOverlay(window => window.ResetView());
+    private void OnResumeAutoFloorPressed() => DispatchOverlay(window => window.ResumeAutomaticFloorTracking());
+
+    private void DispatchOverlay(Action<OverlayMiniMapWindow> action)
     {
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             if (_overlayWindow != null && IsOverlayVisible)
-                _overlayWindow.ZoomIn();
-        });
-    }
-
-    private void OnZoomOutPressed()
-    {
-        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            if (_overlayWindow != null && IsOverlayVisible)
-                _overlayWindow.ZoomOut();
+                action(_overlayWindow);
         });
     }
 
@@ -396,8 +410,18 @@ public sealed class OverlayMiniMapService : IDisposable
 
     private void SyncHotkeys()
     {
-        GlobalKeyboardHookService.Instance.ZoomInKey = _settings.ZoomInKey;
-        GlobalKeyboardHookService.Instance.ZoomOutKey = _settings.ZoomOutKey;
+        var hooks = GlobalKeyboardHookService.Instance;
+        hooks.ZoomInKey = _settings.ZoomInKey;
+        hooks.ZoomOutKey = _settings.ZoomOutKey;
+        hooks.FloorUpKey = _settings.FloorUpKey;
+        hooks.FloorDownKey = _settings.FloorDownKey;
+        hooks.OpacityIncreaseKey = _settings.OpacityIncreaseKey;
+        hooks.OpacityDecreaseKey = _settings.OpacityDecreaseKey;
+        hooks.CenterPlayerKey = _settings.CenterPlayerKey;
+        hooks.ToggleViewModeKey = _settings.ToggleViewModeKey;
+        hooks.ToggleClickThroughKey = _settings.ToggleClickThroughKey;
+        hooks.ResetViewKey = _settings.ResetViewKey;
+        hooks.ResumeAutoFloorKey = _settings.ResumeAutoFloorKey;
     }
 
     public void Dispose()

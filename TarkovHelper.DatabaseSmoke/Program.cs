@@ -268,6 +268,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     await RunObjectiveProfileIsolationSmokeAsync();
     await RunUserProgressResetSmokeAsync();
     RunMiniMapVisibilitySourceSmoke();
+    RunOverlayMiniMapControlsSmoke();
     RunApplicationBehaviorSmoke();
 
     Console.WriteLine(
@@ -531,6 +532,79 @@ static void RunMiniMapVisibilitySourceSmoke()
         applicationSettings.MapShowScavExtracts = original.MapShowScavExtracts;
         applicationSettings.MapShowTransits = original.MapShowTransits;
     }
+}
+
+static void RunOverlayMiniMapControlsSmoke()
+{
+    var settings = new OverlayMiniMapSettings();
+    if (settings.FloorUpKey != 0x21 || settings.FloorDownKey != 0x22 ||
+        Math.Abs(settings.OtherFloorOpacity - 0.3) > 0.0001 ||
+        !settings.AutoFloorSelection)
+        throw new InvalidDataException("Minimap floor-control defaults are not stable.");
+
+    settings.SetHotkey(OverlayMiniMapHotkeyAction.OpacityIncrease, settings.FloorUpKey);
+    if (settings.OpacityIncreaseKey != 0x21 || settings.FloorUpKey != 0 ||
+        settings.GetActionForHotkey(0x21) != OverlayMiniMapHotkeyAction.OpacityIncrease)
+        throw new InvalidDataException("Duplicate minimap hotkeys were not transferred atomically.");
+
+    settings.ToggleViewModeKey = 0x76;
+    settings.ToggleClickThroughKey = 0x77;
+    settings.ResetViewKey = 0x78;
+    settings.ResumeAutoFloorKey = 0x79;
+    var cloned = settings.Clone();
+    if (cloned.ToggleViewModeKey != settings.ToggleViewModeKey ||
+        cloned.ToggleClickThroughKey != settings.ToggleClickThroughKey ||
+        cloned.ResetViewKey != settings.ResetViewKey ||
+        cloned.ResumeAutoFloorKey != settings.ResumeAutoFloorKey)
+        throw new InvalidDataException("Minimap hotkeys were not preserved by cloning.");
+
+    var floors = new[]
+    {
+        new MapFloorConfig { LayerId = "level3", Order = 2 },
+        new MapFloorConfig { LayerId = "basement", Order = -1 },
+        new MapFloorConfig { LayerId = "main", Order = 0, IsDefault = true }
+    };
+    if (MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
+        MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||
+        MiniMapFloorSelection.Move(floors, "main", 1) != "level3" ||
+        MiniMapFloorSelection.Move(floors, "main", -1) != "basement" ||
+        MiniMapFloorSelection.Move(floors, "level3", 1) != "level3" ||
+        MiniMapFloorSelection.Move(floors, "basement", -1) != "basement")
+        throw new InvalidDataException("Minimap floor ordering or navigation is incorrect.");
+
+    if (!MiniMapMarkerVisibilityState.IsCurrentFloor("basement", null) ||
+        !MiniMapMarkerVisibilityState.IsCurrentFloor("level3", null) ||
+        !MiniMapMarkerVisibilityState.IsCurrentFloor(null, "main") ||
+        MiniMapMarkerVisibilityState.IsCurrentFloor("basement", "main") ||
+        !MiniMapMarkerVisibilityState.IsCurrentFloor("basement", "basement"))
+        throw new InvalidDataException("Unknown minimap floor detection was forced to main.");
+
+    const string svg =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\">" +
+        "<g id=\"basement\"><rect width=\"10\" height=\"10\" /></g>" +
+        "<g id=\"main\"><rect width=\"10\" height=\"10\" /></g>" +
+        "<g id=\"level3\"><rect width=\"10\" height=\"10\" /></g>" +
+        "</svg>";
+    var processed = new SvgStylePreprocessor().ProcessSvgContent(
+        svg,
+        new[] { "main" },
+        new[] { "basement", "main", "level3" },
+        backgroundFloorId: null,
+        backgroundOpacity: 0.42,
+        dimAllOtherFloors: true);
+    var document = new System.Xml.XmlDocument();
+    document.LoadXml(processed);
+    var styles = document.GetElementsByTagName("g")
+        .Cast<System.Xml.XmlElement>()
+        .ToDictionary(
+            element => element.GetAttribute("id"),
+            element => element.GetAttribute("style"),
+            StringComparer.OrdinalIgnoreCase);
+    if (!styles["main"].Contains("display:block", StringComparison.OrdinalIgnoreCase) ||
+        !styles["main"].Contains("opacity:1", StringComparison.OrdinalIgnoreCase) ||
+        !styles["basement"].Contains("opacity:0.42", StringComparison.OrdinalIgnoreCase) ||
+        !styles["level3"].Contains("opacity:0.42", StringComparison.OrdinalIgnoreCase))
+        throw new InvalidDataException("Minimap floor opacity processing is incorrect.");
 }
 
 static void RunApplicationBehaviorSmoke()
