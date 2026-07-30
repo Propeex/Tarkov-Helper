@@ -23,189 +23,163 @@ jobs:
         run: |
           from pathlib import Path
 
-          def replace_once(path: Path, old: str, new: str) -> None:
-              text = path.read_text(encoding='utf-8')
-              count = text.count(old)
-              if count != 1:
-                  raise RuntimeError(f'{path}: expected one match, found {count}: {old[:120]!r}')
-              path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+          def replace_method(text: str, start_marker: str, end_marker: str, replacement: str) -> str:
+              start = text.index(start_marker)
+              end = text.index(end_marker, start)
+              return text[:start] + replacement + text[end:]
 
           window = Path('TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs')
-          replace_once(
-              window,
-              '''            if (!_settings.AutoFloorSelection || _manualFloorSelection)
-                          return;
-
-                      var detectedFloorId = DetectCurrentFloor(position);
-                      if (string.IsNullOrWhiteSpace(detectedFloorId) ||
-                          !IsConfiguredFloor(detectedFloorId) ||
-                          string.Equals(_selectedFloorId, detectedFloorId, StringComparison.OrdinalIgnoreCase))
-                      {
-                          return;
-                      }
-
-                      _selectedFloorId = detectedFloorId;
-                      UpdateFloorIndicator();
-                      QueueFloorRender(fitMap: false);
-              ''',
-              '''            if (!_settings.AutoFloorSelection || _manualFloorSelection)
-                          return;
-
-                      var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
-                          _currentMapConfig?.Floors,
-                          DetectCurrentFloor(position));
-                      if (string.Equals(
-                              _selectedFloorId,
-                              automaticFloorId,
-                              StringComparison.OrdinalIgnoreCase))
-                      {
-                          return;
-                      }
-
-                      _selectedFloorId = automaticFloorId;
-                      UpdateFloorIndicator();
-                      QueueFloorRender(fitMap: false);
-              ''')
-
-          replace_once(
-              window,
-              '''    private void SelectInitialFloor()
-                  {
-                      var detectedFloor = _settings.AutoFloorSelection ? DetectCurrentFloor() : null;
-                      _selectedFloorId = MiniMapFloorSelection.SelectInitial(
-                          _currentMapConfig?.Floors,
-                          detectedFloor);
-                      UpdateFloorIndicator();
-                  }
-              ''',
-              '''    private void SelectInitialFloor()
-                  {
-                      _selectedFloorId = _settings.AutoFloorSelection
-                          ? MiniMapFloorSelection.SelectAutomatic(
-                              _currentMapConfig?.Floors,
-                              DetectCurrentFloor())
-                          : MiniMapFloorSelection.SelectInitial(
-                              _currentMapConfig?.Floors,
-                              preferredFloorId: null);
-                      UpdateFloorIndicator();
-                  }
-              ''')
-
-          replace_once(
-              window,
-              '''    private bool IsConfiguredFloor(string floorId) =>
-                      MiniMapFloorSelection.Contains(_currentMapConfig?.Floors, floorId);
-
-              ''',
-              '')
-
           text = window.read_text(encoding='utf-8')
+
+          text = replace_method(
+              text,
+              '    private void OnPositionUpdated(object? sender, ScreenPosition position)',
+              '    private void OnMapChanged(string mapKey)',
+              '''    private void OnPositionUpdated(object? sender, ScreenPosition position)
+          {
+              Dispatcher.BeginInvoke(() =>
+              {
+                  UpdatePlayerMarker(position);
+
+                  if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
+                      CenterOnPlayer(position);
+
+                  if (!_settings.AutoFloorSelection || _manualFloorSelection)
+                      return;
+
+                  var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
+                      _currentMapConfig?.Floors,
+                      DetectCurrentFloor(position));
+                  if (string.Equals(
+                          _selectedFloorId,
+                          automaticFloorId,
+                          StringComparison.OrdinalIgnoreCase))
+                  {
+                      return;
+                  }
+
+                  _selectedFloorId = automaticFloorId;
+                  UpdateFloorIndicator();
+                  QueueFloorRender(fitMap: false);
+              });
+          }
+
+          ''')
+
+          text = replace_method(
+              text,
+              '    private void SelectInitialFloor()',
+              '    private IReadOnlyList<MapFloorConfig> GetOrderedFloors()',
+              '''    private void SelectInitialFloor()
+          {
+              _selectedFloorId = _settings.AutoFloorSelection
+                  ? MiniMapFloorSelection.SelectAutomatic(
+                      _currentMapConfig?.Floors,
+                      DetectCurrentFloor())
+                  : MiniMapFloorSelection.SelectInitial(
+                      _currentMapConfig?.Floors,
+                      preferredFloorId: null);
+              UpdateFloorIndicator();
+          }
+
+          ''')
+
+          configured_marker = '    private bool IsConfiguredFloor(string floorId) =>'
+          if configured_marker in text:
+              text = replace_method(
+                  text,
+                  configured_marker,
+                  '    private void QueueFloorRender(bool fitMap)',
+                  '')
+
           text = text.replace('ApplyDetectedFloorIfAvailable()', 'ApplyAutomaticFloorSelection()')
+          text = replace_method(
+              text,
+              '    private bool ApplyAutomaticFloorSelection()',
+              '    public void CenterPlayer()',
+              '''    private bool ApplyAutomaticFloorSelection()
+          {
+              var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
+                  _currentMapConfig?.Floors,
+                  DetectCurrentFloor());
+              if (string.Equals(
+                      _selectedFloorId,
+                      automaticFloorId,
+                      StringComparison.OrdinalIgnoreCase))
+              {
+                  return false;
+              }
+
+              _selectedFloorId = automaticFloorId;
+              return true;
+          }
+
+          ''')
           window.write_text(text, encoding='utf-8', newline='\n')
 
-          replace_once(
-              window,
-              '''    private bool ApplyAutomaticFloorSelection()
-                  {
-                      var detectedFloor = DetectCurrentFloor();
-                      if (string.IsNullOrWhiteSpace(detectedFloor) ||
-                          !IsConfiguredFloor(detectedFloor) ||
-                          string.Equals(_selectedFloorId, detectedFloor, StringComparison.OrdinalIgnoreCase))
-                      {
-                          return false;
-                      }
-
-                      _selectedFloorId = detectedFloor;
-                      return true;
-                  }
-              ''',
-              '''    private bool ApplyAutomaticFloorSelection()
-                  {
-                      var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
-                          _currentMapConfig?.Floors,
-                          DetectCurrentFloor());
-                      if (string.Equals(
-                              _selectedFloorId,
-                              automaticFloorId,
-                              StringComparison.OrdinalIgnoreCase))
-                      {
-                          return false;
-                      }
-
-                      _selectedFloorId = automaticFloorId;
-                      return true;
-                  }
-              ''')
-
           settings_window = Path('TarkovHelper/Windows/Dialogs/OverlaySettingsWindow.xaml.cs')
-          replace_once(
-              settings_window,
-              '''        _settings = settings.Clone();
-                      _overlayWindow = overlayWindow;
-                      _hotkeyButtons = new Dictionary<OverlayMiniMapHotkeyAction, Button>
-              ''',
-              '''        _settings = settings.Clone();
-                      _overlayWindow = overlayWindow;
-                      if (_overlayWindow != null)
-                          _overlayWindow.SettingsChanged += OnOverlaySettingsChanged;
+          text = settings_window.read_text(encoding='utf-8')
+          assignment = '        _overlayWindow = overlayWindow;\n'
+          subscription = (
+              assignment +
+              '        if (_overlayWindow != null)\n'
+              '            _overlayWindow.SettingsChanged += OnOverlaySettingsChanged;\n')
+          if 'SettingsChanged += OnOverlaySettingsChanged' not in text:
+              if text.count(assignment) != 1:
+                  raise RuntimeError('Could not identify overlay settings-window assignment.')
+              text = text.replace(assignment, subscription, 1)
 
-                      _hotkeyButtons = new Dictionary<OverlayMiniMapHotkeyAction, Button>
-              ''')
+          if 'private void OnOverlaySettingsChanged(' not in text:
+              marker = '    private void UpdateDisplays()\n'
+              handler = '''    private void OnOverlaySettingsChanged(OverlayMiniMapSettings settings)
+          {
+              if (!Dispatcher.CheckAccess())
+              {
+                  Dispatcher.BeginInvoke(() => OnOverlaySettingsChanged(settings));
+                  return;
+              }
 
-          replace_once(
-              settings_window,
-              '''    private void UpdateDisplays()
-                  {
-              ''',
-              '''    private void OnOverlaySettingsChanged(OverlayMiniMapSettings settings)
-                  {
-                      if (!Dispatcher.CheckAccess())
-                      {
-                          Dispatcher.BeginInvoke(() => OnOverlaySettingsChanged(settings));
-                          return;
-                      }
+              _settings.CopyFrom(settings);
+              _isInitializing = true;
+              LoadSettings();
+              _isInitializing = false;
+          }
 
-                      _settings.CopyFrom(settings);
-                      _isInitializing = true;
-                      LoadSettings();
-                      _isInitializing = false;
-                  }
+          '''
+              if text.count(marker) != 1:
+                  raise RuntimeError('Could not identify settings display method.')
+              text = text.replace(marker, handler + marker, 1)
 
-                  private void UpdateDisplays()
-                  {
-              ''')
-
-          replace_once(
-              settings_window,
-              '''    protected override void OnClosed(EventArgs e)
-                  {
-                      GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
-                      base.OnClosed(e);
-                  }
-              ''',
-              '''    protected override void OnClosed(EventArgs e)
-                  {
-                      GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
-                      if (_overlayWindow != null)
-                          _overlayWindow.SettingsChanged -= OnOverlaySettingsChanged;
-                      base.OnClosed(e);
-                  }
-              ''')
+          close_lines = (
+              '        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;\n'
+              '        base.OnClosed(e);\n')
+          close_replacement = (
+              '        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;\n'
+              '        if (_overlayWindow != null)\n'
+              '            _overlayWindow.SettingsChanged -= OnOverlaySettingsChanged;\n'
+              '        base.OnClosed(e);\n')
+          if 'SettingsChanged -= OnOverlaySettingsChanged' not in text:
+              if text.count(close_lines) != 1:
+                  raise RuntimeError('Could not identify settings-window close cleanup.')
+              text = text.replace(close_lines, close_replacement, 1)
+          settings_window.write_text(text, encoding='utf-8', newline='\n')
 
           smoke = Path('TarkovHelper.DatabaseSmoke/Program.cs')
-          replace_once(
-              smoke,
-              '''    if (MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
-                      MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||
-                      MiniMapFloorSelection.Move(floors, "main", 1) != "level3" ||
-              ''',
-              '''    if (MiniMapFloorSelection.SelectAutomatic(floors, null) != null ||
-                      MiniMapFloorSelection.SelectAutomatic(floors, "unknown") != null ||
-                      MiniMapFloorSelection.SelectAutomatic(floors, "level3") != "level3" ||
-                      MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
-                      MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||
-                      MiniMapFloorSelection.Move(floors, "main", 1) != "level3" ||
-              ''')
+          text = smoke.read_text(encoding='utf-8')
+          old = (
+              '    if (MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||\n'
+              '        MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||\n')
+          new = (
+              '    if (MiniMapFloorSelection.SelectAutomatic(floors, null) != null ||\n'
+              '        MiniMapFloorSelection.SelectAutomatic(floors, "unknown") != null ||\n'
+              '        MiniMapFloorSelection.SelectAutomatic(floors, "level3") != "level3" ||\n'
+              '        MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||\n'
+              '        MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||\n')
+          if 'SelectAutomatic(floors, "unknown")' not in text:
+              if text.count(old) != 1:
+                  raise RuntimeError('Could not identify minimap floor smoke assertions.')
+              text = text.replace(old, new, 1)
+          smoke.write_text(text, encoding='utf-8', newline='\n')
 
       - name: Commit floor synchronization fix
         shell: bash
