@@ -564,7 +564,10 @@ static void RunOverlayMiniMapControlsSmoke()
         new MapFloorConfig { LayerId = "basement", Order = -1 },
         new MapFloorConfig { LayerId = "main", Order = 0, IsDefault = true }
     };
-    if (MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
+    if (MiniMapFloorSelection.SelectAutomatic(floors, null) != null ||
+        MiniMapFloorSelection.SelectAutomatic(floors, "unknown") != null ||
+        MiniMapFloorSelection.SelectAutomatic(floors, "level3") != "level3" ||
+        MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
         MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||
         MiniMapFloorSelection.Move(floors, "main", 1) != "level3" ||
         MiniMapFloorSelection.Move(floors, "main", -1) != "basement" ||

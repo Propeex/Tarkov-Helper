@@ -25,6 +25,8 @@ public partial class OverlaySettingsWindow : Window
 
         _settings = settings.Clone();
         _overlayWindow = overlayWindow;
+        if (_overlayWindow != null)
+            _overlayWindow.SettingsChanged += OnOverlaySettingsChanged;
         _hotkeyButtons = new Dictionary<OverlayMiniMapHotkeyAction, Button>
         {
             [OverlayMiniMapHotkeyAction.ZoomIn] = BtnZoomInKey,
@@ -59,6 +61,20 @@ public partial class OverlaySettingsWindow : Window
         UpdateDisplays();
         UpdateKeyDisplays();
     }
+
+    private void OnOverlaySettingsChanged(OverlayMiniMapSettings settings)
+{
+    if (!Dispatcher.CheckAccess())
+    {
+        Dispatcher.BeginInvoke(() => OnOverlaySettingsChanged(settings));
+        return;
+    }
+
+    _settings.CopyFrom(settings);
+    _isInitializing = true;
+    LoadSettings();
+    _isInitializing = false;
+}
 
     private void UpdateDisplays()
     {
@@ -266,6 +282,8 @@ public partial class OverlaySettingsWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+        if (_overlayWindow != null)
+            _overlayWindow.SettingsChanged -= OnOverlaySettingsChanged;
         base.OnClosed(e);
     }
 }

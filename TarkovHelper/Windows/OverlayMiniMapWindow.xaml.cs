@@ -202,30 +202,33 @@ public partial class OverlayMiniMapWindow : Window
     }
 
     private void OnPositionUpdated(object? sender, ScreenPosition position)
+{
+    Dispatcher.BeginInvoke(() =>
     {
-        Dispatcher.BeginInvoke(() =>
+        UpdatePlayerMarker(position);
+
+        if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
+            CenterOnPlayer(position);
+
+        if (!_settings.AutoFloorSelection || _manualFloorSelection)
+            return;
+
+        var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
+            _currentMapConfig?.Floors,
+            DetectCurrentFloor(position));
+        if (string.Equals(
+                _selectedFloorId,
+                automaticFloorId,
+                StringComparison.OrdinalIgnoreCase))
         {
-            UpdatePlayerMarker(position);
+            return;
+        }
 
-            if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
-                CenterOnPlayer(position);
-
-            if (!_settings.AutoFloorSelection || _manualFloorSelection)
-                return;
-
-            var detectedFloorId = DetectCurrentFloor(position);
-            if (string.IsNullOrWhiteSpace(detectedFloorId) ||
-                !IsConfiguredFloor(detectedFloorId) ||
-                string.Equals(_selectedFloorId, detectedFloorId, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            _selectedFloorId = detectedFloorId;
-            UpdateFloorIndicator();
-            QueueFloorRender(fitMap: false);
-        });
-    }
+        _selectedFloorId = automaticFloorId;
+        UpdateFloorIndicator();
+        QueueFloorRender(fitMap: false);
+    });
+}
 
     private void OnMapChanged(string mapKey)
     {
@@ -297,19 +300,19 @@ public partial class OverlayMiniMapWindow : Window
     }
 
     private void SelectInitialFloor()
-    {
-        var detectedFloor = _settings.AutoFloorSelection ? DetectCurrentFloor() : null;
-        _selectedFloorId = MiniMapFloorSelection.SelectInitial(
+{
+    _selectedFloorId = _settings.AutoFloorSelection
+        ? MiniMapFloorSelection.SelectAutomatic(
             _currentMapConfig?.Floors,
-            detectedFloor);
-        UpdateFloorIndicator();
-    }
+            DetectCurrentFloor())
+        : MiniMapFloorSelection.SelectInitial(
+            _currentMapConfig?.Floors,
+            preferredFloorId: null);
+    UpdateFloorIndicator();
+}
 
     private IReadOnlyList<MapFloorConfig> GetOrderedFloors() =>
         MiniMapFloorSelection.Order(_currentMapConfig?.Floors);
-
-    private bool IsConfiguredFloor(string floorId) =>
-        MiniMapFloorSelection.Contains(_currentMapConfig?.Floors, floorId);
 
     private void QueueFloorRender(bool fitMap)
     {
@@ -1019,7 +1022,7 @@ public partial class OverlayMiniMapWindow : Window
             if (_settings.AutoFloorSelection)
             {
                 _manualFloorSelection = false;
-                floorSelectionChanged = ApplyDetectedFloorIfAvailable();
+                floorSelectionChanged = ApplyAutomaticFloorSelection();
             }
             else
             {
@@ -1132,7 +1135,7 @@ public partial class OverlayMiniMapWindow : Window
         _settings.AutoFloorSelection = true;
         _appliedAutoFloorSelection = true;
         _manualFloorSelection = false;
-        var changed = ApplyDetectedFloorIfAvailable();
+        var changed = ApplyAutomaticFloorSelection();
         UpdateFloorIndicator();
         SettingsChanged?.Invoke(_settings);
         if (changed)
@@ -1141,19 +1144,22 @@ public partial class OverlayMiniMapWindow : Window
             QueueMarkerRefresh();
     }
 
-    private bool ApplyDetectedFloorIfAvailable()
+    private bool ApplyAutomaticFloorSelection()
+{
+    var automaticFloorId = MiniMapFloorSelection.SelectAutomatic(
+        _currentMapConfig?.Floors,
+        DetectCurrentFloor());
+    if (string.Equals(
+            _selectedFloorId,
+            automaticFloorId,
+            StringComparison.OrdinalIgnoreCase))
     {
-        var detectedFloor = DetectCurrentFloor();
-        if (string.IsNullOrWhiteSpace(detectedFloor) ||
-            !IsConfiguredFloor(detectedFloor) ||
-            string.Equals(_selectedFloorId, detectedFloor, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        _selectedFloorId = detectedFloor;
-        return true;
+        return false;
     }
+
+    _selectedFloorId = automaticFloorId;
+    return true;
+}
 
     public void CenterPlayer()
     {
