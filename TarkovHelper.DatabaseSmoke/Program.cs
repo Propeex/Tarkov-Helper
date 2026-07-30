@@ -693,7 +693,35 @@ if (scavOnlyExtracts.IsExtractVisible(ExtractFaction.Shared))
         "Shared extracts must follow the PMC filter exactly like the map tab.");
 }
 
-    var extractsDisabled = markerVisibility with { ShowExtracts = false };
+    var pairedExtracts = MapExtractDisplayGrouping.GroupForDisplay(new[]
+    {
+        new MapExtract
+        {
+            Id = "paired-pmc",
+            Name = "Crossroads",
+            Faction = ExtractFaction.Pmc,
+            X = 100,
+            Z = 200
+        },
+        new MapExtract
+        {
+            Id = "paired-scav",
+            Name = "Crossroads",
+            Faction = ExtractFaction.Scav,
+            X = 104,
+            Z = 204
+        }
+    });
+    if (pairedExtracts.Count != 1 ||
+        pairedExtracts[0].Faction != ExtractFaction.Pmc ||
+        pairedExtracts[0].SourceCount != 2 ||
+        scavOnlyExtracts.IsExtractVisible(pairedExtracts[0].Faction))
+    {
+        throw new InvalidDataException(
+            "Paired PMC/Scav extracts were not grouped and classified as PMC.");
+    }
+
+        var extractsDisabled = markerVisibility with { ShowExtracts = false };
     if (extractsDisabled.IsExtractVisible(ExtractFaction.Pmc) ||
         extractsDisabled.IsExtractVisible(ExtractFaction.Transit))
     {

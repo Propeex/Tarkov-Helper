@@ -268,17 +268,30 @@ public sealed class OverlayMiniMapService : IDisposable
     private void OnSettingsPressed() =>
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(ShowSettingsWindow);
 
-    private void OnZoomInPressed() => DispatchOverlay(window => window.ZoomIn());
-    private void OnZoomOutPressed() => DispatchOverlay(window => window.ZoomOut());
-    private void OnFloorUpPressed() => DispatchOverlay(window => window.MoveFloorUp());
-    private void OnFloorDownPressed() => DispatchOverlay(window => window.MoveFloorDown());
-    private void OnOpacityIncreasePressed() => DispatchOverlay(window => window.IncreaseOpacity());
-    private void OnOpacityDecreasePressed() => DispatchOverlay(window => window.DecreaseOpacity());
-    private void OnCenterPlayerPressed() => DispatchOverlay(window => window.CenterPlayer());
-    private void OnToggleViewModePressed() => DispatchOverlay(window => window.ToggleViewMode());
-    private void OnToggleClickThroughPressed() => DispatchOverlay(window => window.ToggleClickThrough());
-    private void OnResetViewPressed() => DispatchOverlay(window => window.ResetView());
-    private void OnResumeAutoFloorPressed() => DispatchOverlay(window => window.ResumeAutomaticFloorTracking());
+    private void OnZoomInPressed() => ZoomIn();
+private void OnZoomOutPressed() => ZoomOut();
+private void OnFloorUpPressed() => MoveFloorUp();
+private void OnFloorDownPressed() => MoveFloorDown();
+private void OnOpacityIncreasePressed() => IncreaseOpacity();
+private void OnOpacityDecreasePressed() => DecreaseOpacity();
+private void OnCenterPlayerPressed() => CenterPlayer();
+private void OnToggleViewModePressed() => ToggleViewMode();
+private void OnToggleClickThroughPressed() => ToggleClickThrough();
+private void OnResetViewPressed() => ResetView();
+private void OnResumeAutoFloorPressed() => ResumeAutomaticFloorTracking();
+
+public void ZoomIn() => DispatchOverlay(window => window.ZoomIn());
+public void ZoomOut() => DispatchOverlay(window => window.ZoomOut());
+public void MoveFloorUp() => DispatchOverlay(window => window.MoveFloorUp());
+public void MoveFloorDown() => DispatchOverlay(window => window.MoveFloorDown());
+public void IncreaseOpacity() => DispatchOverlay(window => window.IncreaseOpacity());
+public void DecreaseOpacity() => DispatchOverlay(window => window.DecreaseOpacity());
+public void CenterPlayer() => DispatchOverlay(window => window.CenterPlayer());
+public void ToggleViewMode() => DispatchOverlay(window => window.ToggleViewMode());
+public void ToggleClickThrough() => DispatchOverlay(window => window.ToggleClickThrough());
+public void ResetView() => DispatchOverlay(window => window.ResetView());
+public void ResumeAutomaticFloorTracking() =>
+    DispatchOverlay(window => window.ResumeAutomaticFloorTracking());
 
     private void DispatchOverlay(Action<OverlayMiniMapWindow> action)
     {
@@ -390,7 +403,7 @@ public sealed class OverlayMiniMapService : IDisposable
 
         if (_settingsWindow == null || !_settingsWindow.IsVisible)
         {
-            _settingsWindow = new OverlaySettingsWindow(_settings, _overlayWindow);
+            _settingsWindow = new OverlaySettingsWindow(_settings, this);
             _settingsWindow.SettingsApplied += OnSettingsApplied;
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
@@ -401,12 +414,13 @@ public sealed class OverlayMiniMapService : IDisposable
     }
 
     private void OnSettingsApplied(OverlayMiniMapSettings settings)
-    {
-        _settings.CopyFrom(settings);
-        SyncHotkeys();
-        QueueSettingsSave();
-        SettingsChanged?.Invoke(_settings);
-    }
+{
+    _settings.CopyFrom(settings);
+    SyncHotkeys();
+    QueueSettingsSave();
+    _overlayWindow?.ApplyConfiguredSettings();
+    SettingsChanged?.Invoke(_settings);
+}
 
     private void SyncHotkeys()
     {

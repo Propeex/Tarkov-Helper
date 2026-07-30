@@ -557,50 +557,52 @@ public partial class OverlayMiniMapWindow : Window
     }
 
     private async Task LoadExtractMarkersAsync(
-        MiniMapMarkerVisibilityState visibility,
-        string? currentFloorId,
-        CancellationToken ct)
+    MiniMapMarkerVisibilityState visibility,
+    string? currentFloorId,
+    CancellationToken ct)
+{
+    var extractService = ExtractService.Instance;
+    if (!extractService.IsLoaded)
     {
-        var extractService = ExtractService.Instance;
-        if (!extractService.IsLoaded)
+        var loaded = await extractService.LoadAsync();
+        if (!loaded)
         {
-            var loaded = await extractService.LoadAsync();
-            if (!loaded)
-            {
-                _log.Warning("Minimap extract data could not be loaded.");
-                return;
-            }
-        }
-
-        ct.ThrowIfCancellationRequested();
-        var extracts = extractService.GetExtractsForMap(_currentMapKey!, _currentMapConfig!);
-        if (extracts.Count == 0)
+            _log.Warning("Minimap extract data could not be loaded.");
             return;
-
-        var addedCount = 0;
-
-        foreach (var extract in extracts)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!visibility.IsExtractVisible(extract.Faction))
-                continue;
-
-            var (screenX, screenY) = _currentMapConfig!.GameToScreenForPlayer(extract.X, extract.Z);
-            const double markerSize = 10.0;
-            var marker = CreateMarkerEllipse(GetExtractColor(extract.Faction), markerSize);
-            marker.ToolTip = extract.Name;
-            marker.IsHitTestVisible = false;
-            marker.Opacity = IsCurrentFloor(extract.FloorId, currentFloorId)
-                ? 0.9
-                : Math.Clamp(_settings.OtherFloorOpacity, 0.0, 1.0);
-            Canvas.SetLeft(marker, screenX - markerSize / 2);
-            Canvas.SetTop(marker, screenY - markerSize / 2);
-            ExtractMarkersContainer.Children.Add(marker);
-            addedCount++;
         }
-
-        _log.Debug($"Added {addedCount} extract markers to minimap.");
     }
+
+    ct.ThrowIfCancellationRequested();
+    var extracts = extractService.GetExtractsForMap(_currentMapKey!, _currentMapConfig!);
+    if (extracts.Count == 0)
+        return;
+
+    var addedCount = 0;
+    var displayExtracts = MapExtractDisplayGrouping.GroupForDisplay(extracts);
+
+    foreach (var display in displayExtracts)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!visibility.IsExtractVisible(display.Faction))
+            continue;
+
+        var extract = display.Extract;
+        var (screenX, screenY) = _currentMapConfig!.GameToScreenForPlayer(extract.X, extract.Z);
+        const double markerSize = 10.0;
+        var marker = CreateMarkerEllipse(GetExtractColor(display.Faction), markerSize);
+        marker.ToolTip = extract.Name;
+        marker.IsHitTestVisible = false;
+        marker.Opacity = IsCurrentFloor(extract.FloorId, currentFloorId)
+            ? 0.9
+            : Math.Clamp(_settings.OtherFloorOpacity, 0.0, 1.0);
+        Canvas.SetLeft(marker, screenX - markerSize / 2);
+        Canvas.SetTop(marker, screenY - markerSize / 2);
+        ExtractMarkersContainer.Children.Add(marker);
+        addedCount++;
+    }
+
+    _log.Debug($"Added {addedCount} grouped extract markers to minimap.");
+}
 
     private FrameworkElement CreateMapMarkerElement(
         MapMarker marker,

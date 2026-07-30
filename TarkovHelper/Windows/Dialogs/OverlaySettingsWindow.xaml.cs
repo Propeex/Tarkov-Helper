@@ -12,21 +12,20 @@ namespace TarkovHelper.Windows.Dialogs;
 public partial class OverlaySettingsWindow : Window
 {
     private readonly OverlayMiniMapSettings _settings;
-    private readonly OverlayMiniMapWindow? _overlayWindow;
+    private readonly OverlayMiniMapService _overlayService;
     private readonly Dictionary<OverlayMiniMapHotkeyAction, Button> _hotkeyButtons;
     private bool _isInitializing = true;
     private OverlayMiniMapHotkeyAction? _captureAction;
 
     public event Action<OverlayMiniMapSettings>? SettingsApplied;
 
-    public OverlaySettingsWindow(OverlayMiniMapSettings settings, OverlayMiniMapWindow? overlayWindow)
+    public OverlaySettingsWindow(OverlayMiniMapSettings settings, OverlayMiniMapService overlayService)
     {
         InitializeComponent();
 
         _settings = settings.Clone();
-        _overlayWindow = overlayWindow;
-        if (_overlayWindow != null)
-            _overlayWindow.SettingsChanged += OnOverlaySettingsChanged;
+        _overlayService = overlayService ?? throw new ArgumentNullException(nameof(overlayService));
+        _overlayService.SettingsChanged += OnOverlaySettingsChanged;
         _hotkeyButtons = new Dictionary<OverlayMiniMapHotkeyAction, Button>
         {
             [OverlayMiniMapHotkeyAction.ZoomIn] = BtnZoomInKey,
@@ -106,38 +105,22 @@ public partial class OverlaySettingsWindow : Window
     }
 
     private void ApplySettings()
-    {
-        if (_isInitializing)
-            return;
+{
+    if (_isInitializing)
+        return;
 
-        _settings.Opacity = SliderOpacity.Value / 100.0;
-        _settings.OtherFloorOpacity = SliderOtherFloorOpacity.Value / 100.0;
-        _settings.ZoomLevel = SliderZoom.Value / 100.0;
-        _settings.PlayerMarkerSize = SliderMarkerSize.Value / 100.0;
-        _settings.AutoFloorSelection = ChkAutoFloorSelection.IsChecked == true;
-        _settings.ViewMode = RbTracking.IsChecked == true
-            ? MiniMapViewMode.PlayerTracking
-            : MiniMapViewMode.Fixed;
-        _settings.ClickThrough = ChkClickThrough.IsChecked == true;
+    _settings.Opacity = SliderOpacity.Value / 100.0;
+    _settings.OtherFloorOpacity = SliderOtherFloorOpacity.Value / 100.0;
+    _settings.ZoomLevel = SliderZoom.Value / 100.0;
+    _settings.PlayerMarkerSize = SliderMarkerSize.Value / 100.0;
+    _settings.AutoFloorSelection = ChkAutoFloorSelection.IsChecked == true;
+    _settings.ViewMode = RbTracking.IsChecked == true
+        ? MiniMapViewMode.PlayerTracking
+        : MiniMapViewMode.Fixed;
+    _settings.ClickThrough = ChkClickThrough.IsChecked == true;
 
-        SettingsApplied?.Invoke(_settings);
-        ApplyToOverlay();
-    }
-
-    private void ApplyToOverlay()
-    {
-        if (_overlayWindow == null)
-            return;
-
-        try
-        {
-            _overlayWindow.ApplyConfiguredSettings();
-        }
-        catch (InvalidOperationException)
-        {
-            // 설정 창이 열린 상태에서 오버레이가 닫힌 경우에는 저장만 유지합니다.
-        }
-    }
+    SettingsApplied?.Invoke(_settings);
+}
 
     private void SliderOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -250,11 +233,11 @@ public partial class OverlaySettingsWindow : Window
         key is Key.M or Key.L or
         Key.NumPad0 or Key.NumPad1 or Key.NumPad2 or Key.NumPad3 or Key.NumPad4 or Key.NumPad5;
 
-    private void BtnFloorUp_Click(object sender, RoutedEventArgs e) => _overlayWindow?.MoveFloorUp();
+    private void BtnFloorUp_Click(object sender, RoutedEventArgs e) => _overlayService.MoveFloorUp();
 
-    private void BtnFloorDown_Click(object sender, RoutedEventArgs e) => _overlayWindow?.MoveFloorDown();
+    private void BtnFloorDown_Click(object sender, RoutedEventArgs e) => _overlayService.MoveFloorDown();
 
-    private void BtnCenterPlayer_Click(object sender, RoutedEventArgs e) => _overlayWindow?.CenterPlayer();
+    private void BtnCenterPlayer_Click(object sender, RoutedEventArgs e) => _overlayService.CenterPlayer();
 
     private void BtnResumeAutoFloor_Click(object sender, RoutedEventArgs e)
     {
@@ -263,10 +246,10 @@ public partial class OverlaySettingsWindow : Window
         ChkAutoFloorSelection.IsChecked = true;
         _isInitializing = false;
         SettingsApplied?.Invoke(_settings);
-        _overlayWindow?.ResumeAutomaticFloorTracking();
+        _overlayService.ResumeAutomaticFloorTracking();
     }
 
-    private void BtnResetView_Click(object sender, RoutedEventArgs e) => _overlayWindow?.ResetView();
+    private void BtnResetView_Click(object sender, RoutedEventArgs e) => _overlayService.ResetView();
 
     private void BtnReset_Click(object sender, RoutedEventArgs e)
     {
@@ -280,10 +263,11 @@ public partial class OverlaySettingsWindow : Window
     private void BtnClose_Click(object sender, RoutedEventArgs e) => Close();
 
     protected override void OnClosed(EventArgs e)
-    {
-        GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
-        if (_overlayWindow != null)
-            _overlayWindow.SettingsChanged -= OnOverlaySettingsChanged;
-        base.OnClosed(e);
-    }
+{
+    GlobalKeyboardHookService.Instance.OverlayHotkeysSuppressed = false;
+    _overlayService.SettingsChanged -= OnOverlaySettingsChanged;
+    base.OnClosed(e);
+}
+}
+}
 }
