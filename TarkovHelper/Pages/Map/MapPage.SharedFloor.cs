@@ -11,8 +11,12 @@ namespace TarkovHelper.Pages.Map;
 
 public partial class MapPage
 {
+    private static readonly bool SharedFloorHandlersRegistered = RegisterSharedFloorHandlers();
+
     private readonly SharedMapFloorStateService _sharedFloorState = SharedMapFloorStateService.Instance;
     private readonly SharedFloorHotkeyService _sharedFloorHotkeys = SharedFloorHotkeyService.Instance;
+    private readonly HashSet<FrameworkElement> _sharedFloorHiddenMarkers = new();
+
     private bool _sharedFloorIntegrationAttached;
     private bool _sharedFloorApplying;
     private bool _sharedFloorHotkeyChange;
@@ -22,9 +26,8 @@ public partial class MapPage
     private string? _sharedProcessedMapPath;
     private DispatcherTimer? _sharedMarkerFilterTimer;
     private int _sharedMarkerFilterTicks;
-    private readonly HashSet<FrameworkElement> _sharedFloorHiddenMarkers = new();
 
-    static MapPage()
+    private static bool RegisterSharedFloorHandlers()
     {
         EventManager.RegisterClassHandler(
             typeof(MapPage),
@@ -34,16 +37,13 @@ public partial class MapPage
             typeof(MapPage),
             FrameworkElement.UnloadedEvent,
             new RoutedEventHandler(OnSharedFloorPageUnloaded));
+        return true;
     }
 
     private static void OnSharedFloorPageLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is MapPage page)
-        {
-            page.Dispatcher.BeginInvoke(
-                page.AttachSharedFloorIntegration,
-                DispatcherPriority.Loaded);
-        }
+            page.Dispatcher.BeginInvoke(page.AttachSharedFloorIntegration, DispatcherPriority.Loaded);
     }
 
     private static void OnSharedFloorPageUnloaded(object sender, RoutedEventArgs e)
@@ -121,10 +121,11 @@ public partial class MapPage
             !string.IsNullOrWhiteSpace(snapshot.FloorId))
         {
             ApplySharedFloor(snapshot.MapKey!, snapshot.FloorId, snapshot.IsAutomatic);
-            return;
         }
-
-        _sharedFloorState.Publish(_currentMapKey, _currentFloorId, true, this);
+        else
+        {
+            _sharedFloorState.Publish(_currentMapKey, _currentFloorId, true, this);
+        }
     }
 
     private void OnSharedMapSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -165,7 +166,6 @@ public partial class MapPage
                             CmbFloorSelect.IsKeyboardFocusWithin;
         var snapshot = _sharedFloorState.Capture();
 
-        // 수동 선택 중에는 기존 자동 전환 코드가 콤보박스를 바꾸더라도 선택 층을 되돌립니다.
         if (!userInitiated &&
             string.Equals(snapshot.MapKey, _currentMapKey, StringComparison.OrdinalIgnoreCase) &&
             !snapshot.IsAutomatic &&
@@ -181,7 +181,7 @@ public partial class MapPage
         ScheduleSharedMarkerFilter();
     }
 
-    private void OnSharedFloorPositionUpdated(object? sender, Models.Map.ScreenPosition position)
+    private void OnSharedFloorPositionUpdated(object? sender, TarkovHelper.Models.Map.ScreenPosition position)
     {
         Dispatcher.BeginInvoke(() =>
         {
@@ -286,7 +286,7 @@ public partial class MapPage
 
     private void MoveSharedFloor(int direction)
     {
-        if (!_mapPageActive ||
+        if (!_sharedFloorIntegrationAttached ||
             CmbFloorSelect.Visibility != Visibility.Visible ||
             CmbFloorSelect.Items.Count < 2)
         {
@@ -311,7 +311,7 @@ public partial class MapPage
 
     private void OnSharedResumeAutomaticPressed()
     {
-        if (!_mapPageActive || string.IsNullOrWhiteSpace(_currentMapKey))
+        if (!_sharedFloorIntegrationAttached || string.IsNullOrWhiteSpace(_currentMapKey))
             return;
 
         var original = _trackerService?.LastPosition?.OriginalPosition;
@@ -332,12 +332,10 @@ public partial class MapPage
 
     private bool HasFloor(string? floorId) =>
         !string.IsNullOrWhiteSpace(floorId) &&
-        CmbFloorSelect.Items
-            .OfType<ComboBoxItem>()
-            .Any(item => string.Equals(
-                item.Tag?.ToString(),
-                floorId,
-                StringComparison.OrdinalIgnoreCase));
+        CmbFloorSelect.Items.OfType<ComboBoxItem>().Any(item => string.Equals(
+            item.Tag?.ToString(),
+            floorId,
+            StringComparison.OrdinalIgnoreCase));
 
     private string? GetFirstFloorId() =>
         CmbFloorSelect.Items.OfType<ComboBoxItem>().FirstOrDefault()?.Tag?.ToString();
@@ -398,8 +396,7 @@ public partial class MapPage
             generatedPath = await Task.Run(() =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var preprocessor = new SvgStylePreprocessor();
-                var processed = preprocessor.ProcessSvgFile(
+                var processed = new SvgStylePreprocessor().ProcessSvgFile(
                     sourcePath,
                     new[] { floorId },
                     allFloors,
@@ -465,15 +462,13 @@ public partial class MapPage
     private void OnSharedMarkerFilterTick(object? sender, EventArgs e)
     {
         ApplySharedMarkerFloorFilter();
-        _sharedMarkerFilterTicks--;
-        if (_sharedMarkerFilterTicks <= 0)
+        if (--_sharedMarkerFilterTicks <= 0)
             _sharedMarkerFilterTimer?.Stop();
     }
 
     private void ApplySharedMarkerFloorFilter()
     {
-        var currentFloor = _currentFloorId;
-        if (string.IsNullOrWhiteSpace(currentFloor))
+        if (string.IsNullOrWhiteSpace(_currentFloorId))
             return;
 
         var currentElements = new HashSet<FrameworkElement>();
@@ -489,17 +484,19 @@ public partial class MapPage
             {
                 currentElements.Add(child);
                 var markerFloor = FindMarkerFloorId(child);
-                if (string.IsNullOrWhiteSpace(markerFloor) ||
-                    MiniMapMarkerVisibilityState.IsCurrentFloor(markerFloor, currentFloor))
+                var isCurrent = string.IsNullOrWhiteSpace(markerFloor) ||
+                                MiniMapMarkerVisibilityState.IsCurrentFloor(markerFloor, _currentFloorId);
+                if (isCurrent)
                 {
                     if (_sharedFloorHiddenMarkers.Remove(child))
                         child.Visibility = Visibility.Visible;
-                    continue;
                 }
-
-                if (child.Visibility == Visibility.Visible)
-                    _sharedFloorHiddenMarkers.Add(child);
-                child.Visibility = Visibility.Collapsed;
+                else
+                {
+                    if (child.Visibility == Visibility.Visible)
+                        _sharedFloorHiddenMarkers.Add(child);
+                    child.Visibility = Visibility.Collapsed;
+                }
             }
         }
 
@@ -510,21 +507,22 @@ public partial class MapPage
     {
         if (element is FrameworkElement frameworkElement && frameworkElement.Tag != null)
         {
-            var tag = frameworkElement.Tag;
             foreach (var propertyName in new[] { "FloorId", "Floor", "LayerId" })
             {
-                var property = tag.GetType().GetProperty(
+                var property = frameworkElement.Tag.GetType().GetProperty(
                     propertyName,
                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
-                if (property?.GetValue(tag) is string value && !string.IsNullOrWhiteSpace(value))
+                if (property?.GetValue(frameworkElement.Tag) is string value &&
+                    !string.IsNullOrWhiteSpace(value))
+                {
                     return value;
+                }
             }
         }
 
         for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(element); index++)
         {
-            var found = FindMarkerFloorId(
-                System.Windows.Media.VisualTreeHelper.GetChild(element, index));
+            var found = FindMarkerFloorId(System.Windows.Media.VisualTreeHelper.GetChild(element, index));
             if (!string.IsNullOrWhiteSpace(found))
                 return found;
         }
