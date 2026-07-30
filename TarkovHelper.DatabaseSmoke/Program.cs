@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Models;
+using TarkovHelper.Models.Map;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Map;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
@@ -511,16 +513,47 @@ static void RunApplicationBehaviorSmoke()
         NormalizedName = "actual-status-smoke",
         Name = "Actual Status Smoke"
     };
-    var availableStatus = new ActualQuestStatusEvaluator(
-        QuestProgressService.Instance,
-        []).Evaluate(statusTask);
-    var activeStatus = new ActualQuestStatusEvaluator(
-        QuestProgressService.Instance,
-        ["actual-status-smoke"]).Evaluate(statusTask);
-    if (availableStatus != QuestStatus.Available || activeStatus != QuestStatus.Active)
+    var eligibleStatus = new ActualQuestStatusEvaluator(
+        QuestProgressService.Instance).Evaluate(statusTask);
+    if (eligibleStatus != QuestStatus.Active)
     {
         throw new InvalidDataException(
-            $"Actual quest status separation failed: available={availableStatus}, active={activeStatus}.");
+            $"Eligible quest must be Active when the helper has no accept action: actual={eligibleStatus}.");
+    }
+
+    var markerVisibility = new MiniMapMarkerVisibilityState(
+        ShowPmcSpawns: true,
+        ShowSniperScavs: false,
+        ShowRogues: true,
+        ShowCultists: false,
+        ShowLevers: true,
+        ShowBosses: false,
+        ShowExtracts: true,
+        ShowPmcExtracts: true,
+        ShowScavExtracts: false,
+        ShowTransits: true);
+    if (!markerVisibility.IsMapMarkerVisible(MarkerType.PmcSpawn) ||
+        markerVisibility.IsMapMarkerVisible(MarkerType.SniperScavSpawn) ||
+        !markerVisibility.IsMapMarkerVisible(MarkerType.RogueSpawn) ||
+        markerVisibility.IsMapMarkerVisible(MarkerType.CultistSpawn) ||
+        !markerVisibility.IsMapMarkerVisible(MarkerType.Lever) ||
+        markerVisibility.IsMapMarkerVisible(MarkerType.BossSpawn) ||
+        markerVisibility.IsMapMarkerVisible(MarkerType.ScavSpawn) ||
+        !markerVisibility.IsExtractVisible(ExtractFaction.Pmc) ||
+        markerVisibility.IsExtractVisible(ExtractFaction.Scav) ||
+        !markerVisibility.IsExtractVisible(ExtractFaction.Transit) ||
+        !markerVisibility.IsExtractVisible(ExtractFaction.Shared))
+    {
+        throw new InvalidDataException(
+            "Minimap marker visibility did not mirror the map-tab category settings.");
+    }
+
+    var extractsDisabled = markerVisibility with { ShowExtracts = false };
+    if (extractsDisabled.IsExtractVisible(ExtractFaction.Pmc) ||
+        extractsDisabled.IsExtractVisible(ExtractFaction.Transit))
+    {
+        throw new InvalidDataException(
+            "Minimap extract master visibility did not override faction filters.");
     }
 
     var categories = ItemsDataService.Instance;

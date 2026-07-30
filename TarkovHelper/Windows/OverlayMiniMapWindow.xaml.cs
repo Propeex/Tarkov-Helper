@@ -5,11 +5,14 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using SharpVectors.Converters;
+using SharpVectors.Renderers.Wpf;
 using TarkovHelper.Models;
 using TarkovHelper.Models.Map;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Logging;
 using TarkovHelper.Services.Map;
+using TarkovHelper.Services.Settings;
 
 namespace TarkovHelper.Windows;
 
@@ -38,6 +41,11 @@ public partial class OverlayMiniMapWindow : Window
     private MapTrackerService? _trackerService;
     private string? _currentMapKey;
     private MapConfig? _currentMapConfig;
+    private readonly Dictionary<MarkerType, DrawingGroup?> _mapMarkerIconCache = new();
+    private readonly string _mapMarkerIconBasePath = System.IO.Path.Combine(
+        AppDomain.CurrentDomain.BaseDirectory,
+        "Assets", "DB", "Icons", "Markers");
+    private CancellationTokenSource? _markerLoadCts;
 
     private IntPtr _hwnd;
     private bool _isClickThrough;
@@ -159,6 +167,7 @@ public partial class OverlayMiniMapWindow : Window
             _trackerService = MapTrackerService.Instance;
             _trackerService.PositionUpdated += OnPositionUpdated;
             _trackerService.MapChanged += OnMapChanged;
+            MapMarkerDbService.Instance.DataRefreshed += OnMapMarkerDataRefreshed;
 
             // 현재 맵 로드
             var currentMap = _trackerService.CurrentMapKey;
@@ -198,6 +207,11 @@ public partial class OverlayMiniMapWindow : Window
         {
             LoadMap(mapKey);
         });
+    }
+
+    private void OnMapMarkerDataRefreshed(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(new Action(QueueMarkerRefresh));
     }
 
     private void LoadMap(string mapKey)
@@ -247,8 +261,7 @@ public partial class OverlayMiniMapWindow : Window
             // 맵 뷰 업데이트 먼저
             UpdateMapView();
 
-            // 마커 로드 (비동기, 테스트 마커 포함)
-            _ = LoadMarkersAsync();
+            QueueMarkerRefresh();
 
             _log.Info($"Map loaded successfully: {mapKey}");
         }
@@ -322,43 +335,20 @@ public partial class OverlayMiniMapWindow : Window
         _log.Debug($"Auto-fit zoom: {_settings.ZoomLevel:F3}, offset: ({_settings.MapOffsetX:F0}, {_settings.MapOffsetY:F0})");
     }
 
-    /// <summary>
-    /// 테스트 마커 추가 (디버깅용)
-    /// 맵 중앙에 빨간색 원이 표시되어야 함
-    /// </summary>
-    private void AddTestMarker()
+    private void QueueMarkerRefresh()
     {
-        if (_currentMapConfig == null) return;
-
-        // 맵 중앙 좌표에 테스트 마커 추가
-        var centerX = _currentMapConfig.ImageWidth / 2.0;
-        var centerY = _currentMapConfig.ImageHeight / 2.0;
-
-        // 줌에 반비례하는 마커 크기
-        var markerSize = 15.0 / _settings.ZoomLevel;
-        var strokeThickness = 3.0 / _settings.ZoomLevel;
-
-        var testMarker = new Ellipse
-        {
-            Width = markerSize,
-            Height = markerSize,
-            Fill = new SolidColorBrush(Colors.Red),
-            Stroke = new SolidColorBrush(Colors.Yellow),
-            StrokeThickness = strokeThickness,
-            Opacity = 1.0
-        };
-
-        Canvas.SetLeft(testMarker, centerX - markerSize / 2);
-        Canvas.SetTop(testMarker, centerY - markerSize / 2);
-        ExtractMarkersContainer.Children.Add(testMarker);
-
-        _log.Info($"AddTestMarker: Added test marker at map center ({centerX:F0}, {centerY:F0}), size={markerSize:F1}");
+        _markerLoadCts?.Cancel();
+        _markerLoadCts?.Dispose();
+        _markerLoadCts = new CancellationTokenSource();
+        _ = LoadMarkersAsync(_markerLoadCts.Token);
     }
 
-    private async Task LoadMarkersAsync()
+    private async Task LoadMarkersAsync(CancellationToken ct)
     {
+        MapMarkersContainer.Children.Clear();
         ExtractMarkersContainer.Children.Clear();
         QuestMarkersContainer.Children.Clear();
+        QuestMarkersContainer.Visibility = Visibility.Collapsed;
 
         if (_currentMapKey == null || _currentMapConfig == null)
         {
@@ -368,148 +358,234 @@ public partial class OverlayMiniMapWindow : Window
 
         try
         {
-            _log.Info($"LoadMarkersAsync: MiniMap only shows player marker. Skipping extract and quest markers.");
-            
-            // 미니맵에서는 플레이어 마커만 표시하도록 모든 다른 마커 로드 로직 제거/비활성화
-            await Task.CompletedTask;
+            var mapSettings = MapSettings.Instance;
+            var visibility = MiniMapMarkerVisibilityState.Capture(mapSettings);
+
+            await LoadMapMarkersAsync(visibility, ct);
+            if (visibility.ShowExtracts)
+                await LoadExtractMarkersAsync(visibility, ct);
+
+            UpdateOverlayMarkerScales();
+            _log.Info(
+                $"Minimap markers refreshed: map={_currentMapKey}, " +
+                $"mapMarkers={MapMarkersContainer.Children.Count}, " +
+                $"extracts={ExtractMarkersContainer.Children.Count}");
+        }
+        catch (OperationCanceledException)
+        {
+            _log.Debug("Minimap marker refresh cancelled.");
         }
         catch (Exception ex)
         {
-            _log.Error("Failed to load markers", ex);
+            _log.Error("Failed to load minimap markers", ex);
         }
     }
 
-    private async Task LoadExtractMarkersAsync()
+    private async Task LoadMapMarkersAsync(
+        MiniMapMarkerVisibilityState visibility,
+        CancellationToken ct)
+    {
+        var markerService = MapMarkerDbService.Instance;
+        if (!markerService.IsLoaded)
+        {
+            var loaded = await markerService.LoadMarkersAsync();
+            if (!loaded)
+            {
+                _log.Warning("Minimap map-marker data could not be loaded.");
+                return;
+            }
+        }
+
+        ct.ThrowIfCancellationRequested();
+        var currentFloorId = DetectCurrentFloor();
+        var addedCount = 0;
+
+        foreach (var marker in markerService.GetMarkersForMap(_currentMapKey!))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!visibility.IsMapMarkerVisible(marker.Type))
+                continue;
+
+            var (screenX, screenY) = _currentMapConfig!.GameToScreenForPlayer(marker.X, marker.Z);
+            var isCurrentFloor = IsCurrentFloor(marker.FloorId, currentFloorId);
+            var element = CreateMapMarkerElement(marker, screenX, screenY, isCurrentFloor);
+            MapMarkersContainer.Children.Add(element);
+            addedCount++;
+        }
+
+        _log.Debug($"Added {addedCount} standard map markers to minimap.");
+    }
+
+    private async Task LoadExtractMarkersAsync(
+        MiniMapMarkerVisibilityState visibility,
+        CancellationToken ct)
     {
         var extractService = ExtractService.Instance;
-        if (extractService == null)
-        {
-            _log.Warning("LoadExtractMarkersAsync: ExtractService.Instance is null");
-            return;
-        }
-
-        // 데이터 로드 보장
         if (!extractService.IsLoaded)
         {
-            _log.Info("LoadExtractMarkersAsync: Loading extract data...");
-            var loadResult = await extractService.LoadAsync();
-            _log.Info($"LoadExtractMarkersAsync: Load result = {loadResult}");
+            var loaded = await extractService.LoadAsync();
+            if (!loaded)
+            {
+                _log.Warning("Minimap extract data could not be loaded.");
+                return;
+            }
         }
 
-        // MapConfig를 전달하여 별칭(aliases) 지원
+        ct.ThrowIfCancellationRequested();
         var extracts = extractService.GetExtractsForMap(_currentMapKey!, _currentMapConfig!);
-        if (extracts == null || extracts.Count == 0)
-        {
-            _log.Warning($"LoadExtractMarkersAsync: No extracts found for map: {_currentMapKey}");
+        if (extracts.Count == 0)
             return;
-        }
 
-        _log.Info($"LoadExtractMarkersAsync: Found {extracts.Count} extracts for {_currentMapKey}");
-
-        // SettingsService에서 필터 설정 가져오기 (MapPage와 동기화)
-        var settingsService = SettingsService.Instance;
-        var showPmc = settingsService.MapShowPmcExtracts;
-        var showScav = settingsService.MapShowScavExtracts;
-        var showTransit = settingsService.MapShowTransits;
-
+        var currentFloorId = DetectCurrentFloor();
         var addedCount = 0;
+
         foreach (var extract in extracts)
         {
-            // 팩션 필터 적용
-            var shouldShow = extract.Faction switch
-            {
-                ExtractFaction.Pmc => showPmc,
-                ExtractFaction.Scav => showScav,
-                ExtractFaction.Transit => showTransit,
-                ExtractFaction.Shared => showPmc || showScav, // Shared는 PMC/Scav 중 하나라도 켜져 있으면 표시
-                _ => true
-            };
-
-            if (!shouldShow) continue;
+            ct.ThrowIfCancellationRequested();
+            if (!visibility.IsExtractVisible(extract.Faction))
+                continue;
 
             var (screenX, screenY) = _currentMapConfig!.GameToScreenForPlayer(extract.X, extract.Z);
-            _log.Debug($"  Extract '{extract.Name}': Game({extract.X:F1}, {extract.Z:F1}) -> Screen({screenX:F1}, {screenY:F1})");
-
-            // 줌에 반비례하는 마커 크기 (줌 후에도 일정한 화면 크기 유지)
-            // 줌 0.1에서 baseSize 10 -> 실제 크기 100 -> 화면에서 10px로 보임
-            var baseScreenSize = 10.0;
-            var markerSize = baseScreenSize / _settings.ZoomLevel;
+            const double markerSize = 10.0;
             var marker = CreateMarkerEllipse(GetExtractColor(extract.Faction), markerSize);
+            marker.ToolTip = extract.Name;
+            marker.IsHitTestVisible = false;
+            marker.Opacity = IsCurrentFloor(extract.FloorId, currentFloorId) ? 0.9 : 0.45;
             Canvas.SetLeft(marker, screenX - markerSize / 2);
             Canvas.SetTop(marker, screenY - markerSize / 2);
             ExtractMarkersContainer.Children.Add(marker);
             addedCount++;
         }
 
-        _log.Info($"LoadExtractMarkersAsync: Added {addedCount} extract markers (PMC={showPmc}, Scav={showScav}, Transit={showTransit})");
+        _log.Debug($"Added {addedCount} extract markers to minimap.");
     }
 
-    private async Task LoadQuestMarkersAsync()
+    private FrameworkElement CreateMapMarkerElement(
+        MapMarker marker,
+        double screenX,
+        double screenY,
+        bool isCurrentFloor)
     {
-        if (_currentMapConfig == null)
+        var mapScale = _currentMapConfig?.MarkerScale ?? 1.0;
+        var markerSize = 18.0 * mapScale;
+        var canvas = new Canvas
         {
-            _log.Warning("LoadQuestMarkersAsync: _currentMapConfig is null");
-            return;
+            Width = 0,
+            Height = 0,
+            IsHitTestVisible = false,
+            Opacity = isCurrentFloor ? 0.95 : 0.45,
+            Tag = marker
+        };
+
+        var iconDrawing = GetOrLoadMapMarkerIcon(marker.Type);
+        if (iconDrawing != null)
+        {
+            var image = new Image
+            {
+                Source = new DrawingImage(iconDrawing),
+                Width = markerSize,
+                Height = markerSize,
+                Stretch = Stretch.Uniform,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(image, -markerSize / 2);
+            Canvas.SetTop(image, -markerSize / 2);
+            canvas.Children.Add(image);
+        }
+        else
+        {
+            var (r, g, b) = MapMarker.GetMarkerColor(marker.Type);
+            var color = Color.FromRgb(r, g, b);
+            var fallback = CreateMarkerEllipse(color, markerSize);
+            fallback.IsHitTestVisible = false;
+            Canvas.SetLeft(fallback, -markerSize / 2);
+            Canvas.SetTop(fallback, -markerSize / 2);
+            canvas.Children.Add(fallback);
         }
 
-        var objectiveService = QuestObjectiveService.Instance;
-        if (objectiveService == null)
+        Canvas.SetLeft(canvas, screenX);
+        Canvas.SetTop(canvas, screenY);
+        ApplyInverseMapScale(canvas);
+        return canvas;
+    }
+
+    private DrawingGroup? GetOrLoadMapMarkerIcon(MarkerType type)
+    {
+        if (_mapMarkerIconCache.TryGetValue(type, out var cached))
+            return cached;
+
+        var fileName = MapMarker.GetSvgIconFileName(type);
+        if (string.IsNullOrEmpty(fileName))
         {
-            _log.Warning("LoadQuestMarkersAsync: QuestObjectiveService.Instance is null");
-            return;
+            _mapMarkerIconCache[type] = null;
+            return null;
         }
 
-        // 데이터 로드 보장
-        if (!objectiveService.IsLoaded)
+        var path = System.IO.Path.Combine(_mapMarkerIconBasePath, fileName);
+        if (!System.IO.File.Exists(path))
         {
-            _log.Info("LoadQuestMarkersAsync: Loading quest objectives...");
-            var loadResult = await objectiveService.LoadAsync();
-            _log.Info($"LoadQuestMarkersAsync: Load result = {loadResult}");
+            _log.Warning($"Minimap marker icon not found: {path}");
+            _mapMarkerIconCache[type] = null;
+            return null;
         }
 
-        var objectives = objectiveService.GetObjectivesForMap(_currentMapKey!, _currentMapConfig);
-        if (objectives == null || objectives.Count == 0)
+        try
         {
-            _log.Warning($"LoadQuestMarkersAsync: No quest objectives found for map: {_currentMapKey}");
-            return;
+            var settings = new WpfDrawingSettings
+            {
+                IncludeRuntime = true,
+                TextAsGeometry = false
+            };
+            using var reader = new FileSvgReader(settings);
+            var drawing = reader.Read(path);
+            _mapMarkerIconCache[type] = drawing;
+            return drawing;
         }
-
-        _log.Info($"LoadQuestMarkersAsync: Found {objectives.Count} quest objectives for {_currentMapKey}");
-
-        var addedCount = 0;
-        foreach (var obj in objectives)
+        catch (Exception ex)
         {
-            // 위치 정보가 있는 경우에만 마커 생성
-            if (obj.Locations == null || obj.Locations.Count == 0) continue;
-
-            var firstLocation = obj.Locations[0];
-            var (screenX, screenY) = _currentMapConfig.GameToScreenForPlayer(firstLocation.X, firstLocation.Y);
-
-            // 줌에 반비례하는 마커 크기
-            var baseScreenSize = 8.0;
-            var markerSize = baseScreenSize / _settings.ZoomLevel;
-            var marker = CreateMarkerEllipse(GetQuestMarkerColor(obj.Type), markerSize);
-            Canvas.SetLeft(marker, screenX - markerSize / 2);
-            Canvas.SetTop(marker, screenY - markerSize / 2);
-            QuestMarkersContainer.Children.Add(marker);
-            addedCount++;
+            _log.Warning($"Failed to load minimap marker icon '{path}': {ex.Message}");
+            _mapMarkerIconCache[type] = null;
+            return null;
         }
+    }
 
-        _log.Info($"LoadQuestMarkersAsync: Added {addedCount} quest markers");
+    private string? DetectCurrentFloor()
+    {
+        if (string.IsNullOrEmpty(_currentMapKey))
+            return null;
+
+        var original = _trackerService?.LastPosition?.OriginalPosition;
+        if (original == null)
+            return null;
+
+        return FloorDetectionService.Instance.DetectFloor(
+            _currentMapKey,
+            original.X,
+            original.Y,
+            original.Z ?? 0) ?? "main";
+    }
+
+    private static bool IsCurrentFloor(string? markerFloorId, string? currentFloorId)
+    {
+        if (string.IsNullOrEmpty(currentFloorId))
+            return true;
+
+        var effectiveMarkerFloor = string.IsNullOrEmpty(markerFloorId) ? "main" : markerFloorId;
+        return string.Equals(
+            effectiveMarkerFloor,
+            currentFloorId,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private Ellipse CreateMarkerEllipse(Color color, double size)
     {
-        // 테두리 두께도 줌에 반비례하게 조정
-        var strokeThickness = Math.Max(1, 2 / _settings.ZoomLevel);
-
         return new Ellipse
         {
             Width = size,
             Height = size,
             Fill = new SolidColorBrush(color),
-            Stroke = new SolidColorBrush(Colors.White),
-            StrokeThickness = strokeThickness,
+            Stroke = Brushes.White,
+            StrokeThickness = 1.5,
             Opacity = 0.9
         };
     }
@@ -518,25 +594,35 @@ public partial class OverlayMiniMapWindow : Window
     {
         return faction switch
         {
-            ExtractFaction.Pmc => Color.FromRgb(0x4C, 0xAF, 0x50),      // Green
-            ExtractFaction.Scav => Color.FromRgb(0x8B, 0xC3, 0x4A),     // Light Green
-            ExtractFaction.Shared => Color.FromRgb(0x00, 0xBC, 0xD4),   // Cyan
-            ExtractFaction.Transit => Color.FromRgb(0x21, 0x96, 0xF3),  // Blue
+            ExtractFaction.Pmc => Color.FromRgb(0x4C, 0xAF, 0x50),
+            ExtractFaction.Scav => Color.FromRgb(0x8B, 0xC3, 0x4A),
+            ExtractFaction.Shared => Color.FromRgb(0x00, 0xBC, 0xD4),
+            ExtractFaction.Transit => Color.FromRgb(0x21, 0x96, 0xF3),
             _ => Color.FromRgb(0x4C, 0xAF, 0x50)
         };
     }
 
-    private static Color GetQuestMarkerColor(string? objectiveType)
+    private void ApplyInverseMapScale(FrameworkElement marker)
     {
-        return objectiveType?.ToLower() switch
+        var inverseScale = 1.0 / Math.Max(_settings.ZoomLevel, OverlayMiniMapSettings.MinZoom);
+        marker.RenderTransform = new ScaleTransform(inverseScale, inverseScale);
+        marker.RenderTransformOrigin = marker is Canvas
+            ? new Point(0, 0)
+            : new Point(0.5, 0.5);
+    }
+
+    private void UpdateOverlayMarkerScales()
+    {
+        foreach (var container in new[]
+                 {
+                     MapMarkersContainer,
+                     ExtractMarkersContainer,
+                     QuestMarkersContainer
+                 })
         {
-            "visit" => Color.FromRgb(0x4C, 0xAF, 0x50),      // Green
-            "mark" => Color.FromRgb(0xFF, 0x98, 0x00),       // Orange
-            "plantitem" => Color.FromRgb(0x9C, 0x27, 0xB0),  // Purple
-            "extract" => Color.FromRgb(0x21, 0x96, 0xF3),    // Blue
-            "finditem" => Color.FromRgb(0xFF, 0xEB, 0x3B),   // Yellow
-            _ => Color.FromRgb(0x4C, 0xAF, 0x50)
-        };
+            foreach (FrameworkElement marker in container.Children)
+                ApplyInverseMapScale(marker);
+        }
     }
 
     private void UpdatePlayerMarker(ScreenPosition position)
@@ -585,6 +671,7 @@ public partial class OverlayMiniMapWindow : Window
 
         MapTranslate.X = clampedX;
         MapTranslate.Y = clampedY;
+        UpdateOverlayMarkerScales();
 
         _log.Debug($"UpdateMapView: Scale=({MapScale.ScaleX:F4}, {MapScale.ScaleY:F4}), Translate=({MapTranslate.X:F1}, {MapTranslate.Y:F1}), ViewMode={_settings.ViewMode}");
     }
@@ -822,10 +909,8 @@ public partial class OverlayMiniMapWindow : Window
 
     public void RefreshMap()
     {
-        if (!string.IsNullOrEmpty(_currentMapKey))
-        {
-            LoadMap(_currentMapKey);
-        }
+        if (!string.IsNullOrEmpty(_currentMapKey) && _currentMapConfig != null)
+            QueueMarkerRefresh();
     }
 
     #endregion
@@ -834,10 +919,15 @@ public partial class OverlayMiniMapWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _markerLoadCts?.Cancel();
+        _markerLoadCts?.Dispose();
+        _markerLoadCts = null;
+
         if (_trackerService != null)
         {
             _trackerService.PositionUpdated -= OnPositionUpdated;
             _trackerService.MapChanged -= OnMapChanged;
+            MapMarkerDbService.Instance.DataRefreshed -= OnMapMarkerDataRefreshed;
         }
 
         base.OnClosed(e);

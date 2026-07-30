@@ -3605,8 +3605,9 @@ public partial class MapPage : UserControl
             mapSettings.ShowLevers = _showLeversMarkerOverlay;
             mapSettings.ShowBosses = _showBossesMarker;
 
-            // 마커 새로고침
+            // 지도와 미니맵이 동일한 필터를 사용하도록 함께 새로고침
             await RefreshMapMarkers(ct);
+            OverlayMiniMapService.Instance.RefreshMap();
         }
         catch (OperationCanceledException) { }
     }

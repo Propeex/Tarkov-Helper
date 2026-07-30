@@ -43,11 +43,14 @@
                 <!-- SVG 맵 이미지 -->
                 <svgc:SvgViewbox x:Name="MapSvg" Stretch="None"/>
 
-                <!-- 탈출구 마커 컨테이너 -->
-                <Canvas x:Name="ExtractMarkersContainer" ClipToBounds="False"/>
+                <!-- 지도 탭의 PMC/보스/레버 등 일반 마커 컨테이너 -->
+                <Canvas x:Name="MapMarkersContainer" ClipToBounds="False" IsHitTestVisible="False"/>
 
-                <!-- 퀘스트 마커 컨테이너 -->
-                <Canvas x:Name="QuestMarkersContainer" ClipToBounds="False"/>
+                <!-- 탈출구 마커 컨테이너 -->
+                <Canvas x:Name="ExtractMarkersContainer" ClipToBounds="False" IsHitTestVisible="False"/>
+
+                <!-- 퀘스트 마커 컨테이너 (현재 지도 탭에서 비활성화된 레거시 계층) -->
+                <Canvas x:Name="QuestMarkersContainer" ClipToBounds="False" IsHitTestVisible="False" Visibility="Collapsed"/>
 
                 <!-- 플레이어 마커 -->
                 <Canvas x:Name="PlayerMarkerContainer" Visibility="Collapsed">
