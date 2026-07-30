@@ -63,7 +63,8 @@ public readonly record struct MiniMapMarkerVisibilityState(
             ExtractFaction.Pmc => ShowPmcExtracts,
             ExtractFaction.Scav => ShowScavExtracts,
             ExtractFaction.Transit => ShowTransits,
-            ExtractFaction.Shared => ShowPmcExtracts || ShowScavExtracts,
+            // MapPage classifies shared extracts with the PMC category.
+            ExtractFaction.Shared => ShowPmcExtracts,
             _ => true
         };
     }
