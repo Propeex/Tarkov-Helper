@@ -7,14 +7,16 @@ namespace TarkovHelper.Pages;
 public partial class QuestListPage
 {
     private static readonly QuestFilterState PersistedQuestFilters = new();
+    private static readonly bool PersistentQuestFiltersRegistered = RegisterPersistentQuestFilters();
     private bool _persistentQuestFilterHooksAttached;
 
-    static QuestListPage()
+    private static bool RegisterPersistentQuestFilters()
     {
         EventManager.RegisterClassHandler(
             typeof(QuestListPage),
             FrameworkElement.LoadedEvent,
             new RoutedEventHandler(OnPersistentQuestFiltersLoaded));
+        return true;
     }
 
     private static void OnPersistentQuestFiltersLoaded(object sender, RoutedEventArgs e)
