@@ -585,7 +585,7 @@ static void RunOverlayMiniMapControlsSmoke()
         "<g id=\"main\"><rect width=\"10\" height=\"10\" /></g>" +
         "<g id=\"level3\"><rect width=\"10\" height=\"10\" /></g>" +
         "</svg>";
-    var processed = new SvgStylePreprocessor().ProcessSvgContent(
+    var processed = new TarkovHelper.Services.Map.SvgStylePreprocessor().ProcessSvgContent(
         svg,
         new[] { "main" },
         new[] { "basement", "main", "level3" },
