@@ -46,6 +46,7 @@ public partial class OverlayMiniMapWindow : Window
         AppDomain.CurrentDomain.BaseDirectory,
         "Assets", "DB", "Icons", "Markers");
     private CancellationTokenSource? _markerLoadCts;
+    private string? _currentMarkerFloorId;
 
     private IntPtr _hwnd;
     private bool _isClickThrough;
@@ -198,6 +199,16 @@ public partial class OverlayMiniMapWindow : Window
             {
                 CenterOnPlayer(position);
             }
+
+            var detectedFloorId = DetectCurrentFloor(position);
+            if (!string.Equals(
+                    _currentMarkerFloorId,
+                    detectedFloorId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _currentMarkerFloorId = detectedFloorId;
+                QueueMarkerRefresh();
+            }
         });
     }
 
@@ -222,6 +233,7 @@ public partial class OverlayMiniMapWindow : Window
 
             _currentMapKey = mapKey;
             _currentMapConfig = _trackerService?.GetMapConfig(mapKey);
+            _currentMarkerFloorId = null;
 
             _log.Info($"MapConfig: {(_currentMapConfig != null ? $"found, SvgFileName={_currentMapConfig.SvgFileName}, Size={_currentMapConfig.ImageWidth}x{_currentMapConfig.ImageHeight}" : "null")}");
 
@@ -360,10 +372,12 @@ public partial class OverlayMiniMapWindow : Window
         {
             var mapSettings = MapSettings.Instance;
             var visibility = MiniMapMarkerVisibilityState.Capture(mapSettings);
+            var currentFloorId = DetectCurrentFloor();
+            _currentMarkerFloorId = currentFloorId;
 
-            await LoadMapMarkersAsync(visibility, ct);
+            await LoadMapMarkersAsync(visibility, currentFloorId, ct);
             if (visibility.ShowExtracts)
-                await LoadExtractMarkersAsync(visibility, ct);
+                await LoadExtractMarkersAsync(visibility, currentFloorId, ct);
 
             UpdateOverlayMarkerScales();
             _log.Info(
@@ -383,6 +397,7 @@ public partial class OverlayMiniMapWindow : Window
 
     private async Task LoadMapMarkersAsync(
         MiniMapMarkerVisibilityState visibility,
+        string? currentFloorId,
         CancellationToken ct)
     {
         var markerService = MapMarkerDbService.Instance;
@@ -397,7 +412,6 @@ public partial class OverlayMiniMapWindow : Window
         }
 
         ct.ThrowIfCancellationRequested();
-        var currentFloorId = DetectCurrentFloor();
         var addedCount = 0;
 
         foreach (var marker in markerService.GetMarkersForMap(_currentMapKey!))
@@ -418,6 +432,7 @@ public partial class OverlayMiniMapWindow : Window
 
     private async Task LoadExtractMarkersAsync(
         MiniMapMarkerVisibilityState visibility,
+        string? currentFloorId,
         CancellationToken ct)
     {
         var extractService = ExtractService.Instance;
@@ -436,7 +451,6 @@ public partial class OverlayMiniMapWindow : Window
         if (extracts.Count == 0)
             return;
 
-        var currentFloorId = DetectCurrentFloor();
         var addedCount = 0;
 
         foreach (var extract in extracts)
@@ -549,12 +563,13 @@ public partial class OverlayMiniMapWindow : Window
         }
     }
 
-    private string? DetectCurrentFloor()
+    private string? DetectCurrentFloor(ScreenPosition? position = null)
     {
         if (string.IsNullOrEmpty(_currentMapKey))
             return null;
 
-        var original = _trackerService?.LastPosition?.OriginalPosition;
+        var original = position?.OriginalPosition ??
+                       _trackerService?.LastPosition?.OriginalPosition;
         if (original == null)
             return null;
 
