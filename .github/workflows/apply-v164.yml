@@ -1,0 +1,47 @@
+name: Apply v1.6.4 Quest and Minimap Fixes
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/v1.6.4-quest-active-minimap-markers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.6.4-quest-active-minimap-markers
+          fetch-depth: 0
+
+      - name: Apply reviewed source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          gzip -dc .github/patches/v164.patch.gz | patch -p1 --batch --forward
+
+      - name: Commit product changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            .github/workflows/release.yml \
+            update.xml \
+            TarkovHelper/TarkovHelper.csproj \
+            TarkovHelper/Models/QuestStatus.cs \
+            TarkovHelper/Services/ActualQuestStatusEvaluator.cs \
+            TarkovHelper/Services/ActualQuestStatusService.cs \
+            TarkovHelper/Services/Map/MiniMapMarkerVisibilityState.cs \
+            TarkovHelper/Pages/QuestListPage.ActualQuestStatus.cs \
+            TarkovHelper/Pages/Map/MapPage.xaml.cs \
+            TarkovHelper/Windows/OverlayMiniMapWindow.xaml \
+            TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs \
+            TarkovHelper.DatabaseSmoke/Program.cs
+          git commit -m "fix: align quest status and minimap markers"
+          git push origin HEAD:agent/v1.6.4-quest-active-minimap-markers
