@@ -6,14 +6,16 @@ namespace TarkovHelper;
 
 public partial class MainWindow
 {
+    private static readonly bool NavigationCleanupRegistered = RegisterNavigationCleanup();
     private bool _navigationCleanupInitialized;
 
-    static MainWindow()
+    private static bool RegisterNavigationCleanup()
     {
         EventManager.RegisterClassHandler(
             typeof(MainWindow),
             FrameworkElement.LoadedEvent,
             new RoutedEventHandler(OnNavigationCleanupLoaded));
+        return true;
     }
 
     private static void OnNavigationCleanupLoaded(object sender, RoutedEventArgs e)
