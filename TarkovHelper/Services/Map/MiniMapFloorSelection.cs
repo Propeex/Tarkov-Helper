@@ -3,7 +3,7 @@ using TarkovHelper.Models.Map;
 namespace TarkovHelper.Services.Map;
 
 /// <summary>
-/// 미니맵 층 목록의 정렬, 초기 선택 및 위/아래 이동 규칙입니다.
+/// 미니맵 층 목록의 정렬, 자동 선택 및 위/아래 이동 규칙입니다.
 /// WPF 창과 회귀 검사가 동일한 순서 규칙을 사용하도록 UI에서 분리합니다.
 /// </summary>
 public static class MiniMapFloorSelection
@@ -32,22 +32,44 @@ public static class MiniMapFloorSelection
             StringComparison.OrdinalIgnoreCase));
     }
 
-    public static string? SelectInitial(
+    /// <summary>
+    /// 자동 감지 결과가 실제 설정된 층일 때만 그 층을 선택합니다.
+    /// 감지 실패 또는 DB에 없는 층이면 null을 유지하여 모든 층을 표시합니다.
+    /// </summary>
+    public static string? SelectAutomatic(
         IEnumerable<MapFloorConfig>? floors,
         string? detectedFloorId)
+    {
+        if (string.IsNullOrWhiteSpace(detectedFloorId))
+            return null;
+
+        return Order(floors)
+            .FirstOrDefault(floor => string.Equals(
+                floor.LayerId,
+                detectedFloorId,
+                StringComparison.OrdinalIgnoreCase))
+            ?.LayerId;
+    }
+
+    /// <summary>
+    /// 수동 모드의 초기 층을 선택합니다. 지정된 층이 없으면 기본층을 사용합니다.
+    /// </summary>
+    public static string? SelectInitial(
+        IEnumerable<MapFloorConfig>? floors,
+        string? preferredFloorId)
     {
         var ordered = Order(floors);
         if (ordered.Count == 0)
             return null;
 
-        if (!string.IsNullOrWhiteSpace(detectedFloorId))
+        if (!string.IsNullOrWhiteSpace(preferredFloorId))
         {
-            var detected = ordered.FirstOrDefault(floor => string.Equals(
+            var preferred = ordered.FirstOrDefault(floor => string.Equals(
                 floor.LayerId,
-                detectedFloorId,
+                preferredFloorId,
                 StringComparison.OrdinalIgnoreCase));
-            if (detected != null)
-                return detected.LayerId;
+            if (preferred != null)
+                return preferred.LayerId;
         }
 
         return (ordered.FirstOrDefault(floor => floor.IsDefault) ?? ordered[0]).LayerId;
