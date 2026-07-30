@@ -1,0 +1,171 @@
+name: Apply v1.6.4 Minimap Floor Refresh
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'agent/v1.6.4-quest-active-minimap-markers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.6.4-quest-active-minimap-markers
+          fetch-depth: 0
+
+      - name: Apply floor-change refresh fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'Expected one match, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '    private CancellationTokenSource? _markerLoadCts;\n',
+              '    private CancellationTokenSource? _markerLoadCts;\n'
+              '    private string? _currentMarkerFloorId;\n')
+
+          replace_once(
+              '''    private void OnPositionUpdated(object? sender, ScreenPosition position)
+              {
+                  Dispatcher.BeginInvoke(() =>
+                  {
+                      UpdatePlayerMarker(position);
+
+                      if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
+                      {
+                          CenterOnPlayer(position);
+                      }
+                  });
+              }
+              ''',
+              '''    private void OnPositionUpdated(object? sender, ScreenPosition position)
+              {
+                  Dispatcher.BeginInvoke(() =>
+                  {
+                      UpdatePlayerMarker(position);
+
+                      if (_settings.ViewMode == MiniMapViewMode.PlayerTracking)
+                      {
+                          CenterOnPlayer(position);
+                      }
+
+                      var detectedFloorId = DetectCurrentFloor(position);
+                      if (!string.Equals(
+                              _currentMarkerFloorId,
+                              detectedFloorId,
+                              StringComparison.OrdinalIgnoreCase))
+                      {
+                          _currentMarkerFloorId = detectedFloorId;
+                          QueueMarkerRefresh();
+                      }
+                  });
+              }
+              ''')
+
+          replace_once(
+              '''            _currentMapKey = mapKey;
+                          _currentMapConfig = _trackerService?.GetMapConfig(mapKey);
+              ''',
+              '''            _currentMapKey = mapKey;
+                          _currentMapConfig = _trackerService?.GetMapConfig(mapKey);
+                          _currentMarkerFloorId = null;
+              ''')
+
+          replace_once(
+              '''            var mapSettings = MapSettings.Instance;
+                          var visibility = MiniMapMarkerVisibilityState.Capture(mapSettings);
+
+                          await LoadMapMarkersAsync(visibility, ct);
+                          if (visibility.ShowExtracts)
+                              await LoadExtractMarkersAsync(visibility, ct);
+              ''',
+              '''            var mapSettings = MapSettings.Instance;
+                          var visibility = MiniMapMarkerVisibilityState.Capture(mapSettings);
+                          var currentFloorId = DetectCurrentFloor();
+                          _currentMarkerFloorId = currentFloorId;
+
+                          await LoadMapMarkersAsync(visibility, currentFloorId, ct);
+                          if (visibility.ShowExtracts)
+                              await LoadExtractMarkersAsync(visibility, currentFloorId, ct);
+              ''')
+
+          replace_once(
+              '''    private async Task LoadMapMarkersAsync(
+                      MiniMapMarkerVisibilityState visibility,
+                      CancellationToken ct)
+              ''',
+              '''    private async Task LoadMapMarkersAsync(
+                      MiniMapMarkerVisibilityState visibility,
+                      string? currentFloorId,
+                      CancellationToken ct)
+              ''')
+
+          replace_once(
+              '''        ct.ThrowIfCancellationRequested();
+                      var currentFloorId = DetectCurrentFloor();
+                      var addedCount = 0;
+              ''',
+              '''        ct.ThrowIfCancellationRequested();
+                      var addedCount = 0;
+              ''')
+
+          replace_once(
+              '''    private async Task LoadExtractMarkersAsync(
+                      MiniMapMarkerVisibilityState visibility,
+                      CancellationToken ct)
+              ''',
+              '''    private async Task LoadExtractMarkersAsync(
+                      MiniMapMarkerVisibilityState visibility,
+                      string? currentFloorId,
+                      CancellationToken ct)
+              ''')
+
+          replace_once(
+              '''        var currentFloorId = DetectCurrentFloor();
+                      var addedCount = 0;
+              ''',
+              '''        var addedCount = 0;
+              ''')
+
+          replace_once(
+              '''    private string? DetectCurrentFloor()
+              {
+                  if (string.IsNullOrEmpty(_currentMapKey))
+                      return null;
+
+                  var original = _trackerService?.LastPosition?.OriginalPosition;
+              ''',
+              '''    private string? DetectCurrentFloor(ScreenPosition? position = null)
+              {
+                  if (string.IsNullOrEmpty(_currentMapKey))
+                      return null;
+
+                  var original = position?.OriginalPosition ??
+                                 _trackerService?.LastPosition?.OriginalPosition;
+              ''')
+
+          path.write_text(text, encoding='utf-8', newline='\n')
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TarkovHelper/Windows/OverlayMiniMapWindow.xaml.cs
+          git commit -m "fix: refresh minimap markers when floor changes"
+          git push origin HEAD:agent/v1.6.4-quest-active-minimap-markers
