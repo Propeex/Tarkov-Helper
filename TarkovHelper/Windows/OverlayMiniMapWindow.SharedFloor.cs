@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Threading;
+using TarkovHelper.Models.Map;
 using TarkovHelper.Services.Map;
 
 namespace TarkovHelper.Windows;
@@ -46,9 +47,18 @@ public partial class OverlayMiniMapWindow
 
         _sharedFloorAttached = true;
         _sharedFloorState.FloorChanged += OnSharedFloorChanged;
+        SettingsChanged += OnSharedMiniMapSettingsChanged;
+        if (_trackerService != null)
+        {
+            _trackerService.PositionUpdated += OnSharedMiniMapPositionUpdated;
+            _trackerService.MapChanged += OnSharedMiniMapMapChanged;
+        }
+
         var snapshot = _sharedFloorState.Capture();
         if (!string.IsNullOrWhiteSpace(snapshot.MapKey))
             ApplySharedFloor(snapshot.MapKey!, snapshot.FloorId, snapshot.IsAutomatic);
+        else
+            PublishSharedMiniMapFloorState();
     }
 
     private void DetachSharedFloorState()
@@ -58,6 +68,12 @@ public partial class OverlayMiniMapWindow
 
         _sharedFloorAttached = false;
         _sharedFloorState.FloorChanged -= OnSharedFloorChanged;
+        SettingsChanged -= OnSharedMiniMapSettingsChanged;
+        if (_trackerService != null)
+        {
+            _trackerService.PositionUpdated -= OnSharedMiniMapPositionUpdated;
+            _trackerService.MapChanged -= OnSharedMiniMapMapChanged;
+        }
     }
 
     private void OnSharedFloorChanged(object? sender, SharedMapFloorChangedEventArgs e)
@@ -69,6 +85,36 @@ public partial class OverlayMiniMapWindow
             e.MapKey,
             e.FloorId,
             e.IsAutomatic));
+    }
+
+    private void OnSharedMiniMapSettingsChanged(OverlayMiniMapSettings settings) =>
+        PublishSharedMiniMapFloorState();
+
+    private void OnSharedMiniMapPositionUpdated(object? sender, ScreenPosition position)
+    {
+        Dispatcher.BeginInvoke(
+            PublishSharedMiniMapFloorState,
+            DispatcherPriority.ContextIdle);
+    }
+
+    private void OnSharedMiniMapMapChanged(string mapKey)
+    {
+        Dispatcher.BeginInvoke(
+            PublishSharedMiniMapFloorState,
+            DispatcherPriority.ContextIdle);
+    }
+
+    private void PublishSharedMiniMapFloorState()
+    {
+        if (string.IsNullOrWhiteSpace(_currentMapKey))
+            return;
+
+        _settings.OtherFloorOpacity = 0.0;
+        _sharedFloorState.Publish(
+            _currentMapKey,
+            _selectedFloorId,
+            _settings.AutoFloorSelection && !_manualFloorSelection,
+            this);
     }
 
     private void ApplySharedFloor(string mapKey, string? floorId, bool isAutomatic)
