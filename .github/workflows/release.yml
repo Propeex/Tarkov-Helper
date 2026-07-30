@@ -153,6 +153,20 @@ jobs:
             throw "Published item icons are missing: $($publishedIcons.Count)."
           }
 
+          foreach ($markerIcon in @(
+            "Boss.svg",
+            "Cultist.svg",
+            "Lever.svg",
+            "PMC Spawn.svg",
+            "Rogue.svg",
+            "SniperScav.svg"
+          )) {
+            $markerPath = Join-Path "publish/Assets/DB/Icons/Markers" $markerIcon
+            if (-not (Test-Path $markerPath) -or (Get-Item $markerPath).Length -eq 0) {
+              throw "Required minimap marker icon is missing or empty: $markerIcon"
+            }
+          }
+
           $forbiddenNames = @(
             "user_data.db",
             "quest_progress.json",
@@ -187,12 +201,12 @@ jobs:
 
           Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
 
-          ### v1.6.3 수정
-          - 초기화 전체 구간 동안 퀘스트·목표·은신처·보유 아이템 저장 큐를 동시에 정지
-          - 초기화 전에 실행 중이던 저장 완료 후 DB를 삭제하고, 대기 중·초기화 중 저장은 폐기
-          - DB 삭제 검증과 메모리 초기화가 모두 끝난 뒤 네 저장 큐를 함께 재개
-          - 중첩 초기화에서도 모든 초기화 범위가 끝날 때까지 저장 장벽 유지
-          - 초기화 후 퀘스트 기본 필터, 아이템 집계 및 지도 탭 멈춤 수정 유지
+          ### v1.6.4 수정
+          - 별도 수주 기능이 없는 사용 방식에 맞춰 시작 조건을 충족한 퀘스트를 즉시 진행 중으로 표시
+          - 수주 가능 필터·배지·통계를 제거하고 레거시 Available 저장값을 진행 중으로 정규화
+          - 지도 탭에서 표시한 PMC 스폰·스나이퍼 스캐브·로그·컬티스트·레버·보스 마커를 미니맵에도 표시
+          - 탈출구 전체·PMC·스캐브·환승 필터를 지도 탭과 미니맵이 동일한 실시간 설정으로 공유
+          - 첫 위치 수신과 층 변경 시 미니맵 마커의 현재 층·다른 층 투명도를 자동 갱신
 
           ### 설치
           1. TarkovHelper_JH.zip을 원하는 폴더에 압축 해제합니다.
@@ -281,6 +295,11 @@ jobs:
             }
           }
 
+          $publishedVersion = (Get-Item "release-verification/extracted/TarkovHelper_JH.exe").VersionInfo.FileVersion
+          if ($publishedVersion -ne "$version.0") {
+            throw "Published executable version is invalid: expected=$version.0 actual=$publishedVersion"
+          }
+
           @'
           import os
           import pathlib
@@ -315,6 +334,19 @@ jobs:
                   for name in normalized
               ):
                   raise SystemExit('user-data or debug file included')
+
+              required_marker_icons = {
+                  'assets/db/icons/markers/boss.svg',
+                  'assets/db/icons/markers/cultist.svg',
+                  'assets/db/icons/markers/lever.svg',
+                  'assets/db/icons/markers/pmc spawn.svg',
+                  'assets/db/icons/markers/rogue.svg',
+                  'assets/db/icons/markers/sniperscav.svg'
+              }
+              packaged_files = {name.lower() for name in normalized}
+              missing_marker_icons = sorted(required_marker_icons - packaged_files)
+              if missing_marker_icons:
+                  raise SystemExit(f'missing minimap marker icons: {missing_marker_icons}')
 
               icon_names = {
                   pathlib.PurePosixPath(name).stem.lower()
