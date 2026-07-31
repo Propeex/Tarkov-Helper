@@ -8,9 +8,6 @@ on:
       - hotfix/**
   pull_request:
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: windows-latest
@@ -24,57 +21,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-
-      - name: Apply minimap lifecycle patch
-        if: github.event_name == 'pull_request'
-        shell: pwsh
-        env:
-          HEAD_BRANCH: ${{ github.head_ref }}
-        run: |
-          $path = "TarkovHelper/Pages/Map/MapPage.xaml.cs"
-          $text = Get-Content $path -Raw -Encoding UTF8
-          $oldUnload = @'
-        GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
-        GlobalKeyboardHookService.Instance.IsEnabled = false;
-        _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
-        _overlayService.HideOverlay();
-        StopAutoTracking();
-        StopRaidEventMonitoring();
-'@
-          $newUnload = @'
-        var keepMiniMapRunning = _overlayService.IsOverlayVisible;
-        if (!keepMiniMapRunning)
-        {
-            GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
-            GlobalKeyboardHookService.Instance.IsEnabled = false;
-            _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
-            _overlayService.HideOverlay();
-            StopAutoTracking();
-            StopRaidEventMonitoring();
-        }
-'@
-          $oldRaid = @'
-        // 이벤트 구독
-        _raidEventService.RaidEvent += OnRaidEvent;
-'@
-          $newRaid = @'
-        // 지도 탭 재진입 시 중복 구독되지 않도록 정규화합니다.
-        _raidEventService.RaidEvent -= OnRaidEvent;
-        _raidEventService.RaidEvent += OnRaidEvent;
-'@
-          $changed = $false
-          if ($text.Contains($oldUnload)) { $text = $text.Replace($oldUnload, $newUnload); $changed = $true }
-          elseif (-not $text.Contains($newUnload)) { throw "Map unload block was not found." }
-          if ($text.Contains($oldRaid)) { $text = $text.Replace($oldRaid, $newRaid); $changed = $true }
-          elseif (-not $text.Contains($newRaid)) { throw "Raid subscription block was not found." }
-          if ($changed) {
-            [System.IO.File]::WriteAllText((Resolve-Path $path), $text, [System.Text.UTF8Encoding]::new($false))
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add $path
-            git commit -m "Keep minimap running outside map tab"
-            git push origin "HEAD:$env:HEAD_BRANCH"
-          }
 
       - name: Restore
         run: dotnet restore TarkovHelper.sln
