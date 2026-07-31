@@ -1,16 +1,16 @@
 name: Apply FIR Fulfillment Hotfix
 
 on:
-  push:
+  pull_request:
     branches:
-      - hotfix/fir-nonfir-fulfillment
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.ref == 'hotfix/fir-nonfir-fulfillment'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
