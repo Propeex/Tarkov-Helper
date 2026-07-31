@@ -1,0 +1,23 @@
+name: Source Export
+
+on:
+  pull_request:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Archive source
+        shell: bash
+        run: git archive --format=zip --output=Tarkov-Helper-source.zip HEAD
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tarkov-Helper-source
+          path: Tarkov-Helper-source.zip
+          if-no-files-found: error
