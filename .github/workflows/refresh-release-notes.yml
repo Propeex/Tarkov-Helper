@@ -31,8 +31,8 @@ jobs:
           }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Update v1.6.7 release notes
-        if: steps.version.outputs.version == '1.6.7'
+      - name: Update v1.6.8 release notes
+        if: steps.version.outputs.version == '1.6.8'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,12 +43,12 @@ jobs:
 
           Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
 
-          ### v1.6.7 수정
-          - 퀘스트 탭 지도 분류에서 조건별 변형 맵 키를 기본 맵으로 통합
-          - `ground-zero-21` 등 Ground Zero 레벨 변형을 `Ground Zero` 하나로 표시
-          - `night-factory` 등 Factory 주·야간 변형을 `Factory` 하나로 표시
-          - 변형 맵에 연결된 퀘스트도 기본 맵 필터에서 함께 조회되도록 개선
-          - 기존에 선택한 변형 지도 필터를 기본 맵 선택으로 자동 승계
+          ### v1.6.8 수정
+          - 같은 아이템에 FIR 요구량과 일반 요구량이 함께 있을 때 FIR 수량만 충족해도 전체 완료로 판정되던 문제 수정
+          - FIR 최소 수량과 전체 최소 수량을 모두 충족해야 수집 완료로 처리하도록 변경
+          - FIR 아이템을 FIR 요구 구간에 먼저 반영하고, 남는 FIR만 일반 요구 구간에 반영하도록 진행률 계산 수정
+          - 필요 아이템, 퀘스트·은신처 요구사항, 수집가 및 통합 요구사항 화면의 완료 판정을 동일한 규칙으로 통일
+          - FIR 5개·전체 15개 요구 사례를 포함한 자동 회귀 검사 추가
 
           ### 설치
           1. TarkovHelper_JH.zip을 원하는 폴더에 압축 해제합니다.
