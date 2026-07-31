@@ -1,0 +1,91 @@
+name: Verify v1.8.0 Release
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify published release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "v1.8.0"
+          $version = "1.8.0"
+
+          $release = gh release view $tag --repo $env:GITHUB_REPOSITORY --json name,isDraft,isPrerelease,url,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $null -eq $release) { throw "Release could not be read." }
+          if ($release.name -ne "타르코프헬퍼_JH v$version" -or $release.isDraft -or $release.isPrerelease) {
+            throw "Release metadata is invalid."
+          }
+
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          foreach ($asset in @("TarkovHelper_JH.zip", "TarkovHelper_JH.zip.sha256")) {
+            if ($assetNames -notcontains $asset) { throw "Missing asset: $asset" }
+          }
+
+          New-Item -ItemType Directory -Path verification -Force | Out-Null
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip" --dir verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download release ZIP." }
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip.sha256" --dir verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download checksum." }
+
+          $zipPath = "verification/TarkovHelper_JH.zip"
+          $shaPath = "verification/TarkovHelper_JH.zip.sha256"
+          $declaredHash = ((Get-Content $shaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declaredHash -ne $actualHash) { throw "SHA-256 mismatch." }
+
+          Expand-Archive $zipPath -DestinationPath verification/extracted -Force
+          foreach ($file in @(
+            "verification/extracted/TarkovHelper_JH.exe",
+            "verification/extracted/Assets/tarkov_data.db",
+            "verification/extracted/Assets/Scanner/traineddata/kor.traineddata",
+            "verification/extracted/ThirdPartyNotices/RatScanner-LICENSE.txt",
+            "verification/extracted/ThirdPartyNotices/RatScanner-MODIFICATIONS.txt"
+          )) {
+            if (-not (Test-Path $file)) { throw "Missing packaged file: $file" }
+          }
+
+          $fileVersion = (Get-Item "verification/extracted/TarkovHelper_JH.exe").VersionInfo.FileVersion
+          if ($fileVersion -ne "$version.0") { throw "Invalid executable version: $fileVersion" }
+
+          $env:DB_PATH = (Resolve-Path "verification/extracted/Assets/tarkov_data.db").Path
+          @'
+          import os
+          import sqlite3
+
+          connection = sqlite3.connect(os.environ['DB_PATH'])
+          assert connection.execute('pragma integrity_check').fetchone()[0] == 'ok'
+          assert not connection.execute('pragma foreign_key_check').fetchall()
+          ammo = connection.execute('select count(*) from Ammo').fetchone()[0]
+          calibers = connection.execute('select count(distinct Caliber) from Ammo').fetchone()[0]
+          korean = connection.execute("select count(*) from Ammo a join Items i on i.Id = a.ItemId where trim(coalesce(i.NameKO, '')) != ''").fetchone()[0]
+          sources = connection.execute("select count(*) from Ammo where trim(coalesce(AcquisitionSource, '')) != '' and AcquisitionSource not in ('raid/other', '레이드 획득/기타')").fetchone()[0]
+          assert ammo >= 150, ammo
+          assert calibers >= 20, calibers
+          assert korean == ammo, (korean, ammo)
+          assert sources >= 20, sources
+          print(f'VERIFIED ammo={ammo} calibers={calibers} korean={korean} sources={sources}')
+          connection.close()
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          "SHA256=$actualHash" | Set-Content verification-result.txt -Encoding ascii
+          Add-Content verification-result.txt "VERSION=$fileVersion"
+          Add-Content verification-result.txt "RELEASE=$($release.url)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1.8.0-release-verification
+          path: verification-result.txt
+          if-no-files-found: error
