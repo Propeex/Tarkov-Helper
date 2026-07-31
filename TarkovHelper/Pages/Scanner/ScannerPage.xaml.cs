@@ -25,6 +25,7 @@ public partial class ScannerPage : UserControl
 
     private void ScannerPage_Unloaded(object sender, RoutedEventArgs e)
     {
+        // 미니멀 UI와 스캔 훅은 탭 수명주기와 독립적으로 유지합니다.
         Unsubscribe();
     }
 
@@ -37,6 +38,8 @@ public partial class ScannerPage : UserControl
         _scanner.StatusChanged += Scanner_StatusChanged;
         _scanner.EnabledChanged += Scanner_EnabledChanged;
         _scanner.MinimalOpacityChanged += Scanner_MinimalOpacityChanged;
+        _scanner.MinimalStateChanged += Scanner_MinimalStateChanged;
+        _scanner.DisplaySettingsChanged += Scanner_DisplaySettingsChanged;
     }
 
     private void Unsubscribe()
@@ -48,6 +51,8 @@ public partial class ScannerPage : UserControl
         _scanner.StatusChanged -= Scanner_StatusChanged;
         _scanner.EnabledChanged -= Scanner_EnabledChanged;
         _scanner.MinimalOpacityChanged -= Scanner_MinimalOpacityChanged;
+        _scanner.MinimalStateChanged -= Scanner_MinimalStateChanged;
+        _scanner.DisplaySettingsChanged -= Scanner_DisplaySettingsChanged;
     }
 
     private void RefreshUi()
@@ -56,8 +61,15 @@ public partial class ScannerPage : UserControl
         try
         {
             ChkScannerEnabled.IsChecked = _scanner.Enabled;
+            ChkShowName.IsChecked = _scanner.ShowName;
+            ChkShowAveragePrice.IsChecked = _scanner.ShowAveragePrice;
+            ChkShowPricePerSlot.IsChecked = _scanner.ShowPricePerSlot;
+            ChkShowTraderPrice.IsChecked = _scanner.ShowTraderPrice;
+            ChkShowKappa.IsChecked = _scanner.ShowKappa;
+            ChkShowNeeded.IsChecked = _scanner.ShowNeeded;
             SliderMinimalOpacity.Value = _scanner.MinimalOpacity;
             TxtMinimalOpacity.Text = $"{_scanner.MinimalOpacity}%";
+            RefreshMinimalButtons();
             UpdateStatus(_scanner.Status);
         }
         finally
@@ -66,12 +78,32 @@ public partial class ScannerPage : UserControl
         }
     }
 
+    private void RefreshMinimalButtons()
+    {
+        BtnMinimalToggle.Content = _scanner.IsMinimalVisible ? "미니멀 UI 끄기" : "미니멀 UI 켜기";
+        BtnClickThroughToggle.Content = _scanner.MinimalClickThrough ? "클릭 투과 끄기" : "클릭 투과 켜기";
+        BtnClickThroughToggle.Background = _scanner.MinimalClickThrough
+            ? (Brush)FindResource("AccentBrush")
+            : (Brush)FindResource("BackgroundLightBrush");
+    }
+
     private void ChkScannerEnabled_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_updating)
+            _scanner.Enabled = ChkScannerEnabled.IsChecked == true;
+    }
+
+    private void DisplayOption_Changed(object sender, RoutedEventArgs e)
     {
         if (_updating)
             return;
 
-        _scanner.Enabled = ChkScannerEnabled.IsChecked == true;
+        _scanner.ShowName = ChkShowName.IsChecked == true;
+        _scanner.ShowAveragePrice = ChkShowAveragePrice.IsChecked == true;
+        _scanner.ShowPricePerSlot = ChkShowPricePerSlot.IsChecked == true;
+        _scanner.ShowTraderPrice = ChkShowTraderPrice.IsChecked == true;
+        _scanner.ShowKappa = ChkShowKappa.IsChecked == true;
+        _scanner.ShowNeeded = ChkShowNeeded.IsChecked == true;
     }
 
     private void SliderMinimalOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -85,20 +117,13 @@ public partial class ScannerPage : UserControl
             _scanner.MinimalOpacity = value;
     }
 
-    private void BtnEnterMinimal_Click(object sender, RoutedEventArgs e)
-    {
-        _scanner.EnterMinimalMode();
-    }
+    private void BtnMinimalToggle_Click(object sender, RoutedEventArgs e) => _scanner.ToggleMinimalWindow();
 
-    private void BtnResetMinimalPosition_Click(object sender, RoutedEventArgs e)
-    {
-        _scanner.ResetMinimalPosition();
-    }
+    private void BtnClickThroughToggle_Click(object sender, RoutedEventArgs e) => _scanner.ToggleMinimalClickThrough();
 
-    private void Scanner_StatusChanged(object? sender, string status)
-    {
-        UpdateStatus(status);
-    }
+    private void BtnResetMinimalPosition_Click(object sender, RoutedEventArgs e) => _scanner.ResetMinimalPosition();
+
+    private void Scanner_StatusChanged(object? sender, string status) => UpdateStatus(status);
 
     private void Scanner_EnabledChanged(object? sender, bool enabled)
     {
@@ -114,6 +139,10 @@ public partial class ScannerPage : UserControl
         TxtMinimalOpacity.Text = $"{opacity}%";
         _updating = false;
     }
+
+    private void Scanner_MinimalStateChanged(object? sender, EventArgs e) => RefreshMinimalButtons();
+
+    private void Scanner_DisplaySettingsChanged(object? sender, EventArgs e) => RefreshUi();
 
     private void UpdateStatus(string status)
     {
