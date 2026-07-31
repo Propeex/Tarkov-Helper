@@ -1674,6 +1674,7 @@ public partial class MainWindow : Window
                                 progressService.CompleteQuestsBatch(prereqsToComplete);
                             }
                         }
+                        progressService.StartQuest(task);
                         break;
                 }
 
@@ -1774,12 +1775,19 @@ public partial class MainWindow : Window
             }
         }
 
+        var startedCount = 0;
+        foreach (var selectedQuest in result.SelectedQuests)
+        {
+            if (progressService.StartQuest(selectedQuest))
+                startedCount++;
+        }
+
         // Refresh quest list
         _questListPage?.RefreshDisplay();
 
         // Show success message
         MessageBox.Show(
-            string.Format(_loc.QuestsAppliedSuccess, result.SelectedQuests.Count, completedCount),
+            string.Format(_loc.QuestsAppliedSuccess, startedCount, completedCount),
             "알림",
             MessageBoxButton.OK,
             MessageBoxImage.Information);

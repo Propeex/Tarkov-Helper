@@ -19,8 +19,6 @@ public partial class QuestListPage
     private async void ActualQuestStatus_Loaded(object sender, RoutedEventArgs e)
     {
         SubscribeActualStatusEvents();
-        RemoveLegacyAvailableStatusFilter();
-
         await WaitForQuestDataAsync();
         if (_isUnloaded)
             return;
@@ -55,9 +53,10 @@ public partial class QuestListPage
             viewModel.StatusText = GetStatusText(status, viewModel.Task);
             viewModel.StatusBackground = GetStatusBrush(status);
             viewModel.CompleteButtonVisibility =
-                status is QuestStatus.Active or QuestStatus.Locked or QuestStatus.LevelLocked
+                status is QuestStatus.Available or QuestStatus.Active
                     ? Visibility.Visible
                     : Visibility.Collapsed;
+            viewModel.ActionButtonText = status == QuestStatus.Available ? "시작" : "완료";
         }
 
         ApplyFilters();
@@ -141,6 +140,7 @@ public partial class QuestListPage
             : 0;
 
         var active = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Active);
+        var available = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Available);
         var locked = _allQuestViewModels.Count(vm =>
             vm.Status is QuestStatus.Locked or QuestStatus.LevelLocked);
         var done = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Done);
@@ -150,7 +150,7 @@ public partial class QuestListPage
 
         TxtStats.Text =
             $"레벨 {playerLevel} | {_allQuestViewModels.Count}개 중 {filteredCount}개 표시 중 | " +
-            $"진행 중: {active} | 잠김: {locked} | " +
+            $"진행 중: {active} | 수주 가능: {available} | 잠김: {locked} | " +
             $"완료: {done} | 실패: {failed} | 불가: {unavailable}";
     }
 

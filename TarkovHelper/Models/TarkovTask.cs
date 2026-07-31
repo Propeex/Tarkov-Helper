@@ -282,5 +282,17 @@ namespace TarkovHelper.Models
         /// </summary>
         [JsonPropertyName("dogtagMinLevel")]
         public int? DogtagMinLevel { get; set; }
+
+        [JsonPropertyName("requirementGroupId")]
+        public string? RequirementGroupId { get; set; }
+
+        [JsonPropertyName("isAlternativeGroup")]
+        public bool IsAlternativeGroup { get; set; }
+
+        [JsonPropertyName("alternativeItemIds")]
+        public List<string> AlternativeItemIds { get; set; } = new();
+
+        [JsonPropertyName("alternativeItemNames")]
+        public List<string> AlternativeItemNames { get; set; } = new();
     }
 }

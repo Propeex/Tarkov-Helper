@@ -13,6 +13,7 @@ namespace TarkovHelper.Pages
     {
         public string ItemId { get; set; } = string.Empty;
         public string ItemNormalizedName { get; set; } = string.Empty;
+        public IReadOnlyList<string> AlternativeItemKeys { get; set; } = Array.Empty<string>();
         public string DisplayName { get; set; } = string.Empty;
         public string SubtitleName { get; set; } = string.Empty;
         public Visibility SubtitleVisibility { get; set; } = Visibility.Collapsed;
@@ -197,6 +198,7 @@ namespace TarkovHelper.Pages
         public string? ItemNameKo { get; set; }
         public string? ItemNameJa { get; set; }
         public string ItemNormalizedName { get; set; } = string.Empty;
+        public IReadOnlyList<string> AlternativeItemKeys { get; set; } = Array.Empty<string>();
         public string? IconLink { get; set; }
         public string? WikiLink { get; set; }
         public string? Category { get; set; }

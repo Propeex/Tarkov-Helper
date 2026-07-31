@@ -25,6 +25,10 @@ internal static class SmokeSchemaCompatibility
         EnsureColumn(connection, "QuestObjectives", "DescriptionEN", "TEXT");
         EnsureColumn(connection, "QuestObjectives", "DescriptionKO", "TEXT");
         EnsureColumn(connection, "QuestRequiredItems", "ObjectiveId", "TEXT");
+        EnsureColumn(connection, "QuestRequiredItems", "RequirementGroupId", "TEXT");
+        EnsureColumn(connection, "QuestRequiredItems", "IsAlternativeGroup", "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn(connection, "QuestRequiredItems", "AlternativeItemIds", "TEXT");
+        EnsureColumn(connection, "QuestRequiredItems", "AlternativeItemNames", "TEXT");
     }
 
     private static void EnsureColumn(

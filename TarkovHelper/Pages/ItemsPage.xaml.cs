@@ -77,9 +77,17 @@ namespace TarkovHelper.Pages
                 // Update inventory quantities in view models
                 foreach (var vm in _allItemViewModels)
                 {
-                    var inventory = _inventoryService.GetInventory(vm.ItemNormalizedName);
-                    vm.OwnedFirQuantity = inventory.FirQuantity;
-                    vm.OwnedNonFirQuantity = inventory.NonFirQuantity;
+                    if (vm.AlternativeItemKeys.Count > 0)
+                    {
+                        vm.OwnedFirQuantity = vm.AlternativeItemKeys.Sum(_inventoryService.GetFirQuantity);
+                        vm.OwnedNonFirQuantity = vm.AlternativeItemKeys.Sum(_inventoryService.GetNonFirQuantity);
+                    }
+                    else
+                    {
+                        var inventory = _inventoryService.GetInventory(vm.ItemNormalizedName);
+                        vm.OwnedFirQuantity = inventory.FirQuantity;
+                        vm.OwnedNonFirQuantity = inventory.NonFirQuantity;
+                    }
                 }
                 UpdateDetailPanel();
             });
@@ -385,9 +393,17 @@ namespace TarkovHelper.Pages
                     if (!string.IsNullOrEmpty(vm.ParentCategory))
                         newCategories.Add(vm.ParentCategory);
 
-                    var inventory = _inventoryService.GetInventory(vm.ItemNormalizedName);
-                    vm.OwnedFirQuantity = inventory.FirQuantity;
-                    vm.OwnedNonFirQuantity = inventory.NonFirQuantity;
+                    if (vm.AlternativeItemKeys.Count > 0)
+                    {
+                        vm.OwnedFirQuantity = vm.AlternativeItemKeys.Sum(_inventoryService.GetFirQuantity);
+                        vm.OwnedNonFirQuantity = vm.AlternativeItemKeys.Sum(_inventoryService.GetNonFirQuantity);
+                    }
+                    else
+                    {
+                        var inventory = _inventoryService.GetInventory(vm.ItemNormalizedName);
+                        vm.OwnedFirQuantity = inventory.FirQuantity;
+                        vm.OwnedNonFirQuantity = inventory.NonFirQuantity;
+                    }
                 }
 
                 if (!newCategories.SetEquals(_allCategories))
@@ -1068,19 +1084,13 @@ namespace TarkovHelper.Pages
         private void AdjustFirQuantity(object sender, int delta)
         {
             if (sender is Button btn && btn.DataContext is AggregatedItemViewModel vm)
-            {
-                _inventoryService.AdjustFirQuantity(vm.ItemNormalizedName, delta);
-                vm.OwnedFirQuantity = _inventoryService.GetFirQuantity(vm.ItemNormalizedName);
-            }
+                AdjustInventoryQuantity(vm, delta, fir: true);
         }
 
         private void AdjustNonFirQuantity(object sender, int delta)
         {
             if (sender is Button btn && btn.DataContext is AggregatedItemViewModel vm)
-            {
-                _inventoryService.AdjustNonFirQuantity(vm.ItemNormalizedName, delta);
-                vm.OwnedNonFirQuantity = _inventoryService.GetNonFirQuantity(vm.ItemNormalizedName);
-            }
+                AdjustInventoryQuantity(vm, delta, fir: false);
         }
 
         // Detail panel inventory adjustments (uses selected item)
@@ -1127,17 +1137,89 @@ namespace TarkovHelper.Pages
         private void AdjustDetailFirQuantity(int delta)
         {
             if (_selectedItem == null) return;
-            _inventoryService.AdjustFirQuantity(_selectedItem.ItemNormalizedName, delta);
-            _selectedItem.OwnedFirQuantity = _inventoryService.GetFirQuantity(_selectedItem.ItemNormalizedName);
+            AdjustInventoryQuantity(_selectedItem, delta, fir: true);
             UpdateDetailInventoryDisplay();
         }
 
         private void AdjustDetailNonFirQuantity(int delta)
         {
             if (_selectedItem == null) return;
-            _inventoryService.AdjustNonFirQuantity(_selectedItem.ItemNormalizedName, delta);
-            _selectedItem.OwnedNonFirQuantity = _inventoryService.GetNonFirQuantity(_selectedItem.ItemNormalizedName);
+            AdjustInventoryQuantity(_selectedItem, delta, fir: false);
             UpdateDetailInventoryDisplay();
+        }
+
+        private void AdjustInventoryQuantity(AggregatedItemViewModel item, int delta, bool fir)
+        {
+            var keys = GetInventoryKeys(item);
+            if (keys.Count == 0 || delta == 0)
+                return;
+
+            if (delta > 0)
+            {
+                if (fir)
+                    _inventoryService.AdjustFirQuantity(keys[0], delta);
+                else
+                    _inventoryService.AdjustNonFirQuantity(keys[0], delta);
+            }
+            else
+            {
+                var remaining = -delta;
+                foreach (var key in keys)
+                {
+                    if (remaining <= 0)
+                        break;
+
+                    var available = fir
+                        ? _inventoryService.GetFirQuantity(key)
+                        : _inventoryService.GetNonFirQuantity(key);
+                    var remove = Math.Min(available, remaining);
+                    if (remove <= 0)
+                        continue;
+
+                    if (fir)
+                        _inventoryService.AdjustFirQuantity(key, -remove);
+                    else
+                        _inventoryService.AdjustNonFirQuantity(key, -remove);
+                    remaining -= remove;
+                }
+            }
+
+            RefreshOwnedQuantities(item);
+        }
+
+        private void SetInventoryQuantity(AggregatedItemViewModel item, int quantity, bool fir)
+        {
+            var keys = GetInventoryKeys(item);
+            if (keys.Count == 0)
+                return;
+
+            for (var index = 0; index < keys.Count; index++)
+            {
+                var value = index == 0 ? quantity : 0;
+                if (fir)
+                    _inventoryService.SetFirQuantity(keys[index], value);
+                else
+                    _inventoryService.SetNonFirQuantity(keys[index], value);
+            }
+
+            RefreshOwnedQuantities(item);
+        }
+
+        private static IReadOnlyList<string> GetInventoryKeys(AggregatedItemViewModel item) =>
+            item.AlternativeItemKeys.Count > 0
+                ? item.AlternativeItemKeys
+                    .Where(key => !string.IsNullOrWhiteSpace(key))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+                : string.IsNullOrWhiteSpace(item.ItemNormalizedName)
+                    ? Array.Empty<string>()
+                    : new[] { item.ItemNormalizedName };
+
+        private void RefreshOwnedQuantities(AggregatedItemViewModel item)
+        {
+            var keys = GetInventoryKeys(item);
+            item.OwnedFirQuantity = keys.Sum(_inventoryService.GetFirQuantity);
+            item.OwnedNonFirQuantity = keys.Sum(_inventoryService.GetNonFirQuantity);
         }
 
         private void UpdateDetailInventoryDisplay()
@@ -1226,8 +1308,7 @@ namespace TarkovHelper.Pages
             if (int.TryParse(TxtDetailOwnedFir.Text, out var quantity))
             {
                 quantity = Math.Max(0, quantity);
-                _inventoryService.SetFirQuantity(_selectedItem.ItemNormalizedName, quantity);
-                _selectedItem.OwnedFirQuantity = quantity;
+                SetInventoryQuantity(_selectedItem, quantity, fir: true);
                 UpdateDetailInventoryDisplay();
             }
             else
@@ -1246,8 +1327,7 @@ namespace TarkovHelper.Pages
             if (int.TryParse(TxtDetailOwnedNonFir.Text, out var quantity))
             {
                 quantity = Math.Max(0, quantity);
-                _inventoryService.SetNonFirQuantity(_selectedItem.ItemNormalizedName, quantity);
-                _selectedItem.OwnedNonFirQuantity = quantity;
+                SetInventoryQuantity(_selectedItem, quantity, fir: false);
                 UpdateDetailInventoryDisplay();
             }
             else

@@ -75,8 +75,14 @@ public partial class AmmoPage : UserControl
         }
 
         _settings.SetValue(SelectedCaliberKey, selected.Key);
-        foreach (var item in _service.Items.Where(item => string.Equals(item.Caliber, selected.Key, StringComparison.OrdinalIgnoreCase)))
+        foreach (var item in _service.Items
+                     .Where(item => string.Equals(item.Caliber, selected.Key, StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(item => item.ArmorEfficiencyScore)
+                     .ThenBy(item => item.PenetrationPower)
+                     .ThenBy(item => item.NameKo, StringComparer.CurrentCulture))
+        {
             _visibleItems.Add(item);
+        }
 
         TxtSummary.Text = $"{selected.DisplayName} · {_visibleItems.Count:N0}종";
     }

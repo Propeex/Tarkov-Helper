@@ -501,32 +501,39 @@ internal sealed partial class TarkovDataDatabaseBuilder
     private static string ParseAcquisitionSource(JsonObject itemObject)
     {
         var sources = new List<string>();
-        if (itemObject["buyFor"] is JsonArray buyFor && buyFor.Count > 0)
-            sources.Add(DescribeSourceArray(buyFor, "구매"));
-        if (itemObject["bartersFor"] is JsonArray barters && barters.Count > 0)
-            sources.Add(DescribeSourceArray(barters, "교환"));
-        if (itemObject["craftsFor"] is JsonArray crafts && crafts.Count > 0)
-            sources.Add(DescribeSourceArray(crafts, "제작"));
-        if (itemObject["receivedFromTasks"] is JsonArray tasks && tasks.Count > 0)
-            sources.Add("퀘스트 보상");
-        return sources.Count == 0 ? "레이드 획득/기타" : string.Join(" · ", sources.Distinct());
+        AddStructuredSources(itemObject["buyFor"] as JsonArray, "vendor", "trader", sources, includeLevel: false);
+        AddStructuredSources(itemObject["bartersFor"] as JsonArray, "trader", "trader", sources, includeLevel: true);
+        AddStructuredSources(itemObject["craftsFor"] as JsonArray, "station", "craft", sources, includeLevel: true);
+        return sources.Count == 0
+            ? "raid-found"
+            : string.Join(" · ", sources.Distinct(StringComparer.OrdinalIgnoreCase));
     }
 
-    private static string DescribeSourceArray(JsonArray values, string action)
+    private static void AddStructuredSources(
+        JsonArray? values,
+        string entityKey,
+        string sourceType,
+        ICollection<string> sources,
+        bool includeLevel)
     {
+        if (values == null)
+            return;
+
         foreach (var value in values.OfType<JsonObject>())
         {
-            foreach (var key in new[] { "vendor", "trader", "station" })
-            {
-                if (value[key] is JsonObject sourceObject)
-                {
-                    var name = GetString(sourceObject, "name", "normalizedName");
-                    if (!string.IsNullOrWhiteSpace(name))
-                        return $"{name} {action}";
-                }
-            }
+            if (value[entityKey] is not JsonObject sourceObject)
+                continue;
+
+            var name = GetString(sourceObject, "name", "normalizedName");
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            var source = $"{sourceType}:{name}";
+            var level = includeLevel ? GetInt(value, "level") : null;
+            if (level.HasValue)
+                source += $":level:{Math.Max(1, level.Value)}";
+            sources.Add(source);
         }
-        return action;
     }
 
     private static Dictionary<string, ApiNamedEntity> ParseNamedLookup(

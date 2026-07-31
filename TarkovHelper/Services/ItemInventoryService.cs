@@ -295,46 +295,50 @@ namespace TarkovHelper.Services
 
                 foreach (var requirement in requirements)
                 {
-                    if (string.IsNullOrWhiteSpace(requirement.ItemNormalizedName) ||
-                        requirement.Quantity <= 0)
-                    {
+                    if (requirement.Quantity <= 0)
                         continue;
-                    }
+
+                    var keys = requirement.AlternativeItemKeys is { Count: > 0 }
+                        ? requirement.AlternativeItemKeys.Where(key => !string.IsNullOrWhiteSpace(key)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                        : string.IsNullOrWhiteSpace(requirement.ItemNormalizedName)
+                            ? new List<string>()
+                            : new List<string> { requirement.ItemNormalizedName };
+                    if (keys.Count == 0)
+                        continue;
 
                     requested += requirement.Quantity;
-                    if (!_inventoryData.Items.TryGetValue(
-                            requirement.ItemNormalizedName,
-                            out var inventory))
-                    {
-                        continue;
-                    }
-
                     var remaining = requirement.Quantity;
-                    if (requirement.FirOnly)
+                    foreach (var key in keys)
                     {
-                        var fromFir = Math.Min(inventory.FirQuantity, remaining);
-                        inventory.FirQuantity -= fromFir;
-                        remaining -= fromFir;
-                        consumed += fromFir;
-                    }
-                    else
-                    {
-                        var fromNonFir = Math.Min(inventory.NonFirQuantity, remaining);
-                        inventory.NonFirQuantity -= fromNonFir;
-                        remaining -= fromNonFir;
-                        consumed += fromNonFir;
+                        if (remaining <= 0 || !_inventoryData.Items.TryGetValue(key, out var inventory))
+                            continue;
 
-                        var fromFir = Math.Min(inventory.FirQuantity, remaining);
-                        inventory.FirQuantity -= fromFir;
-                        remaining -= fromFir;
-                        consumed += fromFir;
-                    }
+                        var before = remaining;
+                        if (requirement.FirOnly)
+                        {
+                            var fromFir = Math.Min(inventory.FirQuantity, remaining);
+                            inventory.FirQuantity -= fromFir;
+                            remaining -= fromFir;
+                            consumed += fromFir;
+                        }
+                        else
+                        {
+                            var fromNonFir = Math.Min(inventory.NonFirQuantity, remaining);
+                            inventory.NonFirQuantity -= fromNonFir;
+                            remaining -= fromNonFir;
+                            consumed += fromNonFir;
+                            var fromFir = Math.Min(inventory.FirQuantity, remaining);
+                            inventory.FirQuantity -= fromFir;
+                            remaining -= fromFir;
+                            consumed += fromFir;
+                        }
 
-                    if (remaining != requirement.Quantity)
-                    {
-                        changed = true;
-                        CleanupEmptyInventory(requirement.ItemNormalizedName);
-                        _pendingSaves.Add(requirement.ItemNormalizedName);
+                        if (remaining != before)
+                        {
+                            changed = true;
+                            CleanupEmptyInventory(key);
+                            _pendingSaves.Add(key);
+                        }
                     }
                 }
 

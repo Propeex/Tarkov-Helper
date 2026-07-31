@@ -268,29 +268,33 @@ namespace TarkovHelper.Services
             var taskId = task.Ids?.FirstOrDefault();
             var taskKey = taskId ?? task.NormalizedName;
 
-            if (string.IsNullOrEmpty(taskKey)) return QuestStatus.Active;
+            if (string.IsNullOrEmpty(taskKey)) return QuestStatus.Available;
 
-            // Check if manually set to Done or Failed
-            // Try by Id first, then by NormalizedName for backwards compatibility
+            // Persisted states are authoritative. Active is written only when the
+            // user explicitly starts a quest; an eligible but unstarted quest has
+            // no progress row and is reported as Available below.
+            QuestStatus? persistedStatus = null;
             if (!string.IsNullOrEmpty(taskId) && _questProgress.TryGetValue(taskId, out var statusById))
             {
-                if (statusById == QuestStatus.Done || statusById == QuestStatus.Failed)
-                    return statusById;
+                persistedStatus = statusById;
             }
-            else if (!string.IsNullOrEmpty(task.NormalizedName) && _questProgress.TryGetValue(task.NormalizedName, out var statusByName))
+            else if (!string.IsNullOrEmpty(task.NormalizedName) &&
+                     _questProgress.TryGetValue(task.NormalizedName, out var statusByName))
             {
-                if (statusByName == QuestStatus.Done || statusByName == QuestStatus.Failed)
-                    return statusByName;
+                persistedStatus = statusByName;
             }
+
+            if (persistedStatus is QuestStatus.Done or QuestStatus.Failed)
+                return persistedStatus.Value;
 
             // Circular reference protection for prerequisite checking
             bool isTopLevel = _getStatusVisited == null;
             _getStatusVisited ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            // If already checking this task (circular reference), treat as Active to break the cycle
+            // A circular prerequisite chain cannot make a quest startable.
             if (!_getStatusVisited.Add(taskKey))
             {
-                return QuestStatus.Active;
+                return QuestStatus.Locked;
             }
 
             try
@@ -323,7 +327,9 @@ namespace TarkovHelper.Services
                 if (!IsScavKarmaRequirementMet(task))
                     return QuestStatus.LevelLocked;  // Use LevelLocked status for karma-locked quests too
 
-                return QuestStatus.Active;
+                return persistedStatus == QuestStatus.Active
+                    ? QuestStatus.Active
+                    : QuestStatus.Available;
             }
             finally
             {
@@ -605,6 +611,41 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
+        /// Mark an eligible quest as explicitly started.
+        /// </summary>
+        public bool StartQuest(TarkovTask task)
+        {
+            var taskId = task.Ids?.FirstOrDefault();
+            var taskKey = taskId ?? task.NormalizedName;
+            if (string.IsNullOrWhiteSpace(taskKey))
+                return false;
+
+            if (GetStatus(task) != QuestStatus.Available)
+                return false;
+
+            _questProgress[taskKey] = QuestStatus.Active;
+            _ = _persistenceQueue.Enqueue(async () =>
+            {
+                try
+                {
+                    await _userDataDb.SaveQuestProgressAsync(
+                        taskId ?? taskKey,
+                        task.NormalizedName,
+                        QuestStatus.Active,
+                        _loadedProfile);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[QuestProgressService] Failed to save started quest: {ex.Message}");
+                }
+            });
+
+            ProgressChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        /// <summary>
         /// Mark quest as completed, optionally completing prerequisites
         /// Also automatically fails alternative quests (mutually exclusive quests)
         /// </summary>
@@ -880,6 +921,14 @@ namespace TarkovHelper.Services
 
                 switch (status)
                 {
+                    case QuestStatus.Active:
+                        if (GetStatus(task) == QuestStatus.Available)
+                        {
+                            _questProgress[taskKey] = QuestStatus.Active;
+                            changedItems.Add((taskId ?? taskKey, task.NormalizedName, QuestStatus.Active));
+                        }
+                        break;
+
                     case QuestStatus.Done:
                         // Complete without recursive save
                         if (CompleteQuestBatchInternal(task, visited, changedItems))

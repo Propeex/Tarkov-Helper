@@ -189,6 +189,13 @@ internal static class IconDownloader
                     )
                     OR EXISTS (
                         SELECT 1
+                        FROM QuestRequiredItems q, json_each(q.AlternativeItemIds) alternative
+                        WHERE q.IsAlternativeGroup = 1
+                          AND alternative.value = i.Id
+                          AND LOWER(COALESCE(q.RequirementType, '')) != 'sellitem'
+                    )
+                    OR EXISTS (
+                        SELECT 1
                         FROM HideoutItemRequirements h
                         WHERE h.ItemId = i.BsgId
                     )
