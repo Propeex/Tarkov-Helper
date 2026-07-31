@@ -4,6 +4,57 @@
              Background="{StaticResource BackgroundDarkBrush}"
              Loaded="AmmoPage_Loaded"
              Unloaded="AmmoPage_Unloaded">
+    <UserControl.Resources>
+        <Style x:Key="AmmoToolbarToggleStyle" TargetType="ToggleButton">
+            <Setter Property="Background" Value="{StaticResource BackgroundLightBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontFamily" Value="{DynamicResource MaplestoryFont}"/>
+            <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="border"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="AmmoGridCellStyle" TargetType="DataGridCell">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        </Style>
+        <Style x:Key="AmmoGridHeaderStyle" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="Padding" Value="8,7"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        </Style>
+    </UserControl.Resources>
     <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -27,6 +78,7 @@
             <ToggleButton x:Name="BtnColumnSettings"
                           Grid.Column="1"
                           Content="표시 설정"
+                          Style="{StaticResource AmmoToolbarToggleStyle}"
                           Padding="14,8"
                           Margin="12,0,0,7"/>
             <Popup PlacementTarget="{Binding ElementName=BtnColumnSettings}"
@@ -65,15 +117,21 @@
                   IsReadOnly="True"
                   CanUserAddRows="False"
                   CanUserDeleteRows="False"
-                  CanUserReorderColumns="True"
+                  CanUserSortColumns="False"
+                  CanUserReorderColumns="False"
                   CanUserResizeColumns="True"
                   FrozenColumnCount="2"
                   HeadersVisibility="Column"
                   GridLinesVisibility="Horizontal"
                   RowHeaderWidth="0"
                   Background="{StaticResource BackgroundDarkBrush}"
+                  RowBackground="{StaticResource BackgroundDarkBrush}"
+                  AlternatingRowBackground="{StaticResource BackgroundMediumBrush}"
+                  Foreground="{StaticResource TextPrimaryBrush}"
                   BorderBrush="{StaticResource BorderBrush}"
                   HorizontalGridLinesBrush="{StaticResource BorderBrush}"
+                  CellStyle="{StaticResource AmmoGridCellStyle}"
+                  ColumnHeaderStyle="{StaticResource AmmoGridHeaderStyle}"
                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
                   ScrollViewer.VerticalScrollBarVisibility="Auto">
             <DataGrid.Columns>

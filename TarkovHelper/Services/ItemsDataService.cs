@@ -25,28 +25,58 @@ namespace TarkovHelper.Services
 
         private static bool IsCurrency(string normalizedName) => CurrencyItems.Contains(normalizedName);
 
+        private static readonly IReadOnlyDictionary<string, string> CategoryMapping =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Weapons"] = "Weapons",
+                ["Magazines"] = "Magazines",
+                ["Rounds"] = "Ammunition", ["Ammo boxes"] = "Ammunition", ["Shrapnel"] = "Ammunition",
+                ["Medkits"] = "Medical", ["Medical supplies"] = "Medical", ["Injury treatment"] = "Medical",
+                ["Stimulants"] = "Medical", ["Drugs"] = "Medical",
+                ["Food"] = "Food", ["Drinks"] = "Food", ["Food and drink"] = "Food",
+                ["Melee weapons"] = "Melee", ["Melee"] = "Melee",
+                ["Mounts"] = "Parts", ["Stocks & chassis"] = "Parts", ["Handguards"] = "Parts",
+                ["Barrels"] = "Parts", ["Flash hiders & muzzle brakes"] = "Parts", ["Suppressors"] = "Parts",
+                ["Muzzle adapters"] = "Parts", ["Iron sights"] = "Parts", ["Pistol grips"] = "Parts",
+                ["Receivers and slides"] = "Parts", ["Charging handles"] = "Parts", ["Gas blocks"] = "Parts",
+                ["Foregrips"] = "Parts", ["Auxiliary parts"] = "Parts", ["Bipods"] = "Parts",
+                ["Underbarrel grenade launchers"] = "Parts", ["Scopes"] = "Parts", ["Assault scopes"] = "Parts",
+                ["Reflex sights"] = "Parts", ["Compact reflex sights"] = "Parts", ["Night vision scopes"] = "Parts",
+                ["Thermal vision sights"] = "Parts", ["Flashlights"] = "Parts", ["Tactical combo devices"] = "Parts",
+                ["Helmet mods"] = "Parts",
+                ["Grenades"] = "Grenades", ["Throwables"] = "Grenades", ["Special grenades"] = "Grenades",
+                ["Electronics"] = "Barter", ["Building materials"] = "Barter", ["Flammable materials"] = "Barter",
+                ["Energy elements"] = "Barter", ["Household goods"] = "Barter", ["Tools"] = "Barter",
+                ["Valuables"] = "Barter",
+                ["Chest rigs"] = "Rigs", ["Backpacks"] = "Rigs",
+                ["Eyewear"] = "Eyewear",
+                ["Containers & cases"] = "Containers", ["Secure containers"] = "Containers",
+                ["Armor vests"] = "Armor", ["Armor plates"] = "Armor", ["Headwear"] = "Armor",
+                ["Face cover"] = "Armor", ["Earpieces"] = "Armor",
+                ["Info items"] = "Info", ["Maps"] = "Info", ["Extraction intel"] = "Info",
+                ["Notes"] = "Info", ["Dogtag"] = "Info",
+                ["Keys"] = "Keys", ["Keycards"] = "Keys",
+                ["Special equipment"] = "Special", ["Quest Items"] = "Special", ["Money"] = "Special",
+                ["Posters"] = "Special", ["Armbands"] = "Special", ["Other"] = "Special"
+            };
+
         public string GetParentCategory(string? category)
         {
-            if (string.IsNullOrEmpty(category))
-                return "Other";
+            if (string.IsNullOrWhiteSpace(category))
+                return "Special";
 
             var baseCategory = category.Contains('|') ? category.Split('|')[0] : category;
-
-            return string.IsNullOrWhiteSpace(baseCategory) ? "Other" : baseCategory.Trim();
+            return CategoryMapping.TryGetValue(baseCategory.Trim(), out var parent)
+                ? parent
+                : "Special";
         }
 
         public async Task<List<AggregatedItemViewModel>> GetAggregatedItemsAsync(Dictionary<string, TarkovItem>? itemLookup)
         {
-            // Get hideout requirements
             var hideoutItems = _hideoutProgressService.GetAllRemainingItemRequirements();
-
-            // Get quest requirements, including zero-count placeholders from completed quests.
             var questItems = GetQuestItemRequirements(itemLookup);
-
-            // Merge both sources
             var mergedItems = new Dictionary<string, AggregatedItemViewModel>(StringComparer.OrdinalIgnoreCase);
 
-            // Add hideout items
             foreach (var kvp in hideoutItems)
             {
                 var hideoutItem = kvp.Value;
@@ -65,13 +95,12 @@ namespace TarkovHelper.Services
                 {
                     ItemId = hideoutItem.ItemId,
                     ItemNormalizedName = hideoutItem.ItemNormalizedName,
+                    RequirementLookupKey = hideoutItem.ItemNormalizedName,
                     DisplayName = displayName,
                     SubtitleName = subtitle,
                     SubtitleVisibility = showSubtitle ? Visibility.Visible : Visibility.Collapsed,
                     Category = category,
                     ParentCategory = GetParentCategory(category),
-                    QuestCount = 0,
-                    QuestFIRCount = 0,
                     HideoutCount = hideoutItem.HideoutCount,
                     HideoutFIRCount = hideoutItem.HideoutFIRCount,
                     TotalCount = hideoutItem.HideoutCount,
@@ -82,7 +111,6 @@ namespace TarkovHelper.Services
                 };
             }
 
-            // Add/merge quest items
             foreach (var kvp in questItems)
             {
                 var questItem = kvp.Value;
@@ -92,42 +120,45 @@ namespace TarkovHelper.Services
                     existing.QuestFIRCount = questItem.QuestFIRCount;
                     existing.TotalCount = existing.HideoutCount + questItem.QuestCount;
                     existing.TotalFIRCount = existing.HideoutFIRCount + questItem.QuestFIRCount;
-                    if (questItem.FoundInRaid)
-                        existing.FoundInRaid = true;
-                    if (string.IsNullOrEmpty(existing.WikiLink))
-                        existing.WikiLink = questItem.WikiLink;
+                    existing.FoundInRaid |= questItem.FoundInRaid;
+                    existing.WikiLink ??= questItem.WikiLink;
                     if (string.IsNullOrEmpty(existing.Category))
                     {
                         existing.Category = questItem.Category;
                         existing.ParentCategory = GetParentCategory(questItem.Category);
                     }
+                    continue;
                 }
-                else
-                {
-                    var (displayName, subtitle, showSubtitle) = GetLocalizedNames(
-                        questItem.ItemName, questItem.ItemNameKo, questItem.ItemNameJa);
 
-                    mergedItems[kvp.Key] = new AggregatedItemViewModel
-                    {
-                        ItemId = questItem.ItemId,
-                        ItemNormalizedName = questItem.ItemNormalizedName,
-                        AlternativeItemKeys = questItem.AlternativeItemKeys,
-                        DisplayName = displayName,
-                        SubtitleName = subtitle,
-                        SubtitleVisibility = showSubtitle ? Visibility.Visible : Visibility.Collapsed,
-                        Category = questItem.Category,
-                        ParentCategory = GetParentCategory(questItem.Category),
-                        QuestCount = questItem.QuestCount,
-                        QuestFIRCount = questItem.QuestFIRCount,
-                        HideoutCount = 0,
-                        HideoutFIRCount = 0,
-                        TotalCount = questItem.QuestCount,
-                        TotalFIRCount = questItem.QuestFIRCount,
-                        FoundInRaid = questItem.FoundInRaid,
-                        IconLink = questItem.IconLink,
-                        WikiLink = questItem.WikiLink
-                    };
-                }
+                var (displayName, subtitle, showSubtitle) = GetLocalizedNames(
+                    questItem.ItemName, questItem.ItemNameKo, questItem.ItemNameJa);
+                mergedItems[kvp.Key] = new AggregatedItemViewModel
+                {
+                    ItemId = questItem.ItemId,
+                    ItemNormalizedName = questItem.ItemNormalizedName,
+                    RequirementLookupKey = questItem.RequirementLookupKey,
+                    AlternativeItemKeys = questItem.AlternativeItemKeys,
+                    IsAlternativeGroupMember = questItem.IsAlternativeGroupMember,
+                    AlternativeGroupHeaderText = questItem.AlternativeGroupHeaderText,
+                    AlternativeGroupHeaderVisibility = questItem.IsAlternativeGroupFirst
+                        ? Visibility.Visible
+                        : Visibility.Collapsed,
+                    ItemIndent = questItem.IsAlternativeGroupMember
+                        ? new Thickness(22, 0, 0, 0)
+                        : new Thickness(0),
+                    DisplayName = displayName,
+                    SubtitleName = subtitle,
+                    SubtitleVisibility = showSubtitle ? Visibility.Visible : Visibility.Collapsed,
+                    Category = questItem.Category,
+                    ParentCategory = GetParentCategory(questItem.Category),
+                    QuestCount = questItem.QuestCount,
+                    QuestFIRCount = questItem.QuestFIRCount,
+                    TotalCount = questItem.QuestCount,
+                    TotalFIRCount = questItem.QuestFIRCount,
+                    FoundInRaid = questItem.FoundInRaid,
+                    IconLink = questItem.IconLink,
+                    WikiLink = questItem.WikiLink
+                };
             }
 
             return mergedItems.Values.ToList();
@@ -140,67 +171,85 @@ namespace TarkovHelper.Services
             foreach (var task in _questProgressService.AllTasks)
             {
                 var status = _questProgressService.GetStatus(task);
-                if (status == QuestStatus.Failed || status == QuestStatus.Unavailable)
-                    continue;
-
-                if (task.RequiredItems == null)
+                if (status is QuestStatus.Failed or QuestStatus.Unavailable || task.RequiredItems == null)
                     continue;
 
                 var isCompleted = status == QuestStatus.Done;
-
                 foreach (var questItem in task.RequiredItems)
                 {
-                    TarkovItem? itemInfo = null;
-                    var lookupKey = questItem.IsAlternativeGroup
-                        ? questItem.AlternativeItemIds.FirstOrDefault()
-                        : questItem.ItemNormalizedName;
-                    if (!string.IsNullOrWhiteSpace(lookupKey))
-                        itemLookup?.TryGetValue(lookupKey, out itemInfo);
-
-                    if (itemInfo == null)
-                        continue;
-
-                    if (string.Equals(itemInfo.Category, "Quest Items", StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    var itemName = itemInfo.Name;
-                    var iconLink = itemInfo.IconLink;
-                    var wikiLink = itemInfo.WikiLink;
-
-                    // Completed quests keep a zero-count item placeholder. This preserves the
-                    // item row while allowing the existing fulfillment UI to mark it complete.
                     var countToAdd = isCompleted
                         ? 0
                         : IsCurrency(questItem.ItemNormalizedName) ? 1 : questItem.Amount;
                     var firCountToAdd = questItem.FoundInRaid ? countToAdd : 0;
 
-                    var aggregateKey = questItem.ItemNormalizedName;
-                    var aggregateName = questItem.IsAlternativeGroup && questItem.AlternativeItemNames.Count > 0
-                        ? string.Join(", ", questItem.AlternativeItemNames)
-                        : itemName;
+                    if (questItem.IsAlternativeGroup)
+                    {
+                        var groupKey = QuestRequirementInventoryKey.BuildGroupKey(task, questItem);
+                        var inventoryKeys = QuestRequirementInventoryKey.BuildAlternativeItemKeys(task, questItem);
+                        for (var index = 0; index < questItem.AlternativeItemIds.Count; index++)
+                        {
+                            var itemId = questItem.AlternativeItemIds[index];
+                            if (string.IsNullOrWhiteSpace(itemId) || itemLookup == null ||
+                                !itemLookup.TryGetValue(itemId, out var itemInfo) ||
+                                string.Equals(itemInfo.Category, "Quest Items", StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
 
-                    if (result.TryGetValue(aggregateKey, out var existing))
+                            var inventoryKey = QuestRequirementInventoryKey.BuildAlternativeItemKey(task, questItem, itemId);
+                            var localizedName = index < questItem.AlternativeItemNames.Count &&
+                                                !string.IsNullOrWhiteSpace(questItem.AlternativeItemNames[index])
+                                ? questItem.AlternativeItemNames[index]
+                                : itemInfo.NameKo ?? itemInfo.Name;
+
+                            result[inventoryKey] = new QuestItemAggregate
+                            {
+                                ItemId = itemInfo.Id,
+                                ItemName = localizedName,
+                                ItemNameKo = localizedName,
+                                ItemNormalizedName = inventoryKey,
+                                RequirementLookupKey = groupKey,
+                                AlternativeItemKeys = inventoryKeys,
+                                IsAlternativeGroupMember = true,
+                                IsAlternativeGroupFirst = index == 0,
+                                AlternativeGroupHeaderText = $"범위 제출 · 아래 항목 중 아무거나 {questItem.Amount}개",
+                                IconLink = itemInfo.IconLink,
+                                WikiLink = itemInfo.WikiLink,
+                                Category = itemInfo.Category,
+                                QuestCount = countToAdd,
+                                QuestFIRCount = firCountToAdd,
+                                FoundInRaid = questItem.FoundInRaid
+                            };
+                        }
+
+                        continue;
+                    }
+
+                    if (itemLookup == null || !itemLookup.TryGetValue(questItem.ItemNormalizedName, out var concreteInfo) ||
+                        string.Equals(concreteInfo.Category, "Quest Items", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (result.TryGetValue(questItem.ItemNormalizedName, out var existing))
                     {
                         existing.QuestCount += countToAdd;
-                        if (questItem.FoundInRaid)
-                        {
-                            existing.QuestFIRCount += firCountToAdd;
-                            existing.FoundInRaid = true;
-                        }
+                        existing.QuestFIRCount += firCountToAdd;
+                        existing.FoundInRaid |= questItem.FoundInRaid;
                     }
                     else
                     {
-                        result[aggregateKey] = new QuestItemAggregate
+                        result[questItem.ItemNormalizedName] = new QuestItemAggregate
                         {
-                            ItemId = questItem.IsAlternativeGroup ? string.Empty : itemInfo?.Id ?? questItem.ItemNormalizedName,
-                            ItemName = aggregateName,
-                            ItemNameKo = questItem.IsAlternativeGroup ? aggregateName : itemInfo?.NameKo,
-                            ItemNameJa = questItem.IsAlternativeGroup ? null : itemInfo?.NameJa,
-                            ItemNormalizedName = aggregateKey,
-                            AlternativeItemKeys = questItem.IsAlternativeGroup ? questItem.AlternativeItemIds : Array.Empty<string>(),
-                            IconLink = iconLink,
-                            WikiLink = wikiLink,
-                            Category = itemInfo?.Category,
+                            ItemId = concreteInfo.Id,
+                            ItemName = concreteInfo.Name,
+                            ItemNameKo = concreteInfo.NameKo,
+                            ItemNameJa = concreteInfo.NameJa,
+                            ItemNormalizedName = questItem.ItemNormalizedName,
+                            RequirementLookupKey = questItem.ItemNormalizedName,
+                            IconLink = concreteInfo.IconLink,
+                            WikiLink = concreteInfo.WikiLink,
+                            Category = concreteInfo.Category,
                             QuestCount = countToAdd,
                             QuestFIRCount = firCountToAdd,
                             FoundInRaid = questItem.FoundInRaid
@@ -212,38 +261,37 @@ namespace TarkovHelper.Services
             return result;
         }
 
-        public List<QuestItemSourceViewModel> GetQuestSources(string itemNormalizedName)
+        public List<QuestItemSourceViewModel> GetQuestSources(string itemRequirementKey)
         {
             var sources = new List<QuestItemSourceViewModel>();
-
             foreach (var task in _questProgressService.AllTasks)
             {
                 var status = _questProgressService.GetStatus(task);
-                if (status == QuestStatus.Failed || status == QuestStatus.Unavailable)
-                    continue;
-
-                if (task.RequiredItems == null)
+                if (status is QuestStatus.Failed or QuestStatus.Unavailable || task.RequiredItems == null)
                     continue;
 
                 foreach (var questItem in task.RequiredItems)
                 {
-                    if (string.Equals(questItem.ItemNormalizedName, itemNormalizedName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        var questName = task.NameKo ?? task.Name;
-                        if (status == QuestStatus.Done)
-                            questName = $"✓ {questName}";
+                    var requirementKey = questItem.IsAlternativeGroup
+                        ? QuestRequirementInventoryKey.BuildGroupKey(task, questItem)
+                        : questItem.ItemNormalizedName;
+                    if (!string.Equals(requirementKey, itemRequirementKey, StringComparison.OrdinalIgnoreCase))
+                        continue;
 
-                        sources.Add(new QuestItemSourceViewModel
-                        {
-                            QuestName = questName,
-                            TraderName = task.Trader,
-                            Amount = questItem.Amount,
-                            FoundInRaid = questItem.FoundInRaid,
-                            Task = task,
-                            QuestNormalizedName = task.NormalizedName ?? string.Empty,
-                            DogtagMinLevel = questItem.DogtagMinLevel
-                        });
-                    }
+                    var questName = task.NameKo ?? task.Name;
+                    if (status == QuestStatus.Done)
+                        questName = $"✓ {questName}";
+
+                    sources.Add(new QuestItemSourceViewModel
+                    {
+                        QuestName = questName,
+                        TraderName = task.Trader,
+                        Amount = questItem.Amount,
+                        FoundInRaid = questItem.FoundInRaid,
+                        Task = task,
+                        QuestNormalizedName = task.NormalizedName ?? string.Empty,
+                        DogtagMinLevel = questItem.DogtagMinLevel
+                    });
                 }
             }
 

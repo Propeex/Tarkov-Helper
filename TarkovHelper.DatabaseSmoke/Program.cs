@@ -703,8 +703,8 @@ static void RunApplicationBehaviorSmoke()
     };
     var progressService = QuestProgressService.Instance;
     var eligibleStatus = new ActualQuestStatusEvaluator(progressService).Evaluate(statusTask);
-    if (eligibleStatus != QuestStatus.Available)
-        throw new InvalidDataException($"Eligible unstarted quest must be Available: actual={eligibleStatus}.");
+    if (eligibleStatus != QuestStatus.Active)
+        throw new InvalidDataException($"Eligible quest must be Active without a separate accept state: actual={eligibleStatus}.");
 
     var levelLockedTask = new TarkovTask
     {
@@ -717,12 +717,6 @@ static void RunApplicationBehaviorSmoke()
     if (levelLockedStatus != QuestStatus.LevelLocked)
         throw new InvalidDataException($"Quest below required level must be LevelLocked: actual={levelLockedStatus}.");
 
-    if (!progressService.StartQuest(statusTask) ||
-        new ActualQuestStatusEvaluator(progressService).Evaluate(statusTask) != QuestStatus.Active)
-    {
-        throw new InvalidDataException("Explicitly started eligible quest was not persisted as Active.");
-    }
-    progressService.ResetQuest(statusTask);
     settingsService.PlayerLevel = originalPlayerLevel;
 
     const string alternativeA = "__alternative-consumption-a__";
@@ -819,13 +813,57 @@ if (scavOnlyExtracts.IsExtractVisible(ExtractFaction.Shared))
     }
 
     var categories = ItemsDataService.Instance;
-    if (categories.GetParentCategory("Scopes") != "Scopes" ||
+    if (categories.GetParentCategory("Weapons") != "Weapons" ||
         categories.GetParentCategory("Magazines") != "Magazines" ||
-        categories.GetParentCategory("Chest rigs") != "Chest rigs" ||
-        categories.GetParentCategory("unrecognized-category") != "unrecognized-category")
+        categories.GetParentCategory("Rounds") != "Ammunition" ||
+        categories.GetParentCategory("Medkits") != "Medical" ||
+        categories.GetParentCategory("Food") != "Food" ||
+        categories.GetParentCategory("Melee weapons") != "Melee" ||
+        categories.GetParentCategory("Scopes") != "Parts" ||
+        categories.GetParentCategory("Grenades") != "Grenades" ||
+        categories.GetParentCategory("Electronics") != "Barter" ||
+        categories.GetParentCategory("Chest rigs") != "Rigs" ||
+        categories.GetParentCategory("Eyewear") != "Eyewear" ||
+        categories.GetParentCategory("Containers & cases") != "Containers" ||
+        categories.GetParentCategory("Armor vests") != "Armor" ||
+        categories.GetParentCategory("Info items") != "Info" ||
+        categories.GetParentCategory("Keys") != "Keys" ||
+        categories.GetParentCategory("unrecognized-category") != "Special")
     {
-        throw new InvalidDataException("Detailed item category preservation failed.");
+        throw new InvalidDataException("Canonical sixteen item categories failed.");
     }
+
+    var categoryOrder = new[]
+    {
+        "Weapons", "Magazines", "Ammunition", "Medical", "Food", "Melee",
+        "Parts", "Grenades", "Barter", "Rigs", "Eyewear", "Containers",
+        "Armor", "Info", "Keys", "Special"
+    };
+    if (!categoryOrder.Select(UiSortOrder.GetItemCategoryRank).SequenceEqual(Enumerable.Range(0, 16)))
+        throw new InvalidDataException("Item category dropdown order is not canonical.");
+
+    var rangeTask = new TarkovTask
+    {
+        Ids = ["range-inventory-smoke"],
+        NormalizedName = "range-inventory-smoke",
+        Name = "Range Inventory Smoke"
+    };
+    var rangeRequirement = new QuestItem
+    {
+        ItemNormalizedName = "group:range-inventory",
+        RequirementGroupId = "range-inventory",
+        IsAlternativeGroup = true,
+        AlternativeItemIds = ["item-a", "item-b", "item-c"],
+        Amount = 3
+    };
+    var rangeKeys = QuestRequirementInventoryKey.BuildAlternativeItemKeys(rangeTask, rangeRequirement);
+    if (rangeKeys.Count != 3 || rangeKeys.Any(key => key is "item-a" or "item-b" or "item-c"))
+        throw new InvalidDataException("Range requirement keys were not isolated from concrete item inventory.");
+    inventory.SetNonFirQuantity(rangeKeys[1], 3);
+    inventory.SetNonFirQuantity("item-b", 0);
+    if (rangeKeys.Sum(inventory.GetTotalQuantity) != 3 || inventory.GetTotalQuantity("item-b") != 0)
+        throw new InvalidDataException("Range and concrete item inventories were not calculated independently.");
+    foreach (var key in rangeKeys) inventory.SetNonFirQuantity(key, 0);
 
     var selector = new QuestStatusSelector();
     selector.ApplyDefault();

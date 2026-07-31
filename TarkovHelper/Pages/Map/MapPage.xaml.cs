@@ -692,7 +692,9 @@ public partial class MapPage : UserControl
     {
         if (_trackerService == null) return;
         CmbMapSelect.Items.Clear();
-        foreach (var mapKey in _trackerService.GetAllMapKeys())
+        foreach (var mapKey in _trackerService.GetAllMapKeys()
+                     .OrderBy(UiSortOrder.GetMapRank)
+                     .ThenBy(key => _loc.GetLocalizedMapName(key), StringComparer.CurrentCulture))
         {
             var config = _trackerService.GetMapConfig(mapKey);
             CmbMapSelect.Items.Add(new ComboBoxItem

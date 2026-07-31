@@ -45,13 +45,13 @@ public partial class AmmoPage : UserControl
         var previous = _settings.GetValue(SelectedCaliberKey);
         var calibers = _service.Items
             .GroupBy(item => item.Caliber, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new CaliberChoice(group.Key, group.First().CaliberDisplay, group.Count()))
+            .Select(group => new CaliberChoice(group.Key, group.First().CaliberDisplay))
             .OrderBy(choice => choice.DisplayName, StringComparer.CurrentCulture)
             .ToList();
 
         _updating = true;
         CaliberList.ItemsSource = calibers;
-        CaliberList.DisplayMemberPath = nameof(CaliberChoice.Label);
+        CaliberList.DisplayMemberPath = nameof(CaliberChoice.DisplayName);
         CaliberList.SelectedItem = calibers.FirstOrDefault(choice => string.Equals(choice.Key, previous, StringComparison.OrdinalIgnoreCase))
                                    ?? calibers.FirstOrDefault();
         _updating = false;
@@ -77,9 +77,7 @@ public partial class AmmoPage : UserControl
         _settings.SetValue(SelectedCaliberKey, selected.Key);
         foreach (var item in _service.Items
                      .Where(item => string.Equals(item.Caliber, selected.Key, StringComparison.OrdinalIgnoreCase))
-                     .OrderBy(item => item.ArmorEfficiencyScore)
-                     .ThenBy(item => item.PenetrationPower)
-                     .ThenBy(item => item.NameKo, StringComparer.CurrentCulture))
+                     .OrderBy(item => item.ArmorEfficiencyScore))
         {
             _visibleItems.Add(item);
         }
@@ -138,8 +136,8 @@ public partial class AmmoPage : UserControl
 
     private static Visibility Visible(CheckBox checkBox) => checkBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
 
-    private sealed record CaliberChoice(string Key, string DisplayName, int Count)
+    private sealed record CaliberChoice(string Key, string DisplayName)
     {
-        public string Label => $"{DisplayName} ({Count})";
+        public override string ToString() => DisplayName;
     }
 }

@@ -338,8 +338,18 @@ namespace TarkovHelper.Pages
             var tasks = _progressService.AllTasks;
 
             _allQuestViewModels = tasks.Select(t => CreateQuestViewModel(t)).ToList();
-            _traders = tasks.Select(t => t.Trader).Where(t => !string.IsNullOrEmpty(t)).Distinct().OrderBy(t => t).ToList();
-            _maps = tasks.Where(t => t.Maps != null).SelectMany(t => t.Maps!).Distinct().OrderBy(m => m).ToList();
+            _traders = tasks.Select(t => t.Trader)
+                .Where(t => !string.IsNullOrEmpty(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(UiSortOrder.GetTraderRank)
+                .ThenBy(t => _loc.GetLocalizedTraderName(t), StringComparer.CurrentCulture)
+                .ToList();
+            _maps = tasks.Where(t => t.Maps != null)
+                .SelectMany(t => t.Maps!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(UiSortOrder.GetMapRank)
+                .ThenBy(m => _loc.GetLocalizedMapName(m), StringComparer.CurrentCulture)
+                .ToList();
         }
 
         private QuestViewModel CreateQuestViewModel(TarkovTask task)
@@ -357,9 +367,8 @@ namespace TarkovHelper.Pages
                 Status = status,
                 StatusText = GetStatusText(status, task),
                 StatusBackground = GetStatusBrush(status),
-                CompleteButtonVisibility = status is QuestStatus.Available or QuestStatus.Active
+                CompleteButtonVisibility = status == QuestStatus.Active
                     ? Visibility.Visible : Visibility.Collapsed,
-                ActionButtonText = status == QuestStatus.Available ? "시작" : "완료",
                 IsKappaRequired = task.ReqKappa
             };
         }
@@ -433,7 +442,7 @@ namespace TarkovHelper.Pages
             {
                 QuestStatus.Locked => "잠김",
                 QuestStatus.Active => "진행중",
-                QuestStatus.Available => "수주 가능",
+                QuestStatus.Available => "진행중", // legacy value is normalized before display
                 QuestStatus.Done => "완료",
                 QuestStatus.Failed => "실패",
                 QuestStatus.LevelLocked => "레벨 제한",
@@ -448,7 +457,7 @@ namespace TarkovHelper.Pages
             {
                 QuestStatus.Locked => LockedBrush,
                 QuestStatus.Active => ActiveBrush,
-                QuestStatus.Available => LevelLockedBrush,
+                QuestStatus.Available => ActiveBrush,
                 QuestStatus.Done => DoneBrush,
                 QuestStatus.Failed => FailedBrush,
                 QuestStatus.LevelLocked => LevelLockedBrush,
@@ -472,12 +481,13 @@ namespace TarkovHelper.Pages
         {
             foreach (var vm in _allQuestViewModels)
             {
-                var status = _progressService.GetStatus(vm.Task);
+                var status = ActualQuestStatusService.Instance.CreateEvaluator().Evaluate(vm.Task);
                 vm.Status = status;
                 vm.StatusText = GetStatusText(status, vm.Task);
                 vm.StatusBackground = GetStatusBrush(status);
-                vm.CompleteButtonVisibility = (status == QuestStatus.Active || status == QuestStatus.Locked || status == QuestStatus.LevelLocked)
-                    && status != QuestStatus.Unavailable ? Visibility.Visible : Visibility.Collapsed;
+                vm.CompleteButtonVisibility = status == QuestStatus.Active
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
             }
         }
 
@@ -934,7 +944,7 @@ namespace TarkovHelper.Pages
             // Required Items
             if (task.RequiredItems != null && task.RequiredItems.Count > 0)
             {
-                LoadRequiredItems(task.RequiredItems);
+                LoadRequiredItems(task);
                 RequiredItemsSectionWrapper.Visibility = Visibility.Visible;
             }
             else
@@ -944,9 +954,9 @@ namespace TarkovHelper.Pages
             }
 
             // Button states
-            BtnComplete.Visibility = status is QuestStatus.Available or QuestStatus.Active
+            BtnComplete.Visibility = status == QuestStatus.Active
                 ? Visibility.Visible : Visibility.Collapsed;
-            BtnComplete.Content = status == QuestStatus.Available ? "시작" : "완료 처리";
+            BtnComplete.Content = "완료 처리";
             BtnReset.Visibility = status is QuestStatus.Active or QuestStatus.Done or QuestStatus.Failed
                 ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -956,10 +966,7 @@ namespace TarkovHelper.Pages
             if (sender is not Button btn || btn.Tag is not QuestViewModel vm)
                 return;
 
-            var status = ActualQuestStatusService.Instance.CreateEvaluator().Evaluate(vm.Task);
-            if (status == QuestStatus.Available)
-                _progressService.StartQuest(vm.Task);
-            else if (status == QuestStatus.Active)
+            if (ActualQuestStatusService.Instance.CreateEvaluator().Evaluate(vm.Task) == QuestStatus.Active)
                 _progressService.CompleteQuest(vm.Task, true);
         }
 
@@ -992,10 +999,7 @@ namespace TarkovHelper.Pages
             if (LstQuests.SelectedItem is not QuestViewModel selectedVm)
                 return;
 
-            var status = ActualQuestStatusService.Instance.CreateEvaluator().Evaluate(selectedVm.Task);
-            if (status == QuestStatus.Available)
-                _progressService.StartQuest(selectedVm.Task);
-            else if (status == QuestStatus.Active)
+            if (ActualQuestStatusService.Instance.CreateEvaluator().Evaluate(selectedVm.Task) == QuestStatus.Active)
                 _progressService.CompleteQuest(selectedVm.Task, true);
         }
 
@@ -1409,39 +1413,63 @@ namespace TarkovHelper.Pages
 
         #region Required Items with Localization
 
-        private void LoadRequiredItems(List<QuestItem> requiredItems)
+        private void LoadRequiredItems(TarkovTask task)
         {
             var itemVms = new List<RequiredItemViewModel>();
-
-            foreach (var item in requiredItems)
+            foreach (var item in task.RequiredItems ?? [])
             {
                 if (_isUnloaded)
                     return;
 
-                var keys = item.IsAlternativeGroup
-                    ? item.AlternativeItemIds
-                    : new List<string> { item.ItemNormalizedName };
-                var ownedFir = keys.Sum(key => _inventoryService.GetFirQuantity(key));
-                var ownedTotal = keys.Sum(key => _inventoryService.GetTotalQuantity(key));
-                var isFulfilled = item.FoundInRaid
-                    ? ownedFir >= item.Amount
-                    : ownedTotal >= item.Amount;
+                if (item.IsAlternativeGroup)
+                {
+                    var keys = QuestRequirementInventoryKey.BuildAlternativeItemKeys(task, item);
+                    var ownedFir = keys.Sum(_inventoryService.GetFirQuantity);
+                    var ownedTotal = keys.Sum(_inventoryService.GetTotalQuantity);
+                    var fulfilled = item.FoundInRaid ? ownedFir >= item.Amount : ownedTotal >= item.Amount;
 
-                var firstKey = keys.FirstOrDefault() ?? item.ItemNormalizedName;
-                var tarkovItem = GetItemByNormalizedName(firstKey, item.ItemDisplayName);
-                var displayNames = item.IsAlternativeGroup && item.AlternativeItemNames.Count > 0
-                    ? item.AlternativeItemNames
-                    : new List<string> { GetLocalizedItemName(item.ItemNormalizedName, item.ItemDisplayName) };
+                    for (var index = 0; index < item.AlternativeItemIds.Count; index++)
+                    {
+                        var itemId = item.AlternativeItemIds[index];
+                        var tarkovItem = GetItemByNormalizedName(itemId);
+                        var displayName = index < item.AlternativeItemNames.Count &&
+                                          !string.IsNullOrWhiteSpace(item.AlternativeItemNames[index])
+                            ? item.AlternativeItemNames[index]
+                            : GetLocalizedItemName(itemId);
 
+                        itemVms.Add(new RequiredItemViewModel
+                        {
+                            GroupHeaderText = $"범위 제출 · 아래 항목 중 아무거나 {item.Amount}개",
+                            GroupHeaderVisibility = index == 0 ? Visibility.Visible : Visibility.Collapsed,
+                            ItemMargin = new Thickness(20, 4, 0, 4),
+                            FoundInRaid = item.FoundInRaid,
+                            RequirementType = item.Requirement,
+                            ItemId = tarkovItem?.Id ?? string.Empty,
+                            IsFulfilled = fulfilled,
+                            DisplayText = displayName,
+                            IconSource = !string.IsNullOrEmpty(tarkovItem?.Id)
+                                ? _imageCache.GetLocalItemIcon(tarkovItem.Id)
+                                : null
+                        });
+                    }
+
+                    continue;
+                }
+
+                var fulfillmentInfo = _inventoryService.GetFulfillmentInfo(
+                    item.ItemNormalizedName,
+                    item.Amount,
+                    item.FoundInRaid ? item.Amount : 0);
+                var concrete = GetItemByNormalizedName(item.ItemNormalizedName, item.ItemDisplayName);
                 itemVms.Add(new RequiredItemViewModel
                 {
                     FoundInRaid = item.FoundInRaid,
                     RequirementType = item.Requirement,
-                    ItemId = item.IsAlternativeGroup ? string.Empty : tarkovItem?.Id ?? string.Empty,
-                    IsFulfilled = isFulfilled,
-                    DisplayText = $"{string.Join(", ", displayNames)} x{item.Amount}",
-                    IconSource = !string.IsNullOrEmpty(tarkovItem?.Id)
-                        ? _imageCache.GetLocalItemIcon(tarkovItem.Id)
+                    ItemId = concrete?.Id ?? string.Empty,
+                    IsFulfilled = fulfillmentInfo.Status == ItemFulfillmentStatus.Fulfilled,
+                    DisplayText = $"{GetLocalizedItemName(item.ItemNormalizedName, item.ItemDisplayName)} x{item.Amount}",
+                    IconSource = !string.IsNullOrEmpty(concrete?.Id)
+                        ? _imageCache.GetLocalItemIcon(concrete.Id)
                         : null
                 });
             }

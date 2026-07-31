@@ -43,7 +43,7 @@ public sealed class AmmoItem
 
 public sealed record AmmoArmorClassResult(int ArmorClass, int Effectiveness, Brush Background, Brush Foreground)
 {
-    public string DisplayText => $"{Effectiveness}x";
+    public string DisplayText => Effectiveness.ToString();
     public static AmmoArmorClassResult Create(int armorClass, int penetrationPower, int armorDamage)
     {
         var threshold = armorClass * 10;

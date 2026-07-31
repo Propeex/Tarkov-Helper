@@ -57,10 +57,14 @@ internal sealed class InventoryConsumptionService
         var requirements = task.RequiredItems
             .Where(item => !string.IsNullOrWhiteSpace(item.ItemNormalizedName) && item.Amount > 0)
             .Select(item => new InventoryConsumptionRequirement(
-                item.ItemNormalizedName,
+                item.IsAlternativeGroup
+                    ? QuestRequirementInventoryKey.BuildGroupKey(task, item)
+                    : item.ItemNormalizedName,
                 item.Amount,
                 item.FoundInRaid,
-                item.IsAlternativeGroup ? item.AlternativeItemIds : null))
+                item.IsAlternativeGroup
+                    ? QuestRequirementInventoryKey.BuildAlternativeItemKeys(task, item)
+                    : null))
             .ToList();
 
         var questId = task.Ids?.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
