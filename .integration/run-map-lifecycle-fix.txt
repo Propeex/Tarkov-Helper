@@ -1,0 +1,1 @@
+Apply the v1.7.1 minimap lifecycle patch, then remove this marker before merge.
