@@ -1,0 +1,24 @@
+name: Export Helper Source
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarkov-helper-source
+          path: |
+            TarkovHelper/**
+            TarkovHelper.DatabaseSmoke/**
+            .github/workflows/**
+            update.xml
+            LICENSE*
+          include-hidden-files: true
