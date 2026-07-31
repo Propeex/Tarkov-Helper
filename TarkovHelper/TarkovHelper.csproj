@@ -21,6 +21,12 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
+    <!-- WinForms is referenced only for multi-monitor screen bounds in ScannerService.
+         Remove its SDK-generated global usings so existing WPF types remain unambiguous. -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="1764579946.ico" />
   </ItemGroup>
   <ItemGroup>
