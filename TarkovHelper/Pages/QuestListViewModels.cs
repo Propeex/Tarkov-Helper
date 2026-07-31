@@ -20,7 +20,6 @@ namespace TarkovHelper.Pages
         public string StatusText { get; set; } = string.Empty;
         public Brush StatusBackground { get; set; } = Brushes.Gray;
         public Visibility CompleteButtonVisibility { get; set; } = Visibility.Visible;
-        public string ActionButtonText { get; set; } = "완료";
         public bool IsKappaRequired { get; set; }
         public Visibility KappaBadgeVisibility => IsKappaRequired ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -31,6 +30,9 @@ namespace TarkovHelper.Pages
     public class RequiredItemViewModel
     {
         public string DisplayText { get; set; } = string.Empty;
+        public string GroupHeaderText { get; set; } = string.Empty;
+        public Visibility GroupHeaderVisibility { get; set; } = Visibility.Collapsed;
+        public Thickness ItemMargin { get; set; } = new(0, 4, 0, 4);
         public bool FoundInRaid { get; set; }
         public Visibility FirVisibility => FoundInRaid ? Visibility.Visible : Visibility.Collapsed;
         public BitmapImage? IconSource { get; set; }

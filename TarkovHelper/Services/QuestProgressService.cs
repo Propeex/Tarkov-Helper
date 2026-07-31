@@ -268,11 +268,9 @@ namespace TarkovHelper.Services
             var taskId = task.Ids?.FirstOrDefault();
             var taskKey = taskId ?? task.NormalizedName;
 
-            if (string.IsNullOrEmpty(taskKey)) return QuestStatus.Available;
+            if (string.IsNullOrEmpty(taskKey))
+                return QuestStatus.Active;
 
-            // Persisted states are authoritative. Active is written only when the
-            // user explicitly starts a quest; an eligible but unstarted quest has
-            // no progress row and is reported as Available below.
             QuestStatus? persistedStatus = null;
             if (!string.IsNullOrEmpty(taskId) && _questProgress.TryGetValue(taskId, out var statusById))
             {
@@ -287,57 +285,36 @@ namespace TarkovHelper.Services
             if (persistedStatus is QuestStatus.Done or QuestStatus.Failed)
                 return persistedStatus.Value;
 
-            // Circular reference protection for prerequisite checking
             bool isTopLevel = _getStatusVisited == null;
             _getStatusVisited ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            // A circular prerequisite chain cannot make a quest startable.
             if (!_getStatusVisited.Add(taskKey))
-            {
                 return QuestStatus.Locked;
-            }
 
             try
             {
-                // Check edition requirements first (Unavailable takes precedence)
-                if (!IsEditionRequirementMet(task))
+                if (!IsEditionRequirementMet(task) ||
+                    !IsPrestigeLevelRequirementMet(task) ||
+                    !IsFactionRequirementMet(task))
+                {
                     return QuestStatus.Unavailable;
+                }
 
-                // Check prestige level requirement (also Unavailable)
-                if (!IsPrestigeLevelRequirementMet(task))
-                    return QuestStatus.Unavailable;
-
-                // Check faction requirement (Unavailable if player chose different faction)
-                if (!IsFactionRequirementMet(task))
-                    return QuestStatus.Unavailable;
-
-                // Check DSP Decode Count requirement (Locked, not Unavailable)
-                if (!IsDspRequirementMet(task))
+                if (!IsDspRequirementMet(task) || !ArePrerequisitesMet(task))
                     return QuestStatus.Locked;
 
-                // Check prerequisites
-                if (!ArePrerequisitesMet(task))
-                    return QuestStatus.Locked;
-
-                // Check level requirement
-                if (!IsLevelRequirementMet(task))
+                if (!IsLevelRequirementMet(task) || !IsScavKarmaRequirementMet(task))
                     return QuestStatus.LevelLocked;
 
-                // Check Scav Karma requirement
-                if (!IsScavKarmaRequirementMet(task))
-                    return QuestStatus.LevelLocked;  // Use LevelLocked status for karma-locked quests too
-
-                return persistedStatus == QuestStatus.Active
-                    ? QuestStatus.Active
-                    : QuestStatus.Available;
+                // Eligible quests are always considered accepted and in progress.
+                // Legacy Available progress rows are intentionally normalized here.
+                return QuestStatus.Active;
             }
             finally
             {
                 _getStatusVisited.Remove(taskKey);
                 if (isTopLevel)
-                {
                     _getStatusVisited = null;
-                }
             }
         }
 
@@ -611,39 +588,10 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Mark an eligible quest as explicitly started.
+        /// Compatibility entry point for imported log events. Eligible quests are
+        /// already Active, so no separate accepted state is persisted.
         /// </summary>
-        public bool StartQuest(TarkovTask task)
-        {
-            var taskId = task.Ids?.FirstOrDefault();
-            var taskKey = taskId ?? task.NormalizedName;
-            if (string.IsNullOrWhiteSpace(taskKey))
-                return false;
-
-            if (GetStatus(task) != QuestStatus.Available)
-                return false;
-
-            _questProgress[taskKey] = QuestStatus.Active;
-            _ = _persistenceQueue.Enqueue(async () =>
-            {
-                try
-                {
-                    await _userDataDb.SaveQuestProgressAsync(
-                        taskId ?? taskKey,
-                        task.NormalizedName,
-                        QuestStatus.Active,
-                        _loadedProfile);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[QuestProgressService] Failed to save started quest: {ex.Message}");
-                }
-            });
-
-            ProgressChanged?.Invoke(this, EventArgs.Empty);
-            return true;
-        }
+        public bool StartQuest(TarkovTask task) => GetStatus(task) == QuestStatus.Active;
 
         /// <summary>
         /// Mark quest as completed, optionally completing prerequisites
@@ -922,11 +870,8 @@ namespace TarkovHelper.Services
                 switch (status)
                 {
                     case QuestStatus.Active:
-                        if (GetStatus(task) == QuestStatus.Available)
-                        {
-                            _questProgress[taskKey] = QuestStatus.Active;
-                            changedItems.Add((taskId ?? taskKey, task.NormalizedName, QuestStatus.Active));
-                        }
+                        // Eligible quests are already Active. Imported start events
+                        // require no separate persisted acceptance state.
                         break;
 
                     case QuestStatus.Done:

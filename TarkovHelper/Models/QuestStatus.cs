@@ -36,8 +36,10 @@ namespace TarkovHelper.Models
         Unavailable,
 
         /// <summary>
-        /// Start conditions are met, but the quest has not been explicitly started.
+        /// Legacy persisted value from v1.8.1. Runtime status evaluation normalizes
+        /// this value to Active and the UI never exposes it.
         /// </summary>
+        [Obsolete("Available is a legacy persisted value; eligible quests are Active.")]
         Available
     }
 }

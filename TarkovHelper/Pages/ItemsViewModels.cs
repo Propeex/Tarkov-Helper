@@ -13,7 +13,12 @@ namespace TarkovHelper.Pages
     {
         public string ItemId { get; set; } = string.Empty;
         public string ItemNormalizedName { get; set; } = string.Empty;
+        public string RequirementLookupKey { get; set; } = string.Empty;
         public IReadOnlyList<string> AlternativeItemKeys { get; set; } = Array.Empty<string>();
+        public bool IsAlternativeGroupMember { get; set; }
+        public string AlternativeGroupHeaderText { get; set; } = string.Empty;
+        public Visibility AlternativeGroupHeaderVisibility { get; set; } = Visibility.Collapsed;
+        public Thickness ItemIndent { get; set; } = new(0);
         public string DisplayName { get; set; } = string.Empty;
         public string SubtitleName { get; set; } = string.Empty;
         public Visibility SubtitleVisibility { get; set; } = Visibility.Collapsed;
@@ -90,20 +95,46 @@ namespace TarkovHelper.Pages
             }
         }
 
-        public int OwnedTotalQuantity => OwnedFirQuantity + OwnedNonFirQuantity;
+        private int _groupOwnedFirQuantity;
+        private int _groupOwnedNonFirQuantity;
 
-        // Fulfillment calculation
+        public int GroupOwnedFirQuantity
+        {
+            get => _groupOwnedFirQuantity;
+            set
+            {
+                if (_groupOwnedFirQuantity == value) return;
+                _groupOwnedFirQuantity = value;
+                NotifyFulfillmentChanged();
+            }
+        }
+
+        public int GroupOwnedNonFirQuantity
+        {
+            get => _groupOwnedNonFirQuantity;
+            set
+            {
+                if (_groupOwnedNonFirQuantity == value) return;
+                _groupOwnedNonFirQuantity = value;
+                NotifyFulfillmentChanged();
+            }
+        }
+
+        public int OwnedTotalQuantity => OwnedFirQuantity + OwnedNonFirQuantity;
+        private int EffectiveOwnedFirQuantity => IsAlternativeGroupMember ? GroupOwnedFirQuantity : OwnedFirQuantity;
+        private int EffectiveOwnedNonFirQuantity => IsAlternativeGroupMember ? GroupOwnedNonFirQuantity : OwnedNonFirQuantity;
+
         public ItemFulfillmentStatus FulfillmentStatus => ItemRequirementFulfillment.GetStatus(
             TotalCount,
             TotalFIRCount,
-            OwnedFirQuantity,
-            OwnedNonFirQuantity);
+            EffectiveOwnedFirQuantity,
+            EffectiveOwnedNonFirQuantity);
 
         public double ProgressPercent => ItemRequirementFulfillment.GetProgressPercent(
             TotalCount,
             TotalFIRCount,
-            OwnedFirQuantity,
-            OwnedNonFirQuantity);
+            EffectiveOwnedFirQuantity,
+            EffectiveOwnedNonFirQuantity);
 
         public bool IsFulfilled => FulfillmentStatus == ItemFulfillmentStatus.Fulfilled;
         public Visibility FulfilledVisibility => IsFulfilled ? Visibility.Visible : Visibility.Collapsed;
@@ -126,9 +157,13 @@ namespace TarkovHelper.Pages
         }
 
         // Display strings for UI - shows FIR/non-FIR breakdown
-        public string QuestDisplay => QuestCount > 0 ? FormatCountDisplay(QuestCount, QuestFIRCount) : "0";
+        public string QuestDisplay => IsAlternativeGroupMember
+            ? QuestCount > 0 ? $"묶음 {FormatCountDisplay(QuestCount, QuestFIRCount)}" : "0"
+            : QuestCount > 0 ? FormatCountDisplay(QuestCount, QuestFIRCount) : "0";
         public string HideoutDisplay => HideoutCount > 0 ? FormatCountDisplay(HideoutCount, HideoutFIRCount) : "0";
-        public string TotalDisplay => FormatCountDisplay(TotalCount, TotalFIRCount);
+        public string TotalDisplay => IsAlternativeGroupMember
+            ? TotalCount > 0 ? $"묶음 {FormatCountDisplay(TotalCount, TotalFIRCount)}" : "0"
+            : FormatCountDisplay(TotalCount, TotalFIRCount);
 
         private static string FormatCountDisplay(int total, int firCount)
         {
@@ -139,6 +174,16 @@ namespace TarkovHelper.Pages
             // Mixed: show both FIR and non-FIR counts
             var nonFirCount = total - firCount;
             return $"{firCount}F+{nonFirCount}";
+        }
+
+        private void NotifyFulfillmentChanged()
+        {
+            OnPropertyChanged(nameof(FulfillmentStatus));
+            OnPropertyChanged(nameof(ProgressPercent));
+            OnPropertyChanged(nameof(IsFulfilled));
+            OnPropertyChanged(nameof(FulfilledVisibility));
+            OnPropertyChanged(nameof(ItemOpacity));
+            OnPropertyChanged(nameof(NameTextDecorations));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -198,7 +243,11 @@ namespace TarkovHelper.Pages
         public string? ItemNameKo { get; set; }
         public string? ItemNameJa { get; set; }
         public string ItemNormalizedName { get; set; } = string.Empty;
+        public string RequirementLookupKey { get; set; } = string.Empty;
         public IReadOnlyList<string> AlternativeItemKeys { get; set; } = Array.Empty<string>();
+        public bool IsAlternativeGroupMember { get; set; }
+        public bool IsAlternativeGroupFirst { get; set; }
+        public string AlternativeGroupHeaderText { get; set; } = string.Empty;
         public string? IconLink { get; set; }
         public string? WikiLink { get; set; }
         public string? Category { get; set; }

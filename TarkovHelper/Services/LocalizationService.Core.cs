@@ -120,7 +120,7 @@ public partial class LocalizationService : INotifyPropertyChanged
 
     public string GetLocalizedTraderName(string? englishName) => englishName?.ToLowerInvariant() switch
     {
-        "prapor" => "프라포",
+        "prapor" => "프라퍼",
         "therapist" => "테라피스트",
         "skier" => "스키어",
         "peacekeeper" => "피스키퍼",
@@ -140,7 +140,7 @@ public partial class LocalizationService : INotifyPropertyChanged
     {
         "customs" => "세관",
         "factory" => "공장",
-        "interchange" => "인터체인지",
+        "interchange" => "나들목",
         "reserve" => "리저브",
         "shoreline" => "해안선",
         "woods" => "삼림",
@@ -149,6 +149,7 @@ public partial class LocalizationService : INotifyPropertyChanged
         "ground zero" or "groundzero" => "그라운드 제로",
         "the lab" or "the labs" or "labs" => "연구소",
         "the labyrinth" or "labyrinth" => "미궁",
+        "icebreaker" or "ice breaker" or "icebreaker terminal" => "쇄빙선",
         "terminal" => "터미널",
         "arena" => "아레나",
         _ => englishName ?? Unknown

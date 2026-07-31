@@ -25,6 +25,7 @@
             <Border x:Name="ItemBorder" Padding="12,6" BorderThickness="0,0,0,1"
                     BorderBrush="{StaticResource BorderBrush}"
                     Background="Transparent"
+                    Margin="{Binding ItemIndent}"
                     Opacity="{Binding ItemOpacity}">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -60,6 +61,11 @@
 
                     <!-- Item Name -->
                     <StackPanel Grid.Column="1" Grid.Row="0" Margin="12,0,8,0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding AlternativeGroupHeaderText}"
+                                   Visibility="{Binding AlternativeGroupHeaderVisibility}"
+                                   Foreground="{StaticResource AccentBrush}"
+                                   FontSize="{DynamicResource FontSizeTiny}"
+                                   FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="{Binding DisplayName}" FontSize="{DynamicResource FontSizeSmall}"
                                        Foreground="{StaticResource TextPrimaryBrush}"

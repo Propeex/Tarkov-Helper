@@ -1,6 +1,8 @@
 using System.IO;
 using System.Reflection;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Logging;
 
@@ -24,6 +26,11 @@ namespace TarkovHelper
         {
             // DB 초기화를 가장 먼저 수행 (SettingsService, ProfileService 등이 안전하게 접근할 수 있도록 보장)
             UserDataDbService.Instance.EnsureInitialized();
+
+            EventManager.RegisterClassHandler(
+                typeof(ComboBoxItem),
+                FrameworkElement.RequestBringIntoViewEvent,
+                new RequestBringIntoViewEventHandler(ComboBoxItem_RequestBringIntoView));
 
             base.OnStartup(e);
 
@@ -51,6 +58,20 @@ namespace TarkovHelper
 
             // Note: AutoUpdater is now managed by UpdateService in MainWindow
             // It will show update dialog only when user clicks "Update to vX.X.X" button
+        }
+
+        private static void ComboBoxItem_RequestBringIntoView(
+            object sender,
+            RequestBringIntoViewEventArgs e)
+        {
+            if (sender is ComboBoxItem item &&
+                item.IsMouseOver &&
+                Mouse.LeftButton == MouseButtonState.Released &&
+                Mouse.MiddleButton == MouseButtonState.Released &&
+                Mouse.RightButton == MouseButtonState.Released)
+            {
+                e.Handled = true;
+            }
         }
 
         protected override void OnExit(ExitEventArgs e)

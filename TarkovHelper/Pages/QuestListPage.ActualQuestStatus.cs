@@ -52,11 +52,9 @@ public partial class QuestListPage
             viewModel.Status = status;
             viewModel.StatusText = GetStatusText(status, viewModel.Task);
             viewModel.StatusBackground = GetStatusBrush(status);
-            viewModel.CompleteButtonVisibility =
-                status is QuestStatus.Available or QuestStatus.Active
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-            viewModel.ActionButtonText = status == QuestStatus.Available ? "시작" : "완료";
+            viewModel.CompleteButtonVisibility = status == QuestStatus.Active
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
 
         ApplyFilters();
@@ -102,34 +100,6 @@ public partial class QuestListPage
             : Visibility.Collapsed;
     }
 
-    private void RemoveLegacyAvailableStatusFilter()
-    {
-        var legacyItems = CmbStatus.Items
-            .OfType<ComboBoxItem>()
-            .Where(item => string.Equals(
-                item.Tag?.ToString(),
-                "Available",
-                StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (legacyItems.Count == 0)
-            return;
-
-        var selectedLegacyItem = legacyItems.Contains(CmbStatus.SelectedItem as ComboBoxItem);
-        foreach (var item in legacyItems)
-            CmbStatus.Items.Remove(item);
-
-        if (selectedLegacyItem)
-        {
-            CmbStatus.SelectedItem = CmbStatus.Items
-                .OfType<ComboBoxItem>()
-                .FirstOrDefault(item => string.Equals(
-                    item.Tag?.ToString(),
-                    QuestStatusSelector.DefaultStatus,
-                    StringComparison.OrdinalIgnoreCase));
-        }
-    }
-
     private void UpdateActualQuestStatistics()
     {
         if (_isUnloaded || !_isDataLoaded)
@@ -140,7 +110,6 @@ public partial class QuestListPage
             : 0;
 
         var active = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Active);
-        var available = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Available);
         var locked = _allQuestViewModels.Count(vm =>
             vm.Status is QuestStatus.Locked or QuestStatus.LevelLocked);
         var done = _allQuestViewModels.Count(vm => vm.Status == QuestStatus.Done);
@@ -150,7 +119,7 @@ public partial class QuestListPage
 
         TxtStats.Text =
             $"레벨 {playerLevel} | {_allQuestViewModels.Count}개 중 {filteredCount}개 표시 중 | " +
-            $"진행 중: {active} | 수주 가능: {available} | 잠김: {locked} | " +
+            $"진행 중: {active} | 잠김: {locked} | " +
             $"완료: {done} | 실패: {failed} | 불가: {unavailable}";
     }
 
