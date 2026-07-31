@@ -95,7 +95,22 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                         description = "fixture-item-bolts Description",
                         iconLink = "https://example.invalid/bolts.png",
                         wikiLink = "https://example.invalid/bolts",
-                        categories = new[] { "fixture-category-barter" }
+                        categories = new[] { "fixture-category-barter" },
+                        properties = new
+                        {
+                            caliber = "Caliber762x39",
+                            projectileCount = 1,
+                            damage = 58,
+                            armorDamage = 47,
+                            fragmentationChance = 0.12,
+                            penetrationPower = 32,
+                            accuracyModifier = 0.0,
+                            recoilModifier = 0.05,
+                            lightBleedModifier = 0.1,
+                            heavyBleedModifier = 0.0,
+                            initialSpeed = 700.0
+                        },
+                        buyFor = new[] { new { vendor = new { name = "Prapor" } } }
                     },
                     ["fixture-item-wire"] = new
                     {

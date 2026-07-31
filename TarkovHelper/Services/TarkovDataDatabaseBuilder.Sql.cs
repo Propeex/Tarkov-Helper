@@ -79,6 +79,16 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (missingHideoutItems != 0)
             throw new InvalidDataException($"은신처 필요 아이템 연결 실패: {missingHideoutItems}개");
 
+
+        var missingAmmoItems = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*)
+            FROM Ammo a
+            LEFT JOIN Items i ON a.ItemId = i.BsgId OR a.ItemId = i.Id
+            WHERE i.Id IS NULL;
+            """, cancellationToken);
+        if (missingAmmoItems != 0)
+            throw new InvalidDataException($"탄약 아이템 연결 실패: {missingAmmoItems}개");
+
         var missingQuestReferences = await ExecuteScalarLongAsync(connection, """
             SELECT COUNT(*)
             FROM QuestRequirements r
@@ -97,7 +107,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 string.Join("; ", foreignKeyIssues.Take(12)));
         }
 
-        Report("검증", "아이템·퀘스트·은신처 연결 검증 완료", 98, counts.TotalRows, counts.TotalRows);
+        Report("검증", "아이템·탄약·퀘스트·은신처 연결 검증 완료", 98, counts.TotalRows, counts.TotalRows);
     }
 
     private static async Task<int> PruneDanglingOptionalQuestsAsync(
@@ -477,6 +487,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
     private static string KoreanTableName(string tableName) => tableName switch
     {
         "Items" => "아이템",
+        "Ammo" => "탄약",
         "Quests" => "퀘스트",
         "QuestRequirements" => "선행 퀘스트",
         "QuestObjectives" => "퀘스트 목표",

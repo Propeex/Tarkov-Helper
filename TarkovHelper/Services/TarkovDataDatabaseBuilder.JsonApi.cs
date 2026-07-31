@@ -55,6 +55,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
             Report("완료", "데이터베이스 생성 완료", 100, counts.TotalRows, counts.TotalRows);
             return new DatabaseBuildResult(
                 counts.Items,
+                counts.Ammo,
                 counts.Quests,
                 counts.QuestRequiredItems,
                 counts.HideoutStations,
@@ -112,6 +113,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
             cancellationToken);
         var itemsEn = ParseItems(itemDocuments.English);
         var itemsKo = ParseItems(itemDocuments.Korean);
+        if (_enrichAmmoSources)
+            await TryEnrichAmmoSourcesAsync(itemsEn, cancellationToken);
         var itemLookupEn = UniqueById(itemsEn);
         var itemLookupKo = UniqueById(itemsKo);
 
@@ -148,6 +151,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
             54,
             65,
             cancellationToken);
+        var hideoutStationsEn = ParseNamedLookup(hideoutDocuments.English);
+        EnrichAmmoSourcesFromStaticTaskRewards(
+            itemsEn,
+            taskDocuments.English,
+            tradersEn,
+            hideoutStationsEn);
+
         var hideoutEn = ParseHideout(hideoutDocuments.English, itemLookupEn, tradersEn);
         var hideoutKo = ParseHideout(hideoutDocuments.Korean, itemLookupKo, tradersKo);
 
@@ -155,6 +165,47 @@ internal sealed partial class TarkovDataDatabaseBuilder
             throw new InvalidDataException("tarkov.dev 정적 JSON API 데이터가 비어 있습니다.");
 
         return MergeApiData(itemsEn, itemsKo, tasksEn, tasksKo, hideoutEn, hideoutKo);
+    }
+
+    private async Task TryEnrichAmmoSourcesAsync(
+        List<ApiItem> staticItems,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            Report("API", "탄약 입수 경로를 보강하는 중", 20, 0, null);
+            var graphQlItems = await FetchItemsAsync("en", 20, 22, cancellationToken);
+            var sourceLookup = UniqueById(graphQlItems);
+            var enriched = 0;
+
+            foreach (var item in staticItems)
+            {
+                if (item.Properties == null || !sourceLookup.TryGetValue(item.Id, out var source))
+                    continue;
+
+                item.BuyFor = source.BuyFor;
+                item.BartersFor = source.BartersFor;
+                item.CraftsFor = source.CraftsFor;
+                item.ReceivedFromTasks = source.ReceivedFromTasks;
+                item.Properties.AcquisitionSource = null;
+                if (source.BuyFor.Count > 0 || source.BartersFor.Count > 0 ||
+                    source.CraftsFor.Count > 0 || source.ReceivedFromTasks.Count > 0)
+                {
+                    enriched++;
+                }
+            }
+
+            Log.Info($"Ammo acquisition sources enriched from GraphQL: {enriched}");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning($"Ammo acquisition source enrichment skipped: {ex.Message}");
+            Report("API", "탄약 입수 경로 온라인 보강을 건너뛰고 기본 데이터로 계속합니다", 22, 0, null);
+        }
     }
 
     private async Task<LocalizedJsonDocuments> FetchLocalizedJsonAsync(
@@ -411,11 +462,71 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 IconLink = GetString(itemObject, "iconLink"),
                 WikiLink = GetString(itemObject, "wikiLink"),
                 Category = itemCategories.FirstOrDefault(),
-                Categories = itemCategories
+                Categories = itemCategories,
+                Properties = ParseAmmoProperties(itemObject)
             });
         }
 
         return result;
+    }
+
+    private static ApiAmmoProperties? ParseAmmoProperties(JsonObject itemObject)
+    {
+        if (itemObject["properties"] is not JsonObject properties)
+            return null;
+
+        var caliber = GetString(properties, "caliber");
+        var damage = GetInt(properties, "damage");
+        var penetration = GetInt(properties, "penetrationPower");
+        if (string.IsNullOrWhiteSpace(caliber) || (!damage.HasValue && !penetration.HasValue))
+            return null;
+
+        return new ApiAmmoProperties
+        {
+            Caliber = caliber,
+            ProjectileCount = GetInt(properties, "projectileCount") ?? 1,
+            Damage = damage ?? 0,
+            ArmorDamage = GetInt(properties, "armorDamage") ?? 0,
+            FragmentationChance = GetDouble(properties, "fragmentationChance") ?? 0,
+            PenetrationPower = penetration ?? 0,
+            AccuracyModifier = GetDouble(properties, "accuracyModifier", "accuracy") ?? 0,
+            RecoilModifier = GetDouble(properties, "recoilModifier", "recoil") ?? 0,
+            LightBleedModifier = GetDouble(properties, "lightBleedModifier") ?? 0,
+            HeavyBleedModifier = GetDouble(properties, "heavyBleedModifier") ?? 0,
+            InitialSpeed = GetDouble(properties, "initialSpeed") ?? 0,
+            AcquisitionSource = ParseAcquisitionSource(itemObject)
+        };
+    }
+
+    private static string ParseAcquisitionSource(JsonObject itemObject)
+    {
+        var sources = new List<string>();
+        if (itemObject["buyFor"] is JsonArray buyFor && buyFor.Count > 0)
+            sources.Add(DescribeSourceArray(buyFor, "구매"));
+        if (itemObject["bartersFor"] is JsonArray barters && barters.Count > 0)
+            sources.Add(DescribeSourceArray(barters, "교환"));
+        if (itemObject["craftsFor"] is JsonArray crafts && crafts.Count > 0)
+            sources.Add(DescribeSourceArray(crafts, "제작"));
+        if (itemObject["receivedFromTasks"] is JsonArray tasks && tasks.Count > 0)
+            sources.Add("퀘스트 보상");
+        return sources.Count == 0 ? "레이드 획득/기타" : string.Join(" · ", sources.Distinct());
+    }
+
+    private static string DescribeSourceArray(JsonArray values, string action)
+    {
+        foreach (var value in values.OfType<JsonObject>())
+        {
+            foreach (var key in new[] { "vendor", "trader", "station" })
+            {
+                if (value[key] is JsonObject sourceObject)
+                {
+                    var name = GetString(sourceObject, "name", "normalizedName");
+                    if (!string.IsNullOrWhiteSpace(name))
+                        return $"{name} {action}";
+                }
+            }
+        }
+        return action;
     }
 
     private static Dictionary<string, ApiNamedEntity> ParseNamedLookup(
@@ -893,6 +1004,23 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 return value;
         }
 
+        return null;
+    }
+
+    private static double? GetDouble(JsonObject source, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (source[propertyName] is not JsonValue value)
+                continue;
+            if (value.TryGetValue<double>(out var number))
+                return number;
+            if (value.TryGetValue<int>(out var integer))
+                return integer;
+            if (value.TryGetValue<string>(out var text) &&
+                double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number))
+                return number;
+        }
         return null;
     }
 

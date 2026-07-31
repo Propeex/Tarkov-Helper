@@ -52,7 +52,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
 
     var builder = new TarkovDataDatabaseBuilder(
         httpClient,
-        progress => Console.WriteLine($"[{progress.Percent,6:F1}%] {progress.Message}"));
+        progress => Console.WriteLine($"[{progress.Percent,6:F1}%] {progress.Message}"),
+        enrichAmmoSources: false);
 
     var result = await builder.BuildPreferredAsync(databasePath);
 
@@ -220,7 +221,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         ), 0);
         """);
 
-    if (result.ItemCount != 4 || result.QuestCount != 2 || result.HideoutStationCount != 1)
+    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 2 || result.HideoutStationCount != 1)
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
     if (koreanItems < 4 || koreanQuests < 2)
         throw new InvalidDataException("Korean localized names were not written correctly.");
@@ -275,7 +276,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
 
     Console.WriteLine(
         $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
-        $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, quests={result.QuestCount}, " +
+        $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, ammo={result.AmmoCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"acquisitionRows={acquisitionRequirementRows}, pairedBolts={pairedBoltRequirementRows}, " +
         $"iconLinks={iconLinks}, neutralRestrictions={restrictedNeutralQuests}, sellItemRows={sellItemRequirements}, " +
@@ -757,7 +758,29 @@ static async Task<int> RunExternalApiSmokeAsync()
     {
         var result = await service.CheckAndUpdateAsync();
         Console.WriteLine(result.Message);
-        return result.Success && result.WasUpdated ? 0 : 1;
+        if (!result.Success || !result.WasUpdated)
+            return 1;
+
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = service.DatabasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ConnectionString);
+        await connection.OpenAsync();
+        var ammoRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo;");
+        var linkedAmmoRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo a JOIN Items i ON i.BsgId = a.ItemId OR i.Id = a.ItemId;");
+        var koreanAmmoRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo a JOIN Items i ON i.BsgId = a.ItemId OR i.Id = a.ItemId WHERE COALESCE(NULLIF(i.NameKO, ''), '') != ''; ");
+        var caliberRows = await ScalarAsync(connection, "SELECT COUNT(DISTINCT Caliber) FROM Ammo;");
+        var specificSourceRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo WHERE LOWER(TRIM(COALESCE(AcquisitionSource, ''))) NOT IN ('', 'raid/other', '레이드 획득/기타');");
+        if (ammoRows < 150 || linkedAmmoRows != ammoRows || koreanAmmoRows < 150 || caliberRows < 20 || specificSourceRows < 20)
+        {
+            throw new InvalidDataException(
+                $"Live ammo data validation failed: rows={ammoRows}, linked={linkedAmmoRows}, korean={koreanAmmoRows}, calibers={caliberRows}, sources={specificSourceRows}.");
+        }
+
+        Console.WriteLine($"Live ammo data validated: rows={ammoRows}, calibers={caliberRows}, sources={specificSourceRows}.");
+        return 0;
     }
     finally
     {

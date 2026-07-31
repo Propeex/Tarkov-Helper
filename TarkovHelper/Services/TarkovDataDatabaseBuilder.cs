@@ -31,15 +31,18 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
     private readonly HttpClient _httpClient;
     private readonly Action<DatabaseBuildProgress> _report;
+    private readonly bool _enrichAmmoSources;
     private readonly DateTime _startedAt = DateTime.UtcNow;
     private double _lastPercent;
 
     public TarkovDataDatabaseBuilder(
         HttpClient httpClient,
-        Action<DatabaseBuildProgress> report)
+        Action<DatabaseBuildProgress> report,
+        bool enrichAmmoSources = true)
     {
         _httpClient = httpClient;
         _report = report;
+        _enrichAmmoSources = enrichAmmoSources;
     }
 
     public async Task<DatabaseBuildResult> BuildAsync(
@@ -98,6 +101,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
             Report("완료", "데이터베이스 생성 완료", 100, counts.TotalRows, counts.TotalRows);
             return new DatabaseBuildResult(
                 counts.Items,
+                counts.Ammo,
                 counts.Quests,
                 counts.QuestRequiredItems,
                 counts.HideoutStations,
@@ -129,6 +133,25 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 wikiLink
                 category { name normalizedName }
                 categories { name normalizedName }
+                properties {
+                  ... on ItemPropertiesAmmo {
+                    caliber
+                    projectileCount
+                    damage
+                    armorDamage
+                    fragmentationChance
+                    penetrationPower
+                    accuracyModifier
+                    recoilModifier
+                    lightBleedModifier
+                    heavyBleedModifier
+                    initialSpeed
+                  }
+                }
+                buyFor { priceRUB vendor { name normalizedName } }
+                bartersFor { trader { name normalizedName } level }
+                craftsFor { station { name normalizedName } level }
+                receivedFromTasks { name normalizedName }
               }
             }
             """;

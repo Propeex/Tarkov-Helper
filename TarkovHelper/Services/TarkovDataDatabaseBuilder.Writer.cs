@@ -33,12 +33,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
         await connection.OpenAsync(cancellationToken);
         await ExecuteNonQueryAsync(connection, "PRAGMA foreign_keys=OFF;", cancellationToken);
         await ExecuteNonQueryAsync(connection, "PRAGMA busy_timeout=60000;", cancellationToken);
+        await EnsureAmmoTableAsync(connection, cancellationToken);
 
         var requiredTables = new[]
         {
             "Items", "Quests", "QuestRequirements", "QuestObjectives", "QuestRequiredItems",
             "HideoutStations", "HideoutLevels", "HideoutItemRequirements",
-            "HideoutStationRequirements", "HideoutTraderRequirements", "HideoutSkillRequirements"
+            "HideoutStationRequirements", "HideoutTraderRequirements", "HideoutSkillRequirements", "Ammo"
         };
 
         foreach (var table in requiredTables)
@@ -88,6 +89,32 @@ internal sealed partial class TarkovDataDatabaseBuilder
             Set(row, "Categories", JsonSerializer.Serialize(item.Categories.Select(category => category.Name).Where(name => !string.IsNullOrWhiteSpace(name))));
             Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             itemRows.Add(row);
+        }
+
+        var ammoRows = new List<RowData>();
+        foreach (var localized in data.Items)
+        {
+            var item = localized.English;
+            var ammo = item.Properties;
+            if (ammo == null || string.IsNullOrWhiteSpace(ammo.Caliber))
+                continue;
+
+            var row = new RowData();
+            Set(row, "ItemId", item.Id);
+            Set(row, "Caliber", ammo.Caliber);
+            Set(row, "ProjectileCount", Math.Max(1, ammo.ProjectileCount ?? 1));
+            Set(row, "Damage", ammo.Damage ?? 0);
+            Set(row, "ArmorDamage", ammo.ArmorDamage ?? 0);
+            Set(row, "FragmentationChance", ammo.FragmentationChance ?? 0);
+            Set(row, "PenetrationPower", ammo.PenetrationPower ?? 0);
+            Set(row, "AccuracyModifier", ammo.AccuracyModifier ?? 0);
+            Set(row, "RecoilModifier", ammo.RecoilModifier ?? 0);
+            Set(row, "LightBleedModifier", ammo.LightBleedModifier ?? 0);
+            Set(row, "HeavyBleedModifier", ammo.HeavyBleedModifier ?? 0);
+            Set(row, "InitialSpeed", ammo.InitialSpeed ?? 0);
+            Set(row, "AcquisitionSource", ResolveAcquisitionSource(item, ammo));
+            Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            ammoRows.Add(row);
         }
 
         var questRows = new List<RowData>(data.Tasks.Count);
@@ -364,6 +391,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
         var writePlan = new[]
         {
             new TableWrite("Items", itemRows),
+            new TableWrite("Ammo", ammoRows),
             new TableWrite("Quests", questRows),
             new TableWrite("QuestRequirements", questRequirementRows),
             new TableWrite("QuestObjectives", questObjectiveRows),
@@ -387,7 +415,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 "QuestRequiredItems", "QuestObjectives", "QuestRequirements",
                 "HideoutItemRequirements", "HideoutStationRequirements",
                 "HideoutTraderRequirements", "HideoutSkillRequirements", "HideoutLevels",
-                "Quests", "HideoutStations", "Items"
+                "Ammo", "Quests", "HideoutStations", "Items"
             };
 
             foreach (var table in deleteOrder)
@@ -426,6 +454,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
         return new DatabaseCounts(
             itemRows.Count,
+            ammoRows.Count,
             questRows.Count,
             questRequirementRows.Count,
             questObjectiveRows.Count,
@@ -437,4 +466,61 @@ internal sealed partial class TarkovDataDatabaseBuilder
             hideoutTraderRequirementRows.Count,
             hideoutSkillRequirementRows.Count);
     }
+    private static async Task EnsureAmmoTableAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await ExecuteNonQueryAsync(connection, """
+            CREATE TABLE IF NOT EXISTS Ammo (
+                ItemId TEXT PRIMARY KEY,
+                Caliber TEXT NOT NULL,
+                ProjectileCount INTEGER NOT NULL DEFAULT 1,
+                Damage INTEGER NOT NULL DEFAULT 0,
+                ArmorDamage INTEGER NOT NULL DEFAULT 0,
+                FragmentationChance REAL NOT NULL DEFAULT 0,
+                PenetrationPower INTEGER NOT NULL DEFAULT 0,
+                AccuracyModifier REAL NOT NULL DEFAULT 0,
+                RecoilModifier REAL NOT NULL DEFAULT 0,
+                LightBleedModifier REAL NOT NULL DEFAULT 0,
+                HeavyBleedModifier REAL NOT NULL DEFAULT 0,
+                InitialSpeed REAL NOT NULL DEFAULT 0,
+                AcquisitionSource TEXT,
+                UpdatedAt TEXT
+            );
+            CREATE INDEX IF NOT EXISTS IX_Ammo_Caliber ON Ammo(Caliber);
+            """, cancellationToken);
+    }
+
+    private static string ResolveAcquisitionSource(ApiItem item, ApiAmmoProperties ammo)
+    {
+        var sources = new List<string>();
+        if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))
+        {
+            sources.AddRange(ammo.AcquisitionSource
+                .Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(value => !string.Equals(value, "raid/other", StringComparison.OrdinalIgnoreCase) &&
+                                !string.Equals(value, "레이드 획득/기타", StringComparison.OrdinalIgnoreCase)));
+        }
+        var vendor = item.BuyFor.Select(value => value.Vendor?.Name).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (!string.IsNullOrWhiteSpace(vendor))
+            sources.Add($"{vendor} purchase");
+        else if (item.BuyFor.Count > 0)
+            sources.Add("trader purchase");
+
+        var barterTrader = item.BartersFor.Select(value => value.Trader?.Name).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (!string.IsNullOrWhiteSpace(barterTrader))
+            sources.Add($"{barterTrader} barter");
+        else if (item.BartersFor.Count > 0)
+            sources.Add("trader barter");
+
+        var craftStation = item.CraftsFor.Select(value => value.Station?.Name).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (!string.IsNullOrWhiteSpace(craftStation))
+            sources.Add($"{craftStation} craft");
+        else if (item.CraftsFor.Count > 0)
+            sources.Add("hideout craft");
+
+        if (item.ReceivedFromTasks.Count > 0)
+            sources.Add("task reward");
+
+        return sources.Count == 0 ? "raid/other" : string.Join(" · ", sources.Distinct());
+    }
+
 }
