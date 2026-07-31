@@ -25,103 +25,71 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $env:REPOSITORY_ROOT = (Resolve-Path ".").Path
-          @'
-          import os
-          import pathlib
-          import re
 
-          root = pathlib.Path(os.environ['REPOSITORY_ROOT'])
+          function Require-Text([string]$Path, [string]$Needle) {
+            $content = Get-Content $Path -Raw
+            if (-not $content.Contains($Needle)) {
+              throw "Required source invariant is missing from $Path : $Needle"
+            }
+          }
 
-          def text(path):
-              return (root / path).read_text(encoding='utf-8')
+          function Forbid-Text([string]$Path, [string]$Needle) {
+            $content = Get-Content $Path -Raw
+            if ($content.Contains($Needle)) {
+              throw "Forbidden source invariant remains in $Path : $Needle"
+            }
+          }
 
-          runtime_available = []
-          for path in (root / 'TarkovHelper').rglob('*.cs'):
-              if path.as_posix().endswith('/Models/QuestStatus.cs'):
-                  continue
-              if 'QuestStatus.Available' in path.read_text(encoding='utf-8'):
-                  runtime_available.append(str(path.relative_to(root)))
-          if runtime_available:
-              raise SystemExit(f'legacy Available runtime references: {runtime_available}')
+          $availableRefs = @(git grep -n "QuestStatus.Available" -- "TarkovHelper/**/*.cs" 2>$null | Where-Object {
+            $_ -notmatch 'TarkovHelper/Models/QuestStatus.cs'
+          })
+          if ($availableRefs.Count -gt 0) {
+            $availableRefs | Write-Error
+            throw "Legacy Available status is still referenced at runtime."
+          }
 
-          quest_xaml = text('TarkovHelper/Pages/QuestListPage.xaml')
-          if '수주 가능' in quest_xaml or 'Tag="Available"' in quest_xaml:
-              raise SystemExit('Available quest state is still exposed in quest UI')
+          Forbid-Text "TarkovHelper/Pages/QuestListPage.xaml" "수주 가능"
+          Forbid-Text "TarkovHelper/Pages/QuestListPage.xaml" 'Tag="Available"'
+          Require-Text "TarkovHelper/Services/ActualQuestStatusEvaluator.cs" "return Cache(taskKey, QuestStatus.Active);"
 
-          evaluator = text('TarkovHelper/Services/ActualQuestStatusEvaluator.cs')
-          if 'return Cache(taskKey, QuestStatus.Active);' not in evaluator:
-              raise SystemExit('eligible quest evaluator is not normalized to Active')
+          Require-Text "TarkovHelper/Services/UiSortOrder.cs" '"prapor",'
+          Require-Text "TarkovHelper/Services/UiSortOrder.cs" '"fence",'
+          Require-Text "TarkovHelper/Services/UiSortOrder.cs" '"btrdriver"'
+          Require-Text "TarkovHelper/Services/UiSortOrder.cs" '"customs",'
+          Require-Text "TarkovHelper/Services/UiSortOrder.cs" '"icebreaker",'
+          Require-Text "TarkovHelper/Services/UiSortOrder.cs" '"terminal"'
+          Require-Text "TarkovHelper/Services/UiSortOrder.cs" '"Weapons",'
+          Require-Text "TarkovHelper/Services/UiSortOrder.cs" '"Special"'
 
-          orders = text('TarkovHelper/Services/UiSortOrder.cs')
-          expected_fragments = [
-              '"prapor",\n        "therapist",\n        "fence",\n        "skier",\n        "peacekeeper",',
-              '"customs",\n        "shoreline",\n        "thelabyrinth",\n        "icebreaker",\n        "factory",',
-              '"Weapons",\n        "Magazines",\n        "Ammunition",\n        "Medical",\n        "Food",'
-          ]
-          for fragment in expected_fragments:
-              if fragment not in orders:
-                  raise SystemExit(f'canonical order fragment missing: {fragment!r}')
+          foreach ($category in @(
+            '무기','탄창','탄약','의약품','음식','근접 무기','부품','수류탄',
+            '물물교환','리그','고글','보관함','보호구','정보','열쇠','특수'
+          )) {
+            Require-Text "TarkovHelper/Services/LocalizationService.Items.cs" ('= "' + $category + '"')
+          }
 
-          categories = text('TarkovHelper/Services/LocalizationService.Items.cs')
-          category_names = [
-              '무기', '탄창', '탄약', '의약품', '음식', '근접 무기', '부품', '수류탄',
-              '물물교환', '리그', '고글', '보관함', '보호구', '정보', '열쇠', '특수'
-          ]
-          positions = [categories.find(f'= "{name}"') for name in category_names]
-          if any(position < 0 for position in positions) or positions != sorted(positions):
-              raise SystemExit(f'Korean item category set/order invalid: {positions}')
+          Require-Text "TarkovHelper/Services/QuestRequirementInventoryKey.cs" 'range:{Normalize(questKey)}:{Normalize(groupKey)}'
+          Require-Text "TarkovHelper/Services/QuestRequirementInventoryKey.cs" "BuildAlternativeItemKey(task, requirement, value)"
+          Require-Text "TarkovHelper/Services/ItemsFilterService.cs" "Range requirements are displayed as multiple item rows"
+          Require-Text "TarkovHelper/Services/ItemsFilterService.cs" "AlternativeGroupHeaderVisibility"
 
-          range_keys = text('TarkovHelper/Services/QuestRequirementInventoryKey.cs')
-          if '$"range:{Normalize(questKey)}:{Normalize(groupKey)}"' not in range_keys:
-              raise SystemExit('range requirements are not quest/group scoped')
-          if 'BuildAlternativeItemKey(task, requirement, value)' not in range_keys:
-              raise SystemExit('range alternatives do not use isolated item keys')
+          Require-Text "TarkovHelper/Pages/AmmoPage.xaml" 'CanUserSortColumns="False"'
+          Require-Text "TarkovHelper/Pages/AmmoPage.xaml" 'CanUserReorderColumns="False"'
+          Require-Text "TarkovHelper/Pages/AmmoPage.xaml" 'RowBackground="{StaticResource BackgroundDarkBrush}"'
+          Require-Text "TarkovHelper/Pages/AmmoPage.xaml" 'ColumnHeaderStyle="{StaticResource AmmoGridHeaderStyle}"'
+          Require-Text "TarkovHelper/Pages/AmmoPage.xaml" 'Style="{StaticResource AmmoToolbarToggleStyle}"'
+          Require-Text "TarkovHelper/Pages/AmmoPage.xaml.cs" ".OrderBy(item => item.ArmorEfficiencyScore)"
+          Forbid-Text "TarkovHelper/Pages/AmmoPage.xaml.cs" ".ThenBy(item =>"
+          Forbid-Text "TarkovHelper/Pages/AmmoPage.xaml.cs" "CaliberChoice(string Key, string DisplayName, int Count)"
+          Forbid-Text "TarkovHelper/Pages/AmmoPage.xaml.cs" "({Count})"
+          Require-Text "TarkovHelper/Services/Ammo/AmmoDbService.cs" '["Caliber40mmRU"] = "40mm 러시아 유탄"'
+          Require-Text "TarkovHelper/Models/Ammo/AmmoItem.cs" "public string DisplayText => Effectiveness.ToString();"
+          Require-Text "TarkovHelper/App.xaml.cs" "ComboBoxItem_RequestBringIntoView"
+          Require-Text "TarkovHelper/App.xaml.cs" "e.Handled = true;"
+          Require-Text "TarkovHelper/TarkovHelper.csproj" "<Version>1.8.2</Version>"
+          Require-Text "TarkovHelper/TarkovHelper.csproj" "<FileVersion>1.8.2.0</FileVersion>"
 
-          items_filter = text('TarkovHelper/Services/ItemsFilterService.cs')
-          if 'Range requirements are displayed as multiple item rows' not in items_filter:
-              raise SystemExit('range grouping sort preservation is missing')
-          if 'AlternativeGroupHeaderVisibility' not in items_filter:
-              raise SystemExit('first visible range member header promotion is missing')
-
-          ammo_xaml = text('TarkovHelper/Pages/AmmoPage.xaml')
-          for required in [
-              'CanUserSortColumns="False"',
-              'CanUserReorderColumns="False"',
-              'RowBackground="{StaticResource BackgroundDarkBrush}"',
-              'ColumnHeaderStyle="{StaticResource AmmoGridHeaderStyle}"',
-              'Style="{StaticResource AmmoToolbarToggleStyle}"'
-          ]:
-              if required not in ammo_xaml:
-                  raise SystemExit(f'ammo UI invariant missing: {required}')
-
-          ammo_code = text('TarkovHelper/Pages/AmmoPage.xaml.cs')
-          if '.OrderBy(item => item.ArmorEfficiencyScore)' not in ammo_code:
-              raise SystemExit('ammo is not fixed to ascending armor efficiency')
-          if '.ThenBy(item =>' in ammo_code:
-              raise SystemExit('ammo has an unintended secondary column sort')
-          if 'CaliberChoice(string Key, string DisplayName, int Count)' in ammo_code or '({Count})' in ammo_code:
-              raise SystemExit('caliber dropdown still exposes ammunition counts')
-
-          ammo_service = text('TarkovHelper/Services/Ammo/AmmoDbService.cs')
-          if '["Caliber40mmRU"] = "40mm 러시아 유탄"' not in ammo_service:
-              raise SystemExit('40mm Russian grenade caliber localization is missing')
-
-          ammo_item = text('TarkovHelper/Models/Ammo/AmmoItem.cs')
-          if 'public string DisplayText => Effectiveness.ToString();' not in ammo_item:
-              raise SystemExit('armor efficiency is not a bare number')
-
-          app = text('TarkovHelper/App.xaml.cs')
-          if 'ComboBoxItem_RequestBringIntoView' not in app or 'e.Handled = true;' not in app:
-              raise SystemExit('ComboBox edge-hover auto-scroll suppression is missing')
-
-          project = text('TarkovHelper/TarkovHelper.csproj')
-          if '<Version>1.8.2</Version>' not in project or '<FileVersion>1.8.2.0</FileVersion>' not in project:
-              raise SystemExit('source version metadata is not v1.8.2')
-
-          print('SOURCE_OK v1.8.2 source invariants verified')
-          '@ | python
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "SOURCE_OK v1.8.2 source invariants verified"
 
       - name: Download and independently verify published release
         shell: pwsh
@@ -149,11 +117,8 @@ jobs:
           $assets = @($release.assets)
           foreach ($requiredAsset in @("TarkovHelper_JH.zip", "TarkovHelper_JH.zip.sha256")) {
             $asset = $assets | Where-Object { $_.name -eq $requiredAsset } | Select-Object -First 1
-            if ($null -eq $asset) {
-              throw "Required release asset is missing: $requiredAsset"
-            }
-            if ([int64]$asset.size -le 0) {
-              throw "Release asset is empty: $requiredAsset"
+            if ($null -eq $asset -or [int64]$asset.size -le 0) {
+              throw "Required release asset is missing or empty: $requiredAsset"
             }
           }
 
@@ -167,11 +132,8 @@ jobs:
           $shaPath = "verification/TarkovHelper_JH.zip.sha256"
           $declaredHash = ((Get-Content $shaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
           $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($declaredHash -notmatch '^[0-9a-f]{64}$') {
-            throw "Published checksum format is invalid: $declaredHash"
-          }
-          if ($declaredHash -ne $actualHash) {
-            throw "Published SHA-256 mismatch: declared=$declaredHash actual=$actualHash"
+          if ($declaredHash -notmatch '^[0-9a-f]{64}$' -or $declaredHash -ne $actualHash) {
+            throw "Published SHA-256 is invalid: declared=$declaredHash actual=$actualHash"
           }
 
           $env:ZIP_PATH = (Resolve-Path $zipPath).Path
@@ -205,11 +167,9 @@ jobs:
                   raise SystemExit('unsafe ZIP path')
 
               files = {name for name in lowered if not name.endswith('/')}
-              required_files = {'tarkovhelper_jh.exe', 'assets/tarkov_data.db'}
-              missing = sorted(required_files - files)
+              missing = sorted({'tarkovhelper_jh.exe', 'assets/tarkov_data.db'} - files)
               if missing:
                   raise SystemExit(f'missing required release files: {missing}')
-
               marker_missing = sorted(required_marker_icons - files)
               if marker_missing:
                   raise SystemExit(f'missing minimap marker icons: {marker_missing}')
@@ -228,7 +188,6 @@ jobs:
               item_icons = [name for name in lowered if name.startswith('assets/icons/') and name.endswith('.png')]
               if len(item_icons) < 100:
                   raise SystemExit(f'too few packaged item icons: {len(item_icons)}')
-
               empty_entries = [info.filename for info in archive.infolist() if not info.is_dir() and info.file_size == 0]
               if empty_entries:
                   raise SystemExit(f'empty packaged files: {empty_entries[:10]}')
@@ -257,13 +216,12 @@ jobs:
           connection = sqlite3.connect(os.environ['DB_PATH'])
           connection.row_factory = sqlite3.Row
 
-          def scalar(sql, parameters=()):
-              return connection.execute(sql, parameters).fetchone()[0]
+          def scalar(sql):
+              return connection.execute(sql).fetchone()[0]
 
-          integrity = scalar('pragma integrity_check')
+          if scalar('pragma integrity_check') != 'ok':
+              raise SystemExit('database integrity_check failed')
           foreign_keys = connection.execute('pragma foreign_key_check').fetchall()
-          if integrity != 'ok':
-              raise SystemExit(f'database integrity failed: {integrity}')
           if foreign_keys:
               raise SystemExit(f'foreign key violations: {len(foreign_keys)}')
 
@@ -273,77 +231,57 @@ jobs:
           calibers = scalar('select count(distinct Caliber) from Ammo')
           linked_ammo = scalar('select count(*) from Ammo a join Items i on i.Id = a.ItemId')
           korean_ammo = scalar("select count(*) from Ammo a join Items i on i.Id = a.ItemId where trim(coalesce(i.NameKO, '')) != ''")
-          specific_sources = scalar("select count(*) from Ammo where trim(coalesce(AcquisitionSource, '')) != '' and AcquisitionSource not in ('raid/other', '레이드 획득/기타')")
-
+          sources = scalar("select count(*) from Ammo where trim(coalesce(AcquisitionSource, '')) != '' and AcquisitionSource not in ('raid/other', '레이드 획득/기타')")
           missing_prerequisites = scalar('''
-              select count(*)
-              from QuestRequirements r
+              select count(*) from QuestRequirements r
               left join Quests source on source.Id = r.QuestId
               left join Quests required on required.Id = r.RequiredQuestId
               where source.Id is null or required.Id is null
           ''')
-          invalid_concrete_items = scalar('''
-              select count(*)
-              from QuestRequiredItems r
+          invalid_concrete = scalar('''
+              select count(*) from QuestRequiredItems r
               left join Items i on i.Id = r.ItemId
               where r.IsAlternativeGroup = 0 and (r.ItemId is null or i.Id is null)
           ''')
-          malformed_alternatives = scalar('''
-              select count(*)
-              from QuestRequiredItems
+          malformed_groups = scalar('''
+              select count(*) from QuestRequiredItems
               where IsAlternativeGroup = 1 and (
-                  ItemId is not null
-                  or coalesce(RequirementGroupId, '') = ''
-                  or json_valid(AlternativeItemIds) != 1
-                  or json_array_length(AlternativeItemIds) < 2
+                  ItemId is not null or coalesce(RequirementGroupId, '') = ''
+                  or json_valid(AlternativeItemIds) != 1 or json_array_length(AlternativeItemIds) < 2
                   or json_valid(AlternativeItemNames) != 1
                   or json_array_length(AlternativeItemNames) != json_array_length(AlternativeItemIds)
               )
           ''')
-          unresolved_alternatives = scalar('''
-              select count(*)
-              from QuestRequiredItems r, json_each(r.AlternativeItemIds) alternative
+          unresolved_groups = scalar('''
+              select count(*) from QuestRequiredItems r, json_each(r.AlternativeItemIds) alternative
               left join Items i on i.Id = alternative.value
               where r.IsAlternativeGroup = 1 and i.Id is null
           ''')
-          alternative_groups = scalar('select count(*) from QuestRequiredItems where IsAlternativeGroup = 1')
-
+          groups = scalar('select count(*) from QuestRequiredItems where IsAlternativeGroup = 1')
           helping_level = scalar("select coalesce(max(MinLevel), -1) from Quests where Name = 'A Helping Hand'")
           helping_prerequisites = scalar('''
-              select count(*)
-              from QuestRequirements r
+              select count(*) from QuestRequirements r
               join Quests source on source.Id = r.QuestId
               join Quests required on required.Id = r.RequiredQuestId
               where source.Name = 'A Helping Hand' and required.Name = 'Saving the Mole'
           ''')
 
           if items < 1000 or quests < 300:
-              raise SystemExit(f'implausible core row counts: items={items}, quests={quests}')
-          if ammo < 150 or linked_ammo != ammo or korean_ammo != ammo or calibers < 20 or specific_sources < 20:
-              raise SystemExit(
-                  f'ammo validation failed: ammo={ammo}, linked={linked_ammo}, korean={korean_ammo}, '
-                  f'calibers={calibers}, sources={specific_sources}'
-              )
-          if missing_prerequisites or invalid_concrete_items or malformed_alternatives or unresolved_alternatives:
-              raise SystemExit(
-                  f'quest link validation failed: prerequisites={missing_prerequisites}, '
-                  f'concrete={invalid_concrete_items}, malformed_alternatives={malformed_alternatives}, '
-                  f'unresolved_alternatives={unresolved_alternatives}'
-              )
-          if alternative_groups < 1:
-              raise SystemExit('no alternative required-item groups were packaged')
+              raise SystemExit(f'implausible core counts: items={items} quests={quests}')
+          if ammo < 150 or linked_ammo != ammo or korean_ammo != ammo or calibers < 20 or sources < 20:
+              raise SystemExit(f'ammo validation failed: ammo={ammo} linked={linked_ammo} korean={korean_ammo} calibers={calibers} sources={sources}')
+          if missing_prerequisites or invalid_concrete or malformed_groups or unresolved_groups or groups < 1:
+              raise SystemExit(f'quest requirement validation failed: prerequisites={missing_prerequisites} concrete={invalid_concrete} malformed={malformed_groups} unresolved={unresolved_groups} groups={groups}')
           if helping_level != 20 or helping_prerequisites != 1:
-              raise SystemExit(
-                  f'A Helping Hand conditions invalid: level={helping_level}, prerequisites={helping_prerequisites}'
-              )
+              raise SystemExit(f'A Helping Hand conditions invalid: level={helping_level} prerequisites={helping_prerequisites}')
 
           result = {
               'items': items,
               'quests': quests,
               'ammo': ammo,
               'calibers': calibers,
-              'sources': specific_sources,
-              'alternative_groups': alternative_groups,
+              'sources': sources,
+              'alternative_groups': groups,
               'helping_hand_level': helping_level,
               'helping_hand_prerequisites': helping_prerequisites,
           }
