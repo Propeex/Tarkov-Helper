@@ -61,6 +61,10 @@ internal sealed partial class TarkovDataDatabaseBuilder
         var stationOldById = IndexRows(snapshots["HideoutStations"].Rows, "Id");
         var objectiveOldById = IndexRows(snapshots["QuestObjectives"].Rows, "Id");
         var requirementOld = IndexRows(snapshots["QuestRequirements"].Rows, "QuestId", "RequiredQuestId");
+        var requirementsOldByQuest = snapshots["QuestRequirements"].Rows
+            .Where(row => !string.IsNullOrWhiteSpace(ReadString(row, "QuestId")))
+            .GroupBy(row => ReadString(row, "QuestId")!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var itemRows = new List<RowData>(data.Items.Count);
         var itemIdByApiId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -136,7 +140,17 @@ internal sealed partial class TarkovDataDatabaseBuilder
             PreserveOrSet(row, "NameJA", old, null);
             Set(row, "Trader", Fallback(task.Trader?.Name, task.Trader?.NormalizedName, "Unknown"));
             Set(row, "Location", task.Map?.NormalizedName ?? "any");
-            Set(row, "MinLevel", task.MinPlayerLevel);
+
+            var minPlayerLevel = task.MinPlayerLevel;
+            if (minPlayerLevel.GetValueOrDefault() <= 0 &&
+                TryGetValue(old, "MinLevel", out var oldMinLevelValue) &&
+                oldMinLevelValue is not null &&
+                oldMinLevelValue is not DBNull &&
+                Convert.ToInt32(oldMinLevelValue, CultureInfo.InvariantCulture) > 0)
+            {
+                minPlayerLevel = Convert.ToInt32(oldMinLevelValue, CultureInfo.InvariantCulture);
+            }
+            Set(row, "MinLevel", minPlayerLevel);
             Set(row, "KappaRequired", task.KappaRequired ? 1 : 0);
             Set(row, "Faction", task.FactionName);
             Set(row, "NormalizedName", Fallback(task.NormalizedName, Normalize(task.Name), task.Id));
@@ -146,6 +160,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
             questRows.Add(row);
         }
 
+        var validQuestIds = questIdByApiId.Values.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var questRequirementRows = new List<RowData>();
         var questObjectiveRows = new List<RowData>();
         var questRequiredItemRows = new List<RowData>();
@@ -156,24 +171,39 @@ internal sealed partial class TarkovDataDatabaseBuilder
             if (!questIdByApiId.TryGetValue(task.Id, out var questId))
                 continue;
 
-            for (var index = 0; index < task.TaskRequirements.Count; index++)
+            if (task.TaskRequirements.Count > 0)
             {
-                var requirement = task.TaskRequirements[index];
-                if (requirement.Task?.Id is not { Length: > 0 } apiRequiredId ||
-                    !questIdByApiId.TryGetValue(apiRequiredId, out var requiredQuestId))
-                    continue;
+                for (var index = 0; index < task.TaskRequirements.Count; index++)
+                {
+                    var requirement = task.TaskRequirements[index];
+                    if (requirement.Task?.Id is not { Length: > 0 } apiRequiredId ||
+                        !questIdByApiId.TryGetValue(apiRequiredId, out var requiredQuestId))
+                        continue;
 
-                var oldKey = BuildCompositeKey(questId, requiredQuestId);
-                var old = requirementOld.GetValueOrDefault(oldKey);
-                var row = CloneRow(old);
-                Set(row, "QuestId", questId);
-                Set(row, "RequiredQuestId", requiredQuestId);
-                Set(row, "RequirementType", requirement.Status.FirstOrDefault() ?? "complete");
-                if (!HasValue(row, "GroupId"))
-                    Set(row, "GroupId", 0);
-                Set(row, "SortOrder", index);
-                Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-                questRequirementRows.Add(row);
+                    var oldKey = BuildCompositeKey(questId, requiredQuestId);
+                    var old = requirementOld.GetValueOrDefault(oldKey);
+                    var row = CloneRow(old);
+                    Set(row, "QuestId", questId);
+                    Set(row, "RequiredQuestId", requiredQuestId);
+                    Set(row, "RequirementType", requirement.Status.FirstOrDefault() ?? "complete");
+                    if (!HasValue(row, "GroupId"))
+                        Set(row, "GroupId", 0);
+                    Set(row, "SortOrder", index);
+                    Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                    questRequirementRows.Add(row);
+                }
+            }
+            else if (requirementsOldByQuest.TryGetValue(questId, out var oldRequirements))
+            {
+                foreach (var oldRequirement in oldRequirements)
+                {
+                    var requiredQuestId = ReadString(oldRequirement, "RequiredQuestId");
+                    if (string.IsNullOrWhiteSpace(requiredQuestId) ||
+                        !validQuestIds.Contains(requiredQuestId))
+                        continue;
+
+                    questRequirementRows.Add(CloneRow(oldRequirement));
+                }
             }
 
             var koreanObjectives = localized.Korean?.Objectives
