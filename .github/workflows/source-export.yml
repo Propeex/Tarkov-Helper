@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/scanner-minimal-ui-data-1.7.1
+  pull_request:
   workflow_dispatch:
 
 jobs:
