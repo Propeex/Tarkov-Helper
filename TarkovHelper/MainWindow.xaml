@@ -177,10 +177,19 @@
                             <RadioButton x:Name="TabItems" Content="아이템"
                                          Style="{StaticResource TabButtonStyle}"
                                          Checked="Tab_Checked"/>
-                            <RadioButton x:Name="TabCollector" Content="수집가 - 카파"
+                            <RadioButton x:Name="TabAmmo" Content="총알"
+                                         Style="{StaticResource TabButtonStyle}"
+                                         Checked="ScannerNavigation_TabChecked"/>
+                            <RadioButton x:Name="TabMap" Content="지도"
                                          Style="{StaticResource TabButtonStyle}"
                                          Checked="Tab_Checked"/>
-                            <RadioButton x:Name="TabMap" Content="지도"
+                            <RadioButton x:Name="TabScanner" Content="스캐너"
+                                         Style="{StaticResource TabButtonStyle}"
+                                         Checked="ScannerNavigation_TabChecked"/>
+                            <!-- 기존 수집가 화면은 호환성을 위해 코드에만 남기고 내비게이션에서는 제거합니다. -->
+                            <RadioButton x:Name="TabCollector" Content="수집가 - 카파"
+                                         Visibility="Collapsed"
+                                         IsEnabled="False"
                                          Style="{StaticResource TabButtonStyle}"
                                          Checked="Tab_Checked"/>
                         </StackPanel>

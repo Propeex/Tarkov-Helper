@@ -1,0 +1,113 @@
+<UserControl x:Class="TarkovHelper.Pages.Scanner.ScannerPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Loaded="ScannerPage_Loaded"
+             Unloaded="ScannerPage_Unloaded">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="28">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Margin="0,0,0,20">
+                <TextBlock Text="스캐너"
+                           FontSize="{DynamicResource FontSizeHeader}"
+                           FontWeight="Bold"/>
+                <TextBlock Margin="0,8,0,0"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Text="타르코프 아이템 상세 화면의 이름을 한국어로 인식합니다. 인식 결과는 미니멀 UI에 공식 한국어 아이템명만 표시됩니다."/>
+            </StackPanel>
+
+            <Border Grid.Row="1"
+                    Background="{StaticResource BackgroundMediumBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="20"
+                    Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="이름 스캔 설정"
+                               FontSize="{DynamicResource FontSizeLarge}"
+                               FontWeight="Bold"
+                               Margin="0,0,0,16"/>
+
+                    <CheckBox x:Name="ChkScannerEnabled"
+                              Content="한국어 이름 스캔 사용"
+                              Checked="ChkScannerEnabled_Changed"
+                              Unchecked="ChkScannerEnabled_Changed"
+                              Margin="0,0,0,12"/>
+
+                    <Grid Margin="0,4,0,18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="스캔 방식" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="아이템 이름 스캔" Margin="0,4"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="입력" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="왼쪽 클릭 해제 시 자동 스캔" Margin="0,4"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="언어" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="한국어 고정" Margin="0,4"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="표시 내용" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4"/>
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="공식 한국어 아이템명" Margin="0,4"/>
+                    </Grid>
+
+                    <TextBlock Text="미니멀 UI 투명도" FontWeight="SemiBold"/>
+                    <Grid Margin="0,8,0,18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="60"/>
+                        </Grid.ColumnDefinitions>
+                        <Slider x:Name="SliderMinimalOpacity"
+                                Grid.Column="0"
+                                Minimum="35"
+                                Maximum="100"
+                                TickFrequency="5"
+                                IsSnapToTickEnabled="True"
+                                ValueChanged="SliderMinimalOpacity_ValueChanged"/>
+                        <TextBlock x:Name="TxtMinimalOpacity"
+                                   Grid.Column="1"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   Text="90%"/>
+                    </Grid>
+
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="미니멀 UI로 전환"
+                                Click="BtnEnterMinimal_Click"
+                                Margin="0,0,10,0"
+                                Padding="16,9"/>
+                        <Button Content="미니멀 UI 위치 초기화"
+                                Click="BtnResetMinimalPosition_Click"
+                                Padding="16,9"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2"
+                    Background="{StaticResource BackgroundLightBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="14">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse x:Name="StatusIndicator" Width="10" Height="10" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtScannerStatus"
+                               Text="스캐너 상태 확인 중..."
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</UserControl>
