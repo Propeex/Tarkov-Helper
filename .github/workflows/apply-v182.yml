@@ -19,6 +19,20 @@ jobs:
       - name: Apply quest, item, ammo, and dropdown changes
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/v182/phase1.py')
+          source = path.read_text(encoding='utf-8')
+          old = '''    "                            Content=\\"{Binding ActionButtonText}\\" Padding=\\"8,4\\"",
+    "                            Content=\\"완료\\" Padding=\\"8,4\\"",'''
+          new = '''    "                    <Button Grid.Column=\\"4\\" Content=\\"{Binding ActionButtonText}\\" Padding=\\"8,4\\"",
+    "                    <Button Grid.Column=\\"4\\" Content=\\"완료\\" Padding=\\"8,4\\"",'''
+          if source.count(old) != 1:
+              raise SystemExit(f'phase1 matcher patch failed: {source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
           python .github/v182/phase1.py
           python .github/v182/phase2.py
           python - <<'PY'
