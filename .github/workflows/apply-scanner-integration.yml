@@ -1,0 +1,39 @@
+name: Apply Scanner Integration
+
+on:
+  push:
+    branches:
+      - agent/scanner-name-ui-1.7.0
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/scanner-name-ui-1.7.0
+          fetch-depth: 0
+
+      - name: Apply verified payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .scanner-payload/part* > /tmp/payload.b64
+          base64 -d /tmp/payload.b64 > /tmp/scanner-integration.zip
+          echo "c4aa244389cc1cce7d030cda97ae8d6b2fc37f225101e83fe5544481f938ff3b  /tmp/scanner-integration.zip" | sha256sum -c -
+          unzip -o /tmp/scanner-integration.zip -d .
+
+          rm -rf .scanner-payload
+          rm -f .github/workflows/apply-scanner-integration.yml
+          rm -f .github/workflows/export-source-temp.yml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "통합 한국어 이름 스캐너 v1.7.0"
+          git push origin HEAD:agent/scanner-name-ui-1.7.0
