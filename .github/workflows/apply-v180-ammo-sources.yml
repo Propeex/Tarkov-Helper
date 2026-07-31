@@ -26,57 +26,38 @@ jobs:
 
           json_api = Path('TarkovHelper/Services/TarkovDataDatabaseBuilder.JsonApi.cs')
           text = json_api.read_text(encoding='utf-8')
-          old = '''        var hideoutDocuments = await FetchLocalizedJsonAsync(
-              "regular/hideout",
-              "은신처",
-              54,
-              65,
-              cancellationToken);
-          var hideoutEn = ParseHideout(hideoutDocuments.English, itemLookupEn, tradersEn);
-          var hideoutKo = ParseHideout(hideoutDocuments.Korean, itemLookupKo, tradersKo);
-          '''
-          new = '''        var hideoutDocuments = await FetchLocalizedJsonAsync(
-              "regular/hideout",
-              "은신처",
-              54,
-              65,
-              cancellationToken);
-          var hideoutStationsEn = ParseNamedLookup(hideoutDocuments.English);
-          EnrichAmmoSourcesFromStaticTaskRewards(
-              itemsEn,
-              taskDocuments.English,
-              tradersEn,
-              hideoutStationsEn);
-
-          var hideoutEn = ParseHideout(hideoutDocuments.English, itemLookupEn, tradersEn);
-          var hideoutKo = ParseHideout(hideoutDocuments.Korean, itemLookupKo, tradersKo);
-          '''
+          call_anchor = '        var hideoutEn = ParseHideout(hideoutDocuments.English, itemLookupEn, tradersEn);'
+          call_block = (
+              '        var hideoutStationsEn = ParseNamedLookup(hideoutDocuments.English);\n'
+              '        EnrichAmmoSourcesFromStaticTaskRewards(\n'
+              '            itemsEn,\n'
+              '            taskDocuments.English,\n'
+              '            tradersEn,\n'
+              '            hideoutStationsEn);\n\n'
+          )
           if 'EnrichAmmoSourcesFromStaticTaskRewards(' not in text:
-              if old not in text:
+              if call_anchor not in text:
                   raise SystemExit('JsonApi anchor not found')
-              text = text.replace(old, new, 1)
+              text = text.replace(call_anchor, call_block + call_anchor, 1)
               json_api.write_text(text, encoding='utf-8')
 
           writer = Path('TarkovHelper/Services/TarkovDataDatabaseBuilder.Writer.cs')
           text = writer.read_text(encoding='utf-8')
-          old = '''    private static string ResolveAcquisitionSource(ApiItem item, ApiAmmoProperties ammo)
-          {
-              if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))
-                  return ammo.AcquisitionSource;
-
-              var sources = new List<string>();
-          '''
-          new = '''    private static string ResolveAcquisitionSource(ApiItem item, ApiAmmoProperties ammo)
-          {
-              var sources = new List<string>();
-              if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))
-              {
-                  sources.AddRange(ammo.AcquisitionSource
-                      .Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                      .Where(value => !string.Equals(value, "raid/other", StringComparison.OrdinalIgnoreCase) &&
-                                      !string.Equals(value, "레이드 획득/기타", StringComparison.OrdinalIgnoreCase)));
-              }
-          '''
+          old = (
+              '        if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))\n'
+              '            return ammo.AcquisitionSource;\n\n'
+              '        var sources = new List<string>();'
+          )
+          new = (
+              '        var sources = new List<string>();\n'
+              '        if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))\n'
+              '        {\n'
+              '            sources.AddRange(ammo.AcquisitionSource\n'
+              "                .Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)\n"
+              '                .Where(value => !string.Equals(value, "raid/other", StringComparison.OrdinalIgnoreCase) &&\n'
+              '                                !string.Equals(value, "레이드 획득/기타", StringComparison.OrdinalIgnoreCase)));\n'
+              '        }'
+          )
           if old in text:
               text = text.replace(old, new, 1)
               writer.write_text(text, encoding='utf-8')
