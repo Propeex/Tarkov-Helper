@@ -36,8 +36,8 @@ namespace TarkovHelper.Models
         Unavailable,
 
         /// <summary>
-        /// Legacy persisted value from v1.8.1. Runtime status evaluation normalizes
-        /// this value to Active and the UI never exposes it.
+        /// QuestStatus.Available is a legacy persisted value from v1.8.1. Runtime
+        /// status evaluation normalizes this value to Active and the UI never exposes it.
         /// </summary>
         [Obsolete("Available is a legacy persisted value; eligible quests are Active.")]
         Available
