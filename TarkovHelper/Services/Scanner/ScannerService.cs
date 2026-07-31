@@ -505,15 +505,6 @@ public sealed class ScannerService : IDisposable
         _settings.SetValue(TopSettingKey, top.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
-    public void ResetMinimalPosition()
-    {
-        _settings.SetValue(LeftSettingKey, string.Empty);
-        _settings.SetValue(TopSettingKey, string.Empty);
-        if (_minimalWindow != null)
-            PositionMinimalWindow(_minimalWindow);
-        SetStatus("미니멀 UI 위치를 초기화했습니다.");
-    }
-
     private static bool IsVisibleOnAnyScreen(double left, double top)
     {
         var point = new DrawingPoint((int)left, (int)top);

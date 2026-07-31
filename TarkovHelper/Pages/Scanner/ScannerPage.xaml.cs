@@ -25,7 +25,6 @@ public partial class ScannerPage : UserControl
 
     private void ScannerPage_Unloaded(object sender, RoutedEventArgs e)
     {
-        // 미니멀 UI와 스캔 훅은 탭 수명주기와 독립적으로 유지합니다.
         Unsubscribe();
     }
 
@@ -120,8 +119,6 @@ public partial class ScannerPage : UserControl
     private void BtnMinimalToggle_Click(object sender, RoutedEventArgs e) => _scanner.ToggleMinimalWindow();
 
     private void BtnClickThroughToggle_Click(object sender, RoutedEventArgs e) => _scanner.ToggleMinimalClickThrough();
-
-    private void BtnResetMinimalPosition_Click(object sender, RoutedEventArgs e) => _scanner.ResetMinimalPosition();
 
     private void Scanner_StatusChanged(object? sender, string status) => UpdateStatus(status);
 

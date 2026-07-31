@@ -13,32 +13,20 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="0,0,0,20">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel>
-                    <TextBlock Text="스캐너"
-                               FontSize="{DynamicResource FontSizeHeader}"
-                               FontWeight="Bold"/>
-                    <TextBlock Margin="0,8,24,0"
-                               Foreground="{StaticResource TextSecondaryBrush}"
-                               TextWrapping="Wrap"
-                               Text="게임 메모리에 접근하지 않고, 아이템 상세 화면 좌측 상단의 돋보기를 클릭했을 때 화면을 캡처하여 한국어 공식 이름을 인식합니다."/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
-                    <Button x:Name="BtnMinimalToggle"
-                            Content="미니멀 UI 켜기"
-                            Click="BtnMinimalToggle_Click"
-                            Padding="16,9"
-                            Margin="0,0,10,0"/>
-                    <Button x:Name="BtnClickThroughToggle"
-                            Content="클릭 투과 끄기"
-                            Click="BtnClickThroughToggle_Click"
-                            Padding="16,9"/>
-                </StackPanel>
-            </Grid>
+            <StackPanel Grid.Row="0"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Margin="0,0,0,16">
+                <Button x:Name="BtnMinimalToggle"
+                        Content="미니멀 UI 켜기"
+                        Click="BtnMinimalToggle_Click"
+                        Padding="16,9"
+                        Margin="0,0,10,0"/>
+                <Button x:Name="BtnClickThroughToggle"
+                        Content="클릭 투과 끄기"
+                        Click="BtnClickThroughToggle_Click"
+                        Padding="16,9"/>
+            </StackPanel>
 
             <Border Grid.Row="1"
                     Background="{StaticResource BackgroundMediumBrush}"
@@ -70,7 +58,7 @@
                     </UniformGrid>
 
                     <TextBlock Text="미니멀 UI 투명도" FontWeight="SemiBold"/>
-                    <Grid Margin="0,8,0,18">
+                    <Grid Margin="0,8,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="60"/>
@@ -88,12 +76,6 @@
                                    VerticalAlignment="Center"
                                    Text="90%"/>
                     </Grid>
-
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="미니멀 UI 위치 초기화"
-                                Click="BtnResetMinimalPosition_Click"
-                                Padding="16,9"/>
-                    </StackPanel>
                 </StackPanel>
             </Border>
 
@@ -120,10 +102,11 @@
                     CornerRadius="8"
                     Padding="18">
                 <StackPanel>
-                    <TextBlock Text="사용 방법" FontWeight="Bold" Margin="0,0,0,8"/>
-                    <TextBlock Foreground="{StaticResource TextSecondaryBrush}"
-                               TextWrapping="Wrap"
-                               Text="1. 미니멀 UI를 켭니다.  2. 타르코프의 아이템 상세 화면에서 좌측 상단 돋보기를 클릭합니다.  3. 인식된 이름·가격·로컬 필요 수량이 미니멀 UI에 표시됩니다. 클릭 투과를 켜면 UI 아래의 게임을 그대로 조작할 수 있습니다."/>
+                    <TextBlock Text="사용 방법" FontWeight="Bold" Margin="0,0,0,10"/>
+                    <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,7" Text="1. 미니멀 UI를 켭니다."/>
+                    <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,7" Text="2. 타르코프의 아이템 상세 화면에서 좌측 상단 돋보기를 클릭합니다."/>
+                    <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,7" Text="3. 인식된 이름·가격·로컬 필요 수량이 미니멀 UI에 표시됩니다."/>
+                    <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Text="4. 클릭 투과를 켜면 미니멀 UI 아래의 게임을 그대로 조작할 수 있습니다."/>
                 </StackPanel>
             </Border>
         </Grid>

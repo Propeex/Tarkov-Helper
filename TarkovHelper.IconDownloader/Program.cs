@@ -49,7 +49,7 @@ internal static class IconDownloader
 
             Console.WriteLine($"데이터베이스: {databasePath}");
             Console.WriteLine($"저장 폴더: {outputPath}");
-            Console.WriteLine($"대상: {(options.DownloadAll ? "전체 아이템" : "퀘스트·은신처 필요 아이템")} {items.Count:N0}개");
+            Console.WriteLine($"대상: {(options.DownloadAll ? "전체 아이템" : "퀘스트·은신처·탄약 아이템")} {items.Count:N0}개");
             Console.WriteLine($"동시 다운로드: {options.Concurrency}개");
 
             using var cancellation = new CancellationTokenSource();
@@ -191,6 +191,11 @@ internal static class IconDownloader
                         SELECT 1
                         FROM HideoutItemRequirements h
                         WHERE h.ItemId = i.BsgId
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM Ammo a
+                        WHERE a.ItemId = i.BsgId OR a.ItemId = i.Id
                     )
                 )
               ORDER BY i.Id;

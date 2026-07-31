@@ -32,6 +32,40 @@ internal sealed partial class TarkovDataDatabaseBuilder
         public string? WikiLink { get; set; }
         public ApiNamedEntity? Category { get; set; }
         public List<ApiNamedEntity> Categories { get; set; } = [];
+        public ApiAmmoProperties? Properties { get; set; }
+        public List<ApiItemPrice> BuyFor { get; set; } = [];
+        public List<ApiSourceReference> BartersFor { get; set; } = [];
+        public List<ApiSourceReference> CraftsFor { get; set; } = [];
+        public List<ApiNamedEntity> ReceivedFromTasks { get; set; } = [];
+    }
+
+    private sealed class ApiAmmoProperties
+    {
+        public string? Caliber { get; set; }
+        public int? ProjectileCount { get; set; }
+        public int? Damage { get; set; }
+        public int? ArmorDamage { get; set; }
+        public double? FragmentationChance { get; set; }
+        public int? PenetrationPower { get; set; }
+        public double? AccuracyModifier { get; set; }
+        public double? RecoilModifier { get; set; }
+        public double? LightBleedModifier { get; set; }
+        public double? HeavyBleedModifier { get; set; }
+        public double? InitialSpeed { get; set; }
+        public string? AcquisitionSource { get; set; }
+    }
+
+    private sealed class ApiItemPrice
+    {
+        public int? PriceRUB { get; set; }
+        public ApiNamedEntity? Vendor { get; set; }
+    }
+
+    private sealed class ApiSourceReference
+    {
+        public ApiNamedEntity? Trader { get; set; }
+        public ApiNamedEntity? Station { get; set; }
+        public int? Level { get; set; }
     }
 
     private sealed class ApiTask : IApiEntity
@@ -247,6 +281,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
     private sealed record DatabaseCounts(
         int Items,
+        int Ammo,
         int Quests,
         int QuestRequirements,
         int QuestObjectives,
@@ -258,7 +293,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
         int HideoutTraderRequirements,
         int HideoutSkillRequirements)
     {
-        public int TotalRows => Items + Quests + QuestRequirements + QuestObjectives + QuestRequiredItems +
+        public int TotalRows => Items + Ammo + Quests + QuestRequirements + QuestObjectives + QuestRequiredItems +
                                 HideoutStations + HideoutLevels + HideoutItemRequirements +
                                 HideoutStationRequirements + HideoutTraderRequirements + HideoutSkillRequirements;
     }
@@ -266,6 +301,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
 internal sealed record DatabaseBuildResult(
     int ItemCount,
+    int AmmoCount,
     int QuestCount,
     int QuestRequiredItemCount,
     int HideoutStationCount,
