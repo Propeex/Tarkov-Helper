@@ -1,0 +1,91 @@
+name: Apply v1.8.0 Ammo Sources
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/ammo-scanner-ui-1.8.0' || github.ref_name == 'agent/ammo-scanner-ui-1.8.0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/ammo-scanner-ui-1.8.0
+          fetch-depth: 0
+
+      - name: Connect static acquisition sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          json_api = Path('TarkovHelper/Services/TarkovDataDatabaseBuilder.JsonApi.cs')
+          text = json_api.read_text(encoding='utf-8')
+          old = '''        var hideoutDocuments = await FetchLocalizedJsonAsync(
+              "regular/hideout",
+              "은신처",
+              54,
+              65,
+              cancellationToken);
+          var hideoutEn = ParseHideout(hideoutDocuments.English, itemLookupEn, tradersEn);
+          var hideoutKo = ParseHideout(hideoutDocuments.Korean, itemLookupKo, tradersKo);
+          '''
+          new = '''        var hideoutDocuments = await FetchLocalizedJsonAsync(
+              "regular/hideout",
+              "은신처",
+              54,
+              65,
+              cancellationToken);
+          var hideoutStationsEn = ParseNamedLookup(hideoutDocuments.English);
+          EnrichAmmoSourcesFromStaticTaskRewards(
+              itemsEn,
+              taskDocuments.English,
+              tradersEn,
+              hideoutStationsEn);
+
+          var hideoutEn = ParseHideout(hideoutDocuments.English, itemLookupEn, tradersEn);
+          var hideoutKo = ParseHideout(hideoutDocuments.Korean, itemLookupKo, tradersKo);
+          '''
+          if 'EnrichAmmoSourcesFromStaticTaskRewards(' not in text:
+              if old not in text:
+                  raise SystemExit('JsonApi anchor not found')
+              text = text.replace(old, new, 1)
+              json_api.write_text(text, encoding='utf-8')
+
+          writer = Path('TarkovHelper/Services/TarkovDataDatabaseBuilder.Writer.cs')
+          text = writer.read_text(encoding='utf-8')
+          old = '''    private static string ResolveAcquisitionSource(ApiItem item, ApiAmmoProperties ammo)
+          {
+              if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))
+                  return ammo.AcquisitionSource;
+
+              var sources = new List<string>();
+          '''
+          new = '''    private static string ResolveAcquisitionSource(ApiItem item, ApiAmmoProperties ammo)
+          {
+              var sources = new List<string>();
+              if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))
+              {
+                  sources.AddRange(ammo.AcquisitionSource
+                      .Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                      .Where(value => !string.Equals(value, "raid/other", StringComparison.OrdinalIgnoreCase) &&
+                                      !string.Equals(value, "레이드 획득/기타", StringComparison.OrdinalIgnoreCase)));
+              }
+          '''
+          if old in text:
+              text = text.replace(old, new, 1)
+              writer.write_text(text, encoding='utf-8')
+          elif 'sources.AddRange(ammo.AcquisitionSource' not in text:
+              raise SystemExit('Writer anchor not found')
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add TarkovHelper/Services/TarkovDataDatabaseBuilder.JsonApi.cs TarkovHelper/Services/TarkovDataDatabaseBuilder.Writer.cs
+          git commit -m 'Use static task data for ammo acquisition sources'
+          git push origin HEAD:agent/ammo-scanner-ui-1.8.0
