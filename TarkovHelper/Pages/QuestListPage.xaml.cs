@@ -442,7 +442,6 @@ namespace TarkovHelper.Pages
             {
                 QuestStatus.Locked => "잠김",
                 QuestStatus.Active => "진행중",
-                QuestStatus.Available => "진행중", // legacy value is normalized before display
                 QuestStatus.Done => "완료",
                 QuestStatus.Failed => "실패",
                 QuestStatus.LevelLocked => "레벨 제한",
@@ -457,7 +456,6 @@ namespace TarkovHelper.Pages
             {
                 QuestStatus.Locked => LockedBrush,
                 QuestStatus.Active => ActiveBrush,
-                QuestStatus.Available => ActiveBrush,
                 QuestStatus.Done => DoneBrush,
                 QuestStatus.Failed => FailedBrush,
                 QuestStatus.LevelLocked => LevelLockedBrush,

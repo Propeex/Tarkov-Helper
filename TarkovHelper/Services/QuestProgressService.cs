@@ -870,11 +870,8 @@ namespace TarkovHelper.Services
                 switch (status)
                 {
                     case QuestStatus.Active:
-                        if (GetStatus(task) == QuestStatus.Available)
-                        {
-                            _questProgress[taskKey] = QuestStatus.Active;
-                            changedItems.Add((taskId ?? taskKey, task.NormalizedName, QuestStatus.Active));
-                        }
+                        // Eligible quests are already Active. Imported start events
+                        // require no separate persisted acceptance state.
                         break;
 
                     case QuestStatus.Done:

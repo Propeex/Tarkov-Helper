@@ -59,7 +59,7 @@ internal static class V182RequirementSmoke
 
     private static void ValidateAmmoPresentation()
     {
-        var grenadeDisplay = AmmoDbService.GetCaliberDisplay("Caliber40mmRU");
+        var grenadeDisplay = AmmoLocalization.GetCaliberDisplay("Caliber40mmRU");
         if (!string.Equals(grenadeDisplay, "40mm 러시아 유탄", StringComparison.Ordinal))
             throw new InvalidDataException($"Caliber display regression: {grenadeDisplay}");
 
