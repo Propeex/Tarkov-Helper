@@ -19,9 +19,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 -d .github/v181-fix/preserve.patch.gz.b64 | gzip -dc > /tmp/preserve.patch
-          git apply --index --whitespace=error-all /tmp/preserve.patch
-          git rm -f .github/v181-fix/preserve.patch.gz.b64
+          git apply --index --whitespace=error-all .github/v181-fix/preserve.patch
+          git rm -f .github/v181-fix/preserve.patch .github/v181-fix/preserve.patch.gz.b64
           rmdir .github/v181-fix 2>/dev/null || true
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
