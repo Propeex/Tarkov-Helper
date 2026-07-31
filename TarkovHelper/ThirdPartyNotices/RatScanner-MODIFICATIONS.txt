@@ -1,0 +1,11 @@
+RatScanner-derived scanner notice
+================================
+
+This application includes a modified and reduced implementation derived from the
+RatScanner project. The integration keeps only Korean item-name recognition and a
+minimal floating name display. The original dashboard, item information overlay,
+icon scan, language selector, updater, and community/support links are not included.
+
+Original project: RatScanner/RatScanner
+License: Based on Elastic License 2.0 (see RatScanner-LICENSE.txt)
+Modified distribution: TarkovHelper_JH by Propeex

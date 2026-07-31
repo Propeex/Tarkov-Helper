@@ -5,20 +5,27 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <AssemblyName>TarkovHelper_JH</AssemblyName>
     <Product>타르코프헬퍼_JH</Product>
     <Title>타르코프헬퍼_JH</Title>
     <Description>Escape from Tarkov PVP 진행도·아이템·은신처 관리 도우미</Description>
     <!-- Version Info for Auto-Update -->
-    <Version>1.6.8</Version>
-    <AssemblyVersion>1.6.8.0</AssemblyVersion>
-    <FileVersion>1.6.8.0</FileVersion>
+    <Version>1.7.0</Version>
+    <AssemblyVersion>1.7.0.0</AssemblyVersion>
+    <FileVersion>1.7.0.0</FileVersion>
     <ApplicationIcon>1764579946.ico</ApplicationIcon>
     <SatelliteResourceLanguages>ko</SatelliteResourceLanguages>
     <!-- Run as Administrator -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- WinForms is referenced only for multi-monitor screen bounds in ScannerService.
+         Remove its SDK-generated global usings so existing WPF types remain unambiguous. -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
   <ItemGroup>
     <Content Include="1764579946.ico" />
   </ItemGroup>
@@ -38,6 +45,12 @@
     <Content Include="Assets\db_version.txt" ExcludeFromSingleFile="true">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="Assets\Scanner\traineddata\*.traineddata" ExcludeFromSingleFile="true">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="ThirdPartyNotices\*.txt" ExcludeFromSingleFile="true">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Resource Include="Assets\DB\Icons\*.webp" />
     <Content Include="Assets\DB\Icons\*.svg" ExcludeFromSingleFile="true">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -54,6 +67,10 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Autoupdater.NET.Official" Version="1.9.2" />
+    <PackageReference Include="RatEye" Version="4.0.1" />
+    <PackageReference Include="RatStash" Version="6.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.7" />
+    <PackageReference Include="Tesseract" Version="5.2.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
     <PackageReference Include="SharpVectors.Wpf" Version="1.8.5" />
     <PackageReference Include="Westermo.GraphX.Controls" Version="3.0.1" />
