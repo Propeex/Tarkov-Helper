@@ -1,0 +1,38 @@
+name: Apply v1.8.1 Product Changes
+
+on:
+  push:
+    branches:
+      - agent/v181-apply-staging
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v181-apply-staging
+          fetch-depth: 0
+      - name: Apply product patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/v181-apply/part* | base64 -d | gzip -dc > /tmp/product.patch
+          git apply --index --whitespace=error-all /tmp/product.patch
+          git rm -f --ignore-unmatch \
+            .github/workflows/export-v181-source.yml \
+            .github/v181/chunk00 \
+            .github/v181/chunk01 \
+            .github/v181/chunk04 \
+            .github/v181/chunk05
+          git rm -f .github/v181-apply/part* .github/workflows/apply-v181.yml
+          rmdir .github/v181-apply 2>/dev/null || true
+          rmdir .github/v181 2>/dev/null || true
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Implement v1.8.1 quest, ammo, and scanner changes"
+          git push origin HEAD:agent/v181-apply-staging
