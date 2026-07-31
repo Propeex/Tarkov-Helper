@@ -19,7 +19,7 @@ jobs:
         with:
           ref: hotfix/fir-nonfir-fulfillment
 
-      - name: Apply verified payload
+      - name: Apply verified product payload
         shell: bash
         run: |
           set -euo pipefail
@@ -30,10 +30,15 @@ jobs:
           grep -q 'ItemFulfillmentRegressionSmoke.Run();' TarkovHelper.DatabaseSmoke/Program.cs
           grep -q 'FIR requirements and total requirements must both be satisfied' TarkovHelper/Models/ItemInventory.cs
 
+          # GitHub Actions tokens cannot update workflow files. Keep all workflows
+          # unchanged here; they are maintained separately through the GitHub app.
+          git checkout HEAD -- \
+            .github/workflows/release.yml \
+            .github/workflows/refresh-release-notes.yml \
+            .github/workflows/source-export.yml
           rm -rf .hotfix
-          rm .github/workflows/source-export.yml
 
-      - name: Commit hotfix
+      - name: Commit product hotfix
         shell: bash
         run: |
           set -euo pipefail
