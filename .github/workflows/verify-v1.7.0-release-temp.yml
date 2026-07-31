@@ -1,0 +1,58 @@
+name: Verify v1.7.0 Release
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release:
+    runs-on: windows-latest
+    steps:
+      - name: Verify release metadata and assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $release = gh release view v1.7.0 --repo $env:GITHUB_REPOSITORY --json name,isDraft,isPrerelease,assets,url | ConvertFrom-Json
+          if ($release.name -ne "타르코프헬퍼_JH v1.7.0" -or $release.isDraft -or $release.isPrerelease) {
+            throw "Invalid v1.7.0 release metadata."
+          }
+
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          foreach ($required in @("TarkovHelper_JH.zip", "TarkovHelper_JH.zip.sha256")) {
+            if ($assetNames -notcontains $required) {
+              throw "Missing release asset: $required"
+            }
+          }
+
+          New-Item -ItemType Directory -Path verify -Force | Out-Null
+          gh release download v1.7.0 --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip" --dir verify
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download release ZIP." }
+          gh release download v1.7.0 --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip.sha256" --dir verify
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download release checksum." }
+
+          $declared = ((Get-Content verify/TarkovHelper_JH.zip.sha256 -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+          $actual = (Get-FileHash verify/TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declared -ne $actual) {
+            throw "Release checksum mismatch: declared=$declared actual=$actual"
+          }
+
+          Expand-Archive verify/TarkovHelper_JH.zip -DestinationPath verify/extracted -Force
+          foreach ($requiredFile in @(
+            "verify/extracted/TarkovHelper_JH.exe",
+            "verify/extracted/Assets/Scanner/traineddata/kor.traineddata",
+            "verify/extracted/ThirdPartyNotices/RatScanner-LICENSE.txt",
+            "verify/extracted/ThirdPartyNotices/RatScanner-MODIFICATIONS.txt"
+          )) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Missing packaged file: $requiredFile"
+            }
+          }
+
+          Write-Host "Release verified: $($release.url)"
+          Write-Host "SHA-256: $actual"
