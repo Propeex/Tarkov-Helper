@@ -1,0 +1,77 @@
+name: Verify v1.7.1 Release
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download and verify published release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "v1.7.1"
+          $release = gh release view $tag --repo $env:GITHUB_REPOSITORY --json name,isDraft,isPrerelease,assets,url | ConvertFrom-Json
+          if ($release.name -ne "타르코프헬퍼_JH v1.7.1" -or $release.isDraft -or $release.isPrerelease) {
+            throw "Release metadata is invalid."
+          }
+
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          foreach ($requiredAsset in @("TarkovHelper_JH.zip", "TarkovHelper_JH.zip.sha256")) {
+            if ($assetNames -notcontains $requiredAsset) {
+              throw "Missing release asset: $requiredAsset"
+            }
+          }
+
+          New-Item -ItemType Directory -Path verify -Force | Out-Null
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip" --dir verify
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip.sha256" --dir verify
+
+          $declared = ((Get-Content "verify/TarkovHelper_JH.zip.sha256" -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+          $actual = (Get-FileHash "verify/TarkovHelper_JH.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declared -ne $actual) {
+            throw "SHA-256 mismatch: declared=$declared actual=$actual"
+          }
+
+          Expand-Archive "verify/TarkovHelper_JH.zip" -DestinationPath "verify/extracted" -Force
+          foreach ($requiredFile in @(
+            "verify/extracted/TarkovHelper_JH.exe",
+            "verify/extracted/Assets/tarkov_data.db",
+            "verify/extracted/Assets/Scanner/traineddata/kor.traineddata",
+            "verify/extracted/ThirdPartyNotices/RatScanner-LICENSE.txt",
+            "verify/extracted/ThirdPartyNotices/RatScanner-MODIFICATIONS.txt"
+          )) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Missing required packaged file: $requiredFile"
+            }
+          }
+
+          $fileVersion = (Get-Item "verify/extracted/TarkovHelper_JH.exe").VersionInfo.FileVersion
+          if ($fileVersion -ne "1.7.1.0") {
+            throw "Unexpected executable version: $fileVersion"
+          }
+
+          $forbidden = Get-ChildItem "verify/extracted" -Recurse -File | Where-Object {
+            $_.Extension -eq ".pdb" -or $_.Name.ToLowerInvariant() -in @(
+              "user_data.db", "quest_progress.json", "quest_progress_v2.json",
+              "objective_progress.json", "hideout_progress.json", "item_inventory.json",
+              "settings.json", "app_settings.json"
+            )
+          }
+          if ($forbidden) {
+            throw "User data or debug files were packaged."
+          }
+
+          Write-Host "Release verified: $($release.url)"
+          Write-Host "SHA-256: $actual"
