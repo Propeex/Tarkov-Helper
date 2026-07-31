@@ -113,51 +113,89 @@ namespace TarkovHelper.Models
         /// <summary>
         /// Overall fulfillment status
         /// </summary>
-        public ItemFulfillmentStatus Status
-        {
-            get
-            {
-                if (RequiredFir > 0)
-                {
-                    // If FIR is required, check FIR quantity
-                    if (OwnedFir >= RequiredFir)
-                        return ItemFulfillmentStatus.Fulfilled;
-                    if (OwnedFir > 0 || OwnedNonFir > 0)
-                        return ItemFulfillmentStatus.PartiallyFulfilled;
-                    return ItemFulfillmentStatus.NotStarted;
-                }
-                else
-                {
-                    // Non-FIR OK, check total quantity
-                    if (OwnedTotal >= RequiredTotal)
-                        return ItemFulfillmentStatus.Fulfilled;
-                    if (OwnedTotal > 0)
-                        return ItemFulfillmentStatus.PartiallyFulfilled;
-                    return ItemFulfillmentStatus.NotStarted;
-                }
-            }
-        }
+        public ItemFulfillmentStatus Status => ItemRequirementFulfillment.GetStatus(
+            RequiredTotal,
+            RequiredFir,
+            OwnedFir,
+            OwnedNonFir);
 
         /// <summary>
         /// Progress percentage (0-100)
         /// </summary>
-        public double ProgressPercent
-        {
-            get
-            {
-                if (RequiredTotal == 0) return 100;
+        public double ProgressPercent => ItemRequirementFulfillment.GetProgressPercent(
+            RequiredTotal,
+            RequiredFir,
+            OwnedFir,
+            OwnedNonFir);
+    }
 
-                if (RequiredFir > 0)
-                {
-                    // For FIR items, calculate based on FIR quantity only
-                    return Math.Min(100, (double)OwnedFir / RequiredFir * 100);
-                }
-                else
-                {
-                    // For non-FIR, calculate based on total
-                    return Math.Min(100, (double)OwnedTotal / RequiredTotal * 100);
-                }
-            }
+    /// <summary>
+    /// Calculates mixed FIR and unrestricted item fulfillment without counting the same
+    /// FIR item twice. FIR requirements and total requirements must both be satisfied.
+    /// </summary>
+    internal static class ItemRequirementFulfillment
+    {
+        public static ItemFulfillmentStatus GetStatus(
+            int requiredTotal,
+            int requiredFir,
+            int ownedFir,
+            int ownedNonFir)
+        {
+            var values = Normalize(requiredTotal, requiredFir, ownedFir, ownedNonFir);
+            if (values.RequiredTotal == 0)
+                return ItemFulfillmentStatus.Fulfilled;
+
+            var ownedTotal = (long)values.OwnedFir + values.OwnedNonFir;
+            if (values.OwnedFir >= values.RequiredFir && ownedTotal >= values.RequiredTotal)
+                return ItemFulfillmentStatus.Fulfilled;
+
+            return ownedTotal > 0
+                ? ItemFulfillmentStatus.PartiallyFulfilled
+                : ItemFulfillmentStatus.NotStarted;
         }
+
+        public static double GetProgressPercent(
+            int requiredTotal,
+            int requiredFir,
+            int ownedFir,
+            int ownedNonFir)
+        {
+            var values = Normalize(requiredTotal, requiredFir, ownedFir, ownedNonFir);
+            if (values.RequiredTotal == 0)
+                return 100;
+
+            // FIR items first satisfy the FIR-only bucket. Only surplus FIR items may
+            // contribute to the unrestricted remainder, alongside non-FIR items.
+            var firSatisfied = Math.Min(values.OwnedFir, values.RequiredFir);
+            var unrestrictedRequired = values.RequiredTotal - values.RequiredFir;
+            var unrestrictedAvailable =
+                (long)values.OwnedNonFir + Math.Max(0, values.OwnedFir - values.RequiredFir);
+            var unrestrictedSatisfied = Math.Min((long)unrestrictedRequired, unrestrictedAvailable);
+            var satisfied = (long)firSatisfied + unrestrictedSatisfied;
+
+            return Math.Min(100, (double)satisfied / values.RequiredTotal * 100);
+        }
+
+        private static FulfillmentValues Normalize(
+            int requiredTotal,
+            int requiredFir,
+            int ownedFir,
+            int ownedNonFir)
+        {
+            var normalizedTotal = Math.Max(0, Math.Max(requiredTotal, requiredFir));
+            var normalizedFir = Math.Clamp(requiredFir, 0, normalizedTotal);
+
+            return new FulfillmentValues(
+                normalizedTotal,
+                normalizedFir,
+                Math.Max(0, ownedFir),
+                Math.Max(0, ownedNonFir));
+        }
+
+        private readonly record struct FulfillmentValues(
+            int RequiredTotal,
+            int RequiredFir,
+            int OwnedFir,
+            int OwnedNonFir);
     }
 }

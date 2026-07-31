@@ -152,12 +152,20 @@ public class IntegratedItemRequirement : INotifyPropertyChanged
     /// <summary>
     /// 진행률 (0.0 ~ 1.0)
     /// </summary>
-    public double Progress => TotalRequired > 0 ? Math.Min(1.0, (double)TotalOwned / TotalRequired) : 1.0;
+    public double Progress => ItemRequirementFulfillment.GetProgressPercent(
+        TotalRequired,
+        TotalRequiredFir,
+        OwnedFir,
+        OwnedNonFir) / 100.0;
 
     /// <summary>
     /// 충족 여부
     /// </summary>
-    public bool IsFulfilled => TotalOwned >= TotalRequired;
+    public bool IsFulfilled => ItemRequirementFulfillment.GetStatus(
+        TotalRequired,
+        TotalRequiredFir,
+        OwnedFir,
+        OwnedNonFir) == ItemFulfillmentStatus.Fulfilled;
 
     /// <summary>
     /// 퀘스트에만 필요한지 여부
