@@ -8,6 +8,8 @@ using TarkovHelper.Services.Settings;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
+ItemFulfillmentRegressionSmoke.Run();
+
 if (ProfileService.Instance.CurrentProfile != ProfileType.Pvp)
     throw new InvalidOperationException("The application profile is not locked to PVP.");
 

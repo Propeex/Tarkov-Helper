@@ -88,47 +88,17 @@ namespace TarkovHelper.Pages
         public int OwnedTotalQuantity => OwnedFirQuantity + OwnedNonFirQuantity;
 
         // Fulfillment calculation
-        public ItemFulfillmentStatus FulfillmentStatus
-        {
-            get
-            {
-                if (TotalFIRCount > 0)
-                {
-                    // FIR is required
-                    if (OwnedFirQuantity >= TotalFIRCount)
-                        return ItemFulfillmentStatus.Fulfilled;
-                    if (OwnedTotalQuantity > 0)
-                        return ItemFulfillmentStatus.PartiallyFulfilled;
-                    return ItemFulfillmentStatus.NotStarted;
-                }
-                else
-                {
-                    // Non-FIR OK
-                    if (OwnedTotalQuantity >= TotalCount)
-                        return ItemFulfillmentStatus.Fulfilled;
-                    if (OwnedTotalQuantity > 0)
-                        return ItemFulfillmentStatus.PartiallyFulfilled;
-                    return ItemFulfillmentStatus.NotStarted;
-                }
-            }
-        }
+        public ItemFulfillmentStatus FulfillmentStatus => ItemRequirementFulfillment.GetStatus(
+            TotalCount,
+            TotalFIRCount,
+            OwnedFirQuantity,
+            OwnedNonFirQuantity);
 
-        public double ProgressPercent
-        {
-            get
-            {
-                if (TotalCount == 0) return 100;
-
-                if (TotalFIRCount > 0)
-                {
-                    return Math.Min(100, (double)OwnedFirQuantity / TotalFIRCount * 100);
-                }
-                else
-                {
-                    return Math.Min(100, (double)OwnedTotalQuantity / TotalCount * 100);
-                }
-            }
-        }
+        public double ProgressPercent => ItemRequirementFulfillment.GetProgressPercent(
+            TotalCount,
+            TotalFIRCount,
+            OwnedFirQuantity,
+            OwnedNonFirQuantity);
 
         public bool IsFulfilled => FulfillmentStatus == ItemFulfillmentStatus.Fulfilled;
         public Visibility FulfilledVisibility => IsFulfilled ? Visibility.Visible : Visibility.Collapsed;
