@@ -64,7 +64,7 @@ internal static class V182RequirementSmoke
             throw new InvalidDataException($"Caliber display regression: {grenadeDisplay}");
 
         var efficiency = AmmoArmorClassResult.Create(4, 15, 0).DisplayText;
-        if (!int.TryParse(efficiency, out _) || efficiency.Contains('x', StringComparison.OrdinalIgnoreCase))
+        if (!int.TryParse(efficiency, out _) || efficiency.Contains("x", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"Armor efficiency must be a bare number: {efficiency}");
     }
 
