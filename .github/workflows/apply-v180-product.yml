@@ -30,7 +30,7 @@ jobs:
           echo '9051ee076bef76875464b179e8294bf924b2ca4966d364815b4e6bc186dc7949  .github/v180/chunk04' | sha256sum -c -
           echo '6f5a746c1d848b0998516fe98a2bfc6088fd5c4a833775c4d603d0f3467547c6  .github/v180/chunk05' | sha256sum -c -
           echo '89d284d2c08259511a8b5281effced9b5dce07e1f59da38ad2a28be23dcdca1c  .github/v180/chunk06a' | sha256sum -c -
-          echo '032b5db180e4c217e36eef01c8209b4e651d2c779d3a3be48b0ae59128cb4134  .github/v180/chunk06b' | sha256sum -c -
+          echo '032b5db180e4c217e36eef01c8209b4e651d2c779d3a3be48b0ae59128cb4134  .github/v180/chunk06b-fixed' | sha256sum -c -
           echo '9b7fd12c7a41f10af70c4bcc7fbd2223a9722babc82b56e817d420533b62c6bd  .github/v180/chunk06c' | sha256sum -c -
 
           cat \
@@ -41,7 +41,7 @@ jobs:
             .github/v180/chunk04 \
             .github/v180/chunk05 \
             .github/v180/chunk06a \
-            .github/v180/chunk06b \
+            .github/v180/chunk06b-fixed \
             .github/v180/chunk06c > payload.b64
 
           base64 --decode payload.b64 > payload.zip
