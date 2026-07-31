@@ -1028,11 +1028,8 @@ namespace TarkovHelper.Services
                     _ => QuestStatus.Active
                 };
 
-                if (status != QuestStatus.Active)
-                {
-                    batchChanges.Add((task, status));
-                    _log.Debug($"Queued change: {change.NormalizedName} -> {change.ChangeType}");
-                }
+                batchChanges.Add((task, status));
+                _log.Debug($"Queued change: {change.NormalizedName} -> {change.ChangeType}");
             }
 
             // Apply all changes in one batch (single DB transaction, single UI update)

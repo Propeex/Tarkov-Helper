@@ -58,7 +58,7 @@ public sealed class AmmoDbService
                        a.FragmentationChance,
                        a.LightBleedModifier,
                        a.HeavyBleedModifier,
-                       COALESCE(NULLIF(a.AcquisitionSource, ''), '레이드 획득/기타')
+                       COALESCE(NULLIF(a.AcquisitionSource, ''), 'raid-found')
                 FROM Ammo a
                 JOIN Items i ON i.BsgId = a.ItemId OR i.Id = a.ItemId
                 ORDER BY a.Caliber, COALESCE(NULLIF(i.NameKO, ''), NULLIF(i.NameEN, ''), i.Name);
@@ -150,9 +150,9 @@ internal static class AmmoLocalization
     public static string TranslateAcquisition(string? source)
     {
         if (string.IsNullOrWhiteSpace(source))
-            return "레이드 획득/기타";
+            return "레이드 획득";
 
-        return source
+        static string Trader(string value) => value
             .Replace("Prapor", "프라퍼", StringComparison.OrdinalIgnoreCase)
             .Replace("Therapist", "테라피스트", StringComparison.OrdinalIgnoreCase)
             .Replace("Skier", "스키어", StringComparison.OrdinalIgnoreCase)
@@ -162,17 +162,41 @@ internal static class AmmoLocalization
             .Replace("Jaeger", "예거", StringComparison.OrdinalIgnoreCase)
             .Replace("Fence", "펜스", StringComparison.OrdinalIgnoreCase)
             .Replace("Ref", "레프", StringComparison.OrdinalIgnoreCase)
-            .Replace("Lightkeeper", "라이트키퍼", StringComparison.OrdinalIgnoreCase)
+            .Replace("Lightkeeper", "라이트키퍼", StringComparison.OrdinalIgnoreCase);
+
+        static string Station(string value) => value
             .Replace("Workbench", "작업대", StringComparison.OrdinalIgnoreCase)
             .Replace("Lavatory", "화장실", StringComparison.OrdinalIgnoreCase)
-            .Replace("Nutrition Unit", "영양 공급소", StringComparison.OrdinalIgnoreCase)
-            .Replace("purchase", "구매", StringComparison.OrdinalIgnoreCase)
-            .Replace("barter", "교환", StringComparison.OrdinalIgnoreCase)
-            .Replace("craft", "제작", StringComparison.OrdinalIgnoreCase)
-            .Replace("task reward", "퀘스트 보상", StringComparison.OrdinalIgnoreCase)
-            .Replace("raid/other", "레이드 획득/기타", StringComparison.OrdinalIgnoreCase)
-            .Replace("trader purchase", "상인 구매", StringComparison.OrdinalIgnoreCase)
-            .Replace("trader barter", "상인 교환", StringComparison.OrdinalIgnoreCase)
-            .Replace("hideout craft", "은신처 제작", StringComparison.OrdinalIgnoreCase);
+            .Replace("Nutrition Unit", "영양 공급소", StringComparison.OrdinalIgnoreCase);
+
+        var translated = new List<string>();
+        foreach (var raw in source.Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (raw.Equals("raid-found", StringComparison.OrdinalIgnoreCase))
+            {
+                translated.Add("레이드 획득");
+                continue;
+            }
+
+            var parts = raw.Split(':', StringSplitOptions.TrimEntries);
+            if (parts.Length >= 2 && parts[0].Equals("trader", StringComparison.OrdinalIgnoreCase))
+            {
+                var text = $"상인 {Trader(parts[1])}";
+                if (parts.Length >= 4 && int.TryParse(parts[3], out var level))
+                    text += $" Lv.{level}";
+                translated.Add(text);
+                continue;
+            }
+            if (parts.Length >= 2 && parts[0].Equals("craft", StringComparison.OrdinalIgnoreCase))
+            {
+                var text = $"제작 {Station(parts[1])}";
+                if (parts.Length >= 4 && int.TryParse(parts[3], out var level))
+                    text += $" Lv.{level}";
+                translated.Add(text);
+            }
+        }
+
+        return translated.Count == 0 ? "레이드 획득" : string.Join(" · ", translated.Distinct());
     }
+
 }

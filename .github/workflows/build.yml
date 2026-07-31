@@ -199,27 +199,6 @@ jobs:
           path: icon-download.log
           if-no-files-found: warn
 
-      - name: Prepare Korean scanner OCR data
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $scannerDataDir = "TarkovHelper/Assets/Scanner/traineddata"
-          New-Item -ItemType Directory -Path $scannerDataDir -Force | Out-Null
-          curl.exe --fail --location --retry 4 --retry-delay 5 `
-            "https://github.com/RatScanner/RatScannerData/releases/latest/download/Data.zip" `
-            --output ScannerData.zip
-          if ($LASTEXITCODE -ne 0) {
-            throw "한국어 스캐너 OCR 데이터 패키지를 다운로드하지 못했습니다."
-          }
-
-          7z e ScannerData.zip "traineddata/kor.traineddata" -o"$scannerDataDir" -y | Out-Null
-          Remove-Item ScannerData.zip -Force
-
-          $trainedDataPath = Join-Path $scannerDataDir "kor.traineddata"
-          if (-not (Test-Path $trainedDataPath) -or (Get-Item $trainedDataPath).Length -lt 1MB) {
-            throw "한국어 OCR 데이터가 없거나 손상되었습니다."
-          }
-
       - name: Publish Windows release candidate
         shell: pwsh
         run: |
@@ -233,10 +212,7 @@ jobs:
 
           foreach ($requiredFile in @(
             "publish/TarkovHelper_JH.exe",
-            "publish/Assets/tarkov_data.db",
-            "publish/Assets/Scanner/traineddata/kor.traineddata",
-            "publish/ThirdPartyNotices/RatScanner-LICENSE.txt",
-            "publish/ThirdPartyNotices/RatScanner-MODIFICATIONS.txt"
+            "publish/Assets/tarkov_data.db"
           )) {
             if (-not (Test-Path $requiredFile)) {
               throw "Required release file is missing: $requiredFile"
@@ -251,14 +227,6 @@ jobs:
           $publishedDatabaseSize = (Get-Item "publish/Assets/tarkov_data.db").Length
           if ($publishedDatabaseSize -lt 1MB) {
             throw "The published database is unexpectedly small: $publishedDatabaseSize bytes."
-          }
-
-          $env:TARKOV_SCANNER_SELF_TEST = "1"
-          $scannerValidation = Start-Process "./publish/TarkovHelper_JH.exe" -Wait -PassThru
-          if ($scannerValidation.ExitCode -ne 0) {
-            $scannerLog = Join-Path $env:TEMP "tarkov-helper-scanner-self-test.log"
-            if (Test-Path $scannerLog) { Get-Content $scannerLog }
-            throw "한국어 이름 스캐너 자체 검사 실패: $($scannerValidation.ExitCode)"
           }
 
           Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force

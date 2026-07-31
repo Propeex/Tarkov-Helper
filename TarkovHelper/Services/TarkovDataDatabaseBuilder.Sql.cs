@@ -70,6 +70,43 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (missingQuestItems != 0)
             throw new InvalidDataException($"퀘스트 필요 아이템 연결 실패: {missingQuestItems}개");
 
+        var malformedAlternativeQuestItems = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequiredItems q
+            WHERE q.IsAlternativeGroup = 1
+              AND (
+                  q.ItemId IS NOT NULL
+                  OR COALESCE(q.RequirementGroupId, '') = ''
+                  OR q.Count <= 0
+                  OR json_valid(q.AlternativeItemIds) != 1
+                  OR json_array_length(q.AlternativeItemIds) < 2
+                  OR json_valid(q.AlternativeItemNames) != 1
+                  OR json_array_length(q.AlternativeItemNames) != json_array_length(q.AlternativeItemIds)
+              );
+            """, cancellationToken);
+        if (malformedAlternativeQuestItems != 0)
+            throw new InvalidDataException($"대체 가능 퀘스트 아이템 묶음 형식 오류: {malformedAlternativeQuestItems}개");
+
+        var missingAlternativeQuestItems = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequiredItems q, json_each(q.AlternativeItemIds) alternative
+            LEFT JOIN Items i ON i.Id = alternative.value
+            WHERE q.IsAlternativeGroup = 1
+              AND i.Id IS NULL;
+            """, cancellationToken);
+        if (missingAlternativeQuestItems != 0)
+            throw new InvalidDataException($"대체 가능 퀘스트 아이템 연결 실패: {missingAlternativeQuestItems}개");
+
+        var invalidConcreteQuestItems = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequiredItems q
+            LEFT JOIN Items i ON i.Id = q.ItemId
+            WHERE q.IsAlternativeGroup = 0
+              AND (q.ItemId IS NULL OR q.ItemId = '' OR i.Id IS NULL);
+            """, cancellationToken);
+        if (invalidConcreteQuestItems != 0)
+            throw new InvalidDataException($"단일 퀘스트 필요 아이템 형식 오류: {invalidConcreteQuestItems}개");
+
         var missingHideoutItems = await ExecuteScalarLongAsync(connection, """
             SELECT COUNT(*)
             FROM HideoutItemRequirements h

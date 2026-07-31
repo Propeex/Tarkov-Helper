@@ -19,7 +19,7 @@ public sealed class AmmoItem
     public double FragmentationChance { get; init; }
     public double LightBleedModifier { get; init; }
     public double HeavyBleedModifier { get; init; }
-    public string AcquisitionSource { get; init; } = "레이드 획득/기타";
+    public string AcquisitionSource { get; init; } = "raid-found";
 
     public string DamageText => ProjectileCount > 1 ? $"{Damage} × {ProjectileCount}" : Damage.ToString();
     public string ArmorDamageText => $"{ArmorDamage}%";
@@ -32,6 +32,8 @@ public sealed class AmmoItem
         .Select(armorClass => AmmoArmorClassResult.Create(armorClass, PenetrationPower, ArmorDamage))
         .ToArray();
 
+    public int ArmorEfficiencyScore => ArmorClasses.Sum(result => result.Effectiveness);
+
     private static string FormatSignedPercent(double value)
     {
         var percent = Math.Abs(value) <= 2 ? value * 100 : value;
@@ -41,7 +43,7 @@ public sealed class AmmoItem
 
 public sealed record AmmoArmorClassResult(int ArmorClass, int Effectiveness, Brush Background, Brush Foreground)
 {
-    public string DisplayText => $"{ArmorClass}:{Effectiveness}";
+    public string DisplayText => $"{Effectiveness}x";
     public static AmmoArmorClassResult Create(int armorClass, int penetrationPower, int armorDamage)
     {
         var threshold = armorClass * 10;

@@ -28,12 +28,6 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 if (taskObject[rewardName] is not JsonObject rewards)
                     continue;
 
-                AddTaskRewardSources(
-                    rewards["items"],
-                    itemLookup,
-                    enrichedItems,
-                    "task reward");
-
                 if (rewards["offerUnlock"] is JsonArray offers)
                 {
                     foreach (var offerNode in offers.OfType<JsonObject>())
@@ -41,11 +35,11 @@ internal sealed partial class TarkovDataDatabaseBuilder
                         var itemId = ReferenceId(offerNode["item"]);
                         var traderId = ReferenceId(offerNode["trader"]) ?? fallbackTraderId;
                         var traderName = ResolveSourceName(traderId, traderLookup, "trader");
-                        AddAmmoSource(
-                            itemId,
-                            itemLookup,
-                            enrichedItems,
-                            $"{traderName} trader offer");
+                        var level = GetInt(offerNode, "level");
+                        var source = $"trader:{traderName}";
+                        if (level.HasValue)
+                            source += $":level:{Math.Max(1, level.Value)}";
+                        AddAmmoSource(itemId, itemLookup, enrichedItems, source);
                     }
                 }
 
@@ -56,35 +50,17 @@ internal sealed partial class TarkovDataDatabaseBuilder
                         var itemId = ReferenceId(craftNode["item"]);
                         var stationId = ReferenceId(craftNode["station"]);
                         var stationName = ResolveSourceName(stationId, stationLookup, "hideout");
-                        AddAmmoSource(
-                            itemId,
-                            itemLookup,
-                            enrichedItems,
-                            $"{stationName} craft");
+                        var level = GetInt(craftNode, "level");
+                        var source = $"craft:{stationName}";
+                        if (level.HasValue)
+                            source += $":level:{Math.Max(1, level.Value)}";
+                        AddAmmoSource(itemId, itemLookup, enrichedItems, source);
                     }
                 }
             }
         }
 
-        Log.Info($"Ammo acquisition sources enriched from static task rewards: {enrichedItems.Count}");
-    }
-
-    private static void AddTaskRewardSources(
-        JsonNode? node,
-        IReadOnlyDictionary<string, ApiItem> itemLookup,
-        ISet<string> enrichedItems,
-        string source)
-    {
-        if (node is not JsonArray rewards)
-            return;
-
-        foreach (var rewardNode in rewards)
-        {
-            var itemId = rewardNode is JsonObject rewardObject
-                ? ReferenceId(rewardObject["item"])
-                : ReferenceId(rewardNode);
-            AddAmmoSource(itemId, itemLookup, enrichedItems, source);
-        }
+        Log.Info($"Ammo acquisition sources enriched from static unlocks: {enrichedItems.Count}");
     }
 
     private static void AddAmmoSource(
@@ -119,8 +95,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
                      '·',
                      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (!string.Equals(value, "raid/other", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(value, "레이드 획득/기타", StringComparison.OrdinalIgnoreCase))
+            if (value.Equals("raid-found", StringComparison.OrdinalIgnoreCase) ||
+                value.StartsWith("trader:", StringComparison.OrdinalIgnoreCase) ||
+                value.StartsWith("craft:", StringComparison.OrdinalIgnoreCase))
             {
                 result.Add(value);
             }

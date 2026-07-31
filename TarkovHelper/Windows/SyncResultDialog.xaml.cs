@@ -132,6 +132,19 @@ public partial class SyncResultDialog : Window
     {
         var selectedChanges = _pendingChanges.Where(c => c.IsSelected).ToList();
 
+        foreach (var task in _result.InProgressQuests)
+        {
+            selectedChanges.Add(new QuestChangeInfo
+            {
+                QuestName = task.Name,
+                NormalizedName = task.NormalizedName ?? string.Empty,
+                Trader = task.Trader,
+                IsPrerequisite = false,
+                ChangeType = QuestEventType.Started,
+                IsSelected = true
+            });
+        }
+
         // Add selected alternative quests to the changes list
         if (_alternativeGroups != null)
         {

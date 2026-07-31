@@ -126,28 +126,6 @@ jobs:
           path: release-icons.log
           if-no-files-found: warn
 
-      - name: Prepare Korean scanner OCR data
-        if: steps.version.outputs.exists != 'true'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $scannerDataDir = "TarkovHelper/Assets/Scanner/traineddata"
-          New-Item -ItemType Directory -Path $scannerDataDir -Force | Out-Null
-          curl.exe --fail --location --retry 4 --retry-delay 5 `
-            "https://github.com/RatScanner/RatScannerData/releases/latest/download/Data.zip" `
-            --output ScannerData.zip
-          if ($LASTEXITCODE -ne 0) {
-            throw "한국어 스캐너 OCR 데이터 패키지를 다운로드하지 못했습니다."
-          }
-
-          7z e ScannerData.zip "traineddata/kor.traineddata" -o"$scannerDataDir" -y | Out-Null
-          Remove-Item ScannerData.zip -Force
-
-          $trainedDataPath = Join-Path $scannerDataDir "kor.traineddata"
-          if (-not (Test-Path $trainedDataPath) -or (Get-Item $trainedDataPath).Length -lt 1MB) {
-            throw "한국어 OCR 데이터가 없거나 손상되었습니다."
-          }
-
       - name: Publish Windows application
         if: steps.version.outputs.exists != 'true'
         shell: pwsh
@@ -163,10 +141,7 @@ jobs:
 
           foreach ($requiredFile in @(
             "publish/TarkovHelper_JH.exe",
-            "publish/Assets/tarkov_data.db",
-            "publish/Assets/Scanner/traineddata/kor.traineddata",
-            "publish/ThirdPartyNotices/RatScanner-LICENSE.txt",
-            "publish/ThirdPartyNotices/RatScanner-MODIFICATIONS.txt"
+            "publish/Assets/tarkov_data.db"
           )) {
             if (-not (Test-Path $requiredFile)) {
               throw "Required release file is missing: $requiredFile"
@@ -210,14 +185,6 @@ jobs:
             throw "A user-data or debug file was included in the release directory."
           }
 
-          $env:TARKOV_SCANNER_SELF_TEST = "1"
-          $scannerValidation = Start-Process "./publish/TarkovHelper_JH.exe" -Wait -PassThru
-          if ($scannerValidation.ExitCode -ne 0) {
-            $scannerLog = Join-Path $env:TEMP "tarkov-helper-scanner-self-test.log"
-            if (Test-Path $scannerLog) { Get-Content $scannerLog }
-            throw "한국어 이름 스캐너 자체 검사 실패: $($scannerValidation.ExitCode)"
-          }
-
       - name: Create release package
         if: steps.version.outputs.exists != 'true'
         shell: pwsh
@@ -232,17 +199,17 @@ jobs:
           $notes = @'
           ## 타르코프헬퍼_JH VERSION_PLACEHOLDER
 
-          Escape from Tarkov PVP 진행도, 아이템, 은신처 및 지도 정보를 관리하는 Windows용 도우미입니다.
+          Escape from Tarkov PVP 진행도, 아이템, 은신처, 탄약 및 지도 정보를 관리하는 Windows용 도우미입니다.
 
-          ### v1.7.0 추가 및 변경
-          - 탭 순서를 `퀘스트 → 은신처 → 아이템 → 총알 → 지도 → 스캐너`로 정리
-          - 향후 총알 표 기능을 위한 총알 탭 준비 화면 추가
-          - RatScanner의 이름 스캔 기능을 한국어 전용으로 통합
-          - 타르코프 아이템 상세 화면을 왼쪽 클릭하면 공식 한국어 아이템명을 인식
-          - 인식한 이름만 표시하는 항상 위 미니멀 UI 추가
-          - 아이콘 스캔, 아이템 정보 오버레이, 대시보드, 다국어 설정 및 외부 커뮤니티 버튼 제외
-          - 퀘스트·아이템 위키 버튼을 한국어 Escape from Tarkov 위키로 통일
-          - RatScanner 파생 코드 라이선스와 수정 고지를 배포본에 포함
+          ### v1.8.1 수정
+          - 퀘스트 진행 중 상태를 명시적으로 시작한 퀘스트에만 적용
+          - 요구 레벨과 선행 퀘스트 조건 판정 강화
+          - 대체 가능한 요구 아이템을 하나의 선택 묶음과 공통 수량으로 표시
+          - 필요한 아이템 세부 분류를 공식 한글 범주로 정리
+          - 탄약 구경 선택을 드롭다운으로 변경하고 전체 다크 테마 적용
+          - 탄약 표를 방탄 효율이 낮은 순서부터 정렬하고 효율 셀 표기 간소화
+          - 탄약 입수 경로를 레이드, 제작, 상인 레벨 형식으로 통일
+          - 심각한 오류가 보고된 스캐너 기능과 관련 런타임 의존성 제거; 스캐너 탭만 유지
 
           ### 설치
           1. TarkovHelper_JH.zip을 원하는 폴더에 압축 해제합니다.
@@ -324,10 +291,7 @@ jobs:
           Expand-Archive $zipPath -DestinationPath release-verification/extracted -Force
           foreach ($requiredFile in @(
             "release-verification/extracted/TarkovHelper_JH.exe",
-            "release-verification/extracted/Assets/tarkov_data.db",
-            "release-verification/extracted/Assets/Scanner/traineddata/kor.traineddata",
-            "release-verification/extracted/ThirdPartyNotices/RatScanner-LICENSE.txt",
-            "release-verification/extracted/ThirdPartyNotices/RatScanner-MODIFICATIONS.txt"
+            "release-verification/extracted/Assets/tarkov_data.db"
           )) {
             if (-not (Test-Path $requiredFile)) {
               throw "Required file is missing from the published ZIP: $requiredFile"
@@ -340,6 +304,7 @@ jobs:
           }
 
           @'
+          import json
           import os
           import pathlib
           import sqlite3
@@ -373,6 +338,18 @@ jobs:
                   for name in normalized
               ):
                   raise SystemExit('user-data or debug file included')
+
+              forbidden_scanner_entries = (
+                  'assets/scanner/',
+                  'thirdpartynotices/ratscanner-',
+              )
+              if any(name.lower().startswith(forbidden_scanner_entries) for name in normalized):
+                  raise SystemExit('removed scanner assets or notices were included')
+              forbidden_scanner_binaries = {
+                  'rateye.dll', 'ratstash.dll', 'tesseract.dll'
+              }
+              if any(pathlib.PurePosixPath(name).name.lower() in forbidden_scanner_binaries for name in normalized):
+                  raise SystemExit('removed scanner runtime dependency was included')
 
               required_marker_icons = {
                   'assets/db/icons/markers/boss.svg',
@@ -421,6 +398,54 @@ jobs:
                     )
               ''')
           }
+          for (alternative_json,) in connection.execute("""
+              select AlternativeItemIds
+              from QuestRequiredItems
+              where IsAlternativeGroup = 1
+          """):
+              for item_id in json.loads(alternative_json or '[]'):
+                  if item_id:
+                      required_icon_ids.add(item_id)
+
+          invalid_requirement_rows = connection.execute("""
+              select count(*)
+              from QuestRequiredItems r
+              where (
+                    r.IsAlternativeGroup = 0
+                    and (r.ItemId is null or not exists(select 1 from Items i where i.Id = r.ItemId))
+                  )
+                 or (
+                    r.IsAlternativeGroup = 1
+                    and (
+                        r.ItemId is not null
+                        or coalesce(r.RequirementGroupId, '') = ''
+                        or json_valid(r.AlternativeItemIds) != 1
+                        or json_array_length(r.AlternativeItemIds) < 2
+                        or json_valid(r.AlternativeItemNames) != 1
+                        or json_array_length(r.AlternativeItemNames) != json_array_length(r.AlternativeItemIds)
+                    )
+                 )
+          """).fetchone()[0]
+          unresolved_alternative_items = connection.execute("""
+              select count(*)
+              from QuestRequiredItems r, json_each(r.AlternativeItemIds) alternative
+              left join Items i on i.Id = alternative.value
+              where r.IsAlternativeGroup = 1 and i.Id is null
+          """).fetchone()[0]
+          missing_prerequisite_links = connection.execute("""
+              select count(*)
+              from QuestRequirements r
+              left join Quests q on q.Id = r.RequiredQuestId
+              where q.Id is null
+          """).fetchone()[0]
+          if invalid_requirement_rows or unresolved_alternative_items or missing_prerequisite_links:
+              raise SystemExit(
+                  'quest requirement integrity failed: '
+                  f'invalid={invalid_requirement_rows}, '
+                  f'unresolved_alternatives={unresolved_alternative_items}, '
+                  f'missing_prerequisites={missing_prerequisite_links}'
+              )
+
           missing_icons = sorted(
               item_id for item_id in required_icon_ids
               if sanitize_file_name(item_id).lower() not in icon_names
@@ -443,7 +468,8 @@ jobs:
               'icons=', len(icon_names),
               'required_icons=', len(required_icon_ids),
               'items=', connection.execute('select count(*) from Items').fetchone()[0],
-              'quests=', connection.execute('select count(*) from Quests').fetchone()[0]
+              'quests=', connection.execute('select count(*) from Quests').fetchone()[0],
+              'alternative_groups=', connection.execute('select count(*) from QuestRequiredItems where IsAlternativeGroup = 1').fetchone()[0]
           )
           connection.close()
           '@ | Set-Content verify_release.py -Encoding utf8

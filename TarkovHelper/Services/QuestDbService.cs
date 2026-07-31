@@ -499,45 +499,77 @@ public sealed class QuestDbService
         if (!await TableExistsAsync(connection, "QuestRequiredItems"))
             return false;
 
-        var sql = @"
-            SELECT QuestId, ItemId, ItemName, Count, RequiresFIR, RequirementType, DogtagMinLevel
+        var hasGroupId = await ColumnExistsAsync(connection, "QuestRequiredItems", "RequirementGroupId");
+        var hasAlternativeFlag = await ColumnExistsAsync(connection, "QuestRequiredItems", "IsAlternativeGroup");
+        var hasAlternativeIds = await ColumnExistsAsync(connection, "QuestRequiredItems", "AlternativeItemIds");
+        var hasAlternativeNames = await ColumnExistsAsync(connection, "QuestRequiredItems", "AlternativeItemNames");
+        var sql = $@"
+            SELECT QuestId, ItemId, ItemName, Count, RequiresFIR, RequirementType, DogtagMinLevel,
+                   {(hasGroupId ? "RequirementGroupId" : "NULL")},
+                   {(hasAlternativeFlag ? "IsAlternativeGroup" : "0")},
+                   {(hasAlternativeIds ? "AlternativeItemIds" : "NULL")},
+                   {(hasAlternativeNames ? "AlternativeItemNames" : "NULL")}
             FROM QuestRequiredItems
             ORDER BY QuestId, SortOrder";
 
         await using var cmd = new SqliteCommand(sql, connection);
         await using var reader = await cmd.ExecuteReaderAsync();
-
         while (await reader.ReadAsync())
         {
             var questId = reader.GetString(0);
+            if (!questLookup.TryGetValue(questId, out var quest))
+                continue;
+
             var itemId = reader.IsDBNull(1) ? null : reader.GetString(1);
             var itemName = reader.IsDBNull(2) ? "" : reader.GetString(2);
             var count = reader.IsDBNull(3) ? 1 : reader.GetInt32(3);
             var requiresFir = !reader.IsDBNull(4) && reader.GetInt32(4) == 1;
             var requirementType = reader.IsDBNull(5) ? "Required" : reader.GetString(5);
             var dogtagMinLevel = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6);
+            var groupId = reader.IsDBNull(7) ? null : reader.GetString(7);
+            var isAlternative = !reader.IsDBNull(8) && reader.GetInt32(8) == 1;
+            var alternativeIds = ParseStringArray(reader.IsDBNull(9) ? null : reader.GetString(9));
+            var alternativeNames = ParseStringArray(reader.IsDBNull(10) ? null : reader.GetString(10));
 
-            if (!questLookup.TryGetValue(questId, out var quest))
+            if (isAlternative && alternativeIds.Count == 0)
                 continue;
-
-            // ItemId가 NULL이면 Items 테이블과 매칭할 수 없으므로 스킵
-            // Items 탭에서는 QuestRequiredItems.ItemId -> Items.Id로 직접 매칭
-            if (string.IsNullOrEmpty(itemId))
+            if (!isAlternative && string.IsNullOrWhiteSpace(itemId))
                 continue;
 
             quest.RequiredItems ??= new List<QuestItem>();
             quest.RequiredItems.Add(new QuestItem
             {
-                ItemNormalizedName = itemId,  // tarkov.dev API ID (matches Items.Id)
-                ItemDisplayName = itemName,   // Original item name for display fallback
+                ItemNormalizedName = isAlternative ? $"group:{groupId ?? questId}" : itemId!,
+                ItemDisplayName = itemName,
                 Amount = count,
                 FoundInRaid = requiresFir,
                 Requirement = requirementType,
-                DogtagMinLevel = dogtagMinLevel
+                DogtagMinLevel = dogtagMinLevel,
+                RequirementGroupId = groupId,
+                IsAlternativeGroup = isAlternative,
+                AlternativeItemIds = alternativeIds,
+                AlternativeItemNames = alternativeNames
             });
         }
 
         return true;
+    }
+
+    private static List<string> ParseStringArray(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new List<string>();
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(json)
+                ?.Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<string>();
+        }
+        catch (JsonException)
+        {
+            return new List<string>();
+        }
     }
 
     /// <summary>

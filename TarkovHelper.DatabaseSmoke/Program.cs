@@ -155,14 +155,38 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         FROM QuestRequiredItems
         WHERE ObjectiveId = '{ObjectiveIdCollisionFixtureHandler.DogtagObjectiveId}';
         """);
-    var canonicalDogtagRows = await ScalarAsync(connection, $"""
+    var validDogtagAlternativeGroups = await ScalarAsync(connection, $"""
         SELECT COUNT(*)
-        FROM QuestRequiredItems r
-        JOIN Items i ON i.Id = r.ItemId
-        WHERE r.ObjectiveId = '{ObjectiveIdCollisionFixtureHandler.DogtagObjectiveId}'
-          AND i.NormalizedName = 'dogtag-usec'
-          AND r.Count = 7
-          AND r.DogtagMinLevel = 50;
+        FROM QuestRequiredItems
+        WHERE ObjectiveId = '{ObjectiveIdCollisionFixtureHandler.DogtagObjectiveId}'
+          AND IsAlternativeGroup = 1
+          AND ItemId IS NULL
+          AND Count = 7
+          AND DogtagMinLevel = 50
+          AND json_valid(AlternativeItemIds) = 1
+          AND json_array_length(AlternativeItemIds) = 2
+          AND json_valid(AlternativeItemNames) = 1
+          AND json_array_length(AlternativeItemNames) = 2;
+        """);
+    var unresolvedAlternativeItems = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequiredItems r, json_each(r.AlternativeItemIds) alternative
+        LEFT JOIN Items i ON i.Id = alternative.value
+        WHERE r.IsAlternativeGroup = 1
+          AND i.Id IS NULL;
+        """);
+    var malformedAlternativeGroups = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequiredItems
+        WHERE IsAlternativeGroup = 1
+          AND (
+              ItemId IS NOT NULL
+              OR COALESCE(RequirementGroupId, '') = ''
+              OR json_valid(AlternativeItemIds) != 1
+              OR json_array_length(AlternativeItemIds) < 2
+              OR json_valid(AlternativeItemNames) != 1
+              OR json_array_length(AlternativeItemNames) != json_array_length(AlternativeItemIds)
+          );
         """);
     var duplicateDisplayNames = await ScalarAsync(connection, """
         SELECT COUNT(*)
@@ -220,12 +244,25 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
             SELECT MAX(l.Level) FROM HideoutLevels l WHERE l.StationId = s.Id
         ), 0);
         """);
+    var missingPrerequisiteLinks = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequirements r
+        LEFT JOIN Quests required ON required.Id = r.RequiredQuestId
+        LEFT JOIN Quests source ON source.Id = r.QuestId
+        WHERE required.Id IS NULL OR source.Id IS NULL;
+        """);
+    var invalidConcreteRequirementLinks = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequiredItems r
+        LEFT JOIN Items i ON i.Id = r.ItemId
+        WHERE r.IsAlternativeGroup = 0 AND (r.ItemId IS NULL OR i.Id IS NULL);
+        """);
 
     if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 2 || result.HideoutStationCount != 1)
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
     if (koreanItems < 4 || koreanQuests < 2)
         throw new InvalidDataException("Korean localized names were not written correctly.");
-    if (questItemLinks != 3 || hideoutItemLinks < 1)
+    if (questItemLinks != 2 || hideoutItemLinks < 1)
     {
         throw new InvalidDataException(
             $"Quest or hideout item links were not persisted exactly: " +
@@ -243,11 +280,13 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Neutral quests still contain a faction restriction: {restrictedNeutralQuests}.");
     if (sellItemRequirements != 0)
         throw new InvalidDataException($"Sell catalogues leaked into quest item requirements: {sellItemRequirements}.");
-    if (dogtagAlternativeRows != 1 || canonicalDogtagRows != 1)
+    if (dogtagAlternativeRows != 1 || validDogtagAlternativeGroups != 1 ||
+        unresolvedAlternativeItems != 0 || malformedAlternativeGroups != 0)
     {
         throw new InvalidDataException(
-            $"Dogtag alternatives were not collapsed into one faction requirement: " +
-            $"rows={dogtagAlternativeRows}, canonical={canonicalDogtagRows}.");
+            $"Alternative requirements were not stored as one valid collective group: " +
+            $"rows={dogtagAlternativeRows}, valid={validDogtagAlternativeGroups}, " +
+            $"unresolved={unresolvedAlternativeItems}, malformed={malformedAlternativeGroups}.");
     }
     if (duplicateDisplayNames != 1)
         throw new InvalidDataException($"Duplicate-name loader fixture was not created: groups={duplicateDisplayNames}.");
@@ -266,6 +305,12 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Rebuilt child rows contain {missingChildIds} missing primary keys.");
     if (invalidMaxLevels != 0)
         throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
+    if (missingPrerequisiteLinks != 0 || invalidConcreteRequirementLinks != 0)
+    {
+        throw new InvalidDataException(
+            $"Rebuilt quest links are incomplete: prerequisites={missingPrerequisiteLinks}, " +
+            $"concreteItems={invalidConcreteRequirementLinks}.");
+    }
 
     await RunPersistenceWriteQueueSmokeAsync();
     await RunObjectiveProfileIsolationSmokeAsync();
@@ -280,14 +325,16 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"acquisitionRows={acquisitionRequirementRows}, pairedBolts={pairedBoltRequirementRows}, " +
         $"iconLinks={iconLinks}, neutralRestrictions={restrictedNeutralQuests}, sellItemRows={sellItemRequirements}, " +
-        $"dogtagRows={dogtagAlternativeRows}, canonicalDogtags={canonicalDogtagRows}, " +
+        $"dogtagRows={dogtagAlternativeRows}, validDogtagGroups={validDogtagAlternativeGroups}, " +
+        $"unresolvedAlternativeItems={unresolvedAlternativeItems}, malformedAlternativeGroups={malformedAlternativeGroups}, " +
         $"mapQuestObjectives={loadedMapQuestObjectives}, " +
         $"duplicateDisplayNames={duplicateDisplayNames}, questLoader={loadedQuests.Count}, " +
         $"uniqueQuestKeys={uniqueQuestKeys}, disambiguatedQuestKeys={disambiguatedQuestKeys}, " +
         $"objectiveIds={protectedObjectiveIds}, scopedObjectives={correctlyScopedObjectives}, " +
         $"duplicateObjectiveIds={duplicateObjectiveIds}, " +
         $"duplicateLocalizedObjectives={duplicateLocalizedDescriptions}, " +
-        $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}");
+        $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}, " +
+        $"missingPrerequisites={missingPrerequisiteLinks}, invalidConcreteItems={invalidConcreteRequirementLinks}");
     return 0;
 }
 
@@ -644,19 +691,58 @@ static void RunApplicationBehaviorSmoke()
 
     inventory.SetNonFirQuantity(inventoryKey, 0);
 
+    var settingsService = SettingsService.Instance;
+    var originalPlayerLevel = settingsService.PlayerLevel;
+    settingsService.PlayerLevel = 16;
+
     var statusTask = new TarkovTask
     {
         Ids = ["actual-status-smoke"],
         NormalizedName = "actual-status-smoke",
         Name = "Actual Status Smoke"
     };
-    var eligibleStatus = new ActualQuestStatusEvaluator(
-        QuestProgressService.Instance).Evaluate(statusTask);
-    if (eligibleStatus != QuestStatus.Active)
+    var progressService = QuestProgressService.Instance;
+    var eligibleStatus = new ActualQuestStatusEvaluator(progressService).Evaluate(statusTask);
+    if (eligibleStatus != QuestStatus.Available)
+        throw new InvalidDataException($"Eligible unstarted quest must be Available: actual={eligibleStatus}.");
+
+    var levelLockedTask = new TarkovTask
     {
-        throw new InvalidDataException(
-            $"Eligible quest must be Active when the helper has no accept action: actual={eligibleStatus}.");
+        Ids = ["level-locked-status-smoke"],
+        NormalizedName = "level-locked-status-smoke",
+        Name = "Level Locked Status Smoke",
+        RequiredLevel = 20
+    };
+    var levelLockedStatus = new ActualQuestStatusEvaluator(progressService).Evaluate(levelLockedTask);
+    if (levelLockedStatus != QuestStatus.LevelLocked)
+        throw new InvalidDataException($"Quest below required level must be LevelLocked: actual={levelLockedStatus}.");
+
+    if (!progressService.StartQuest(statusTask) ||
+        new ActualQuestStatusEvaluator(progressService).Evaluate(statusTask) != QuestStatus.Active)
+    {
+        throw new InvalidDataException("Explicitly started eligible quest was not persisted as Active.");
     }
+    progressService.ResetQuest(statusTask);
+    settingsService.PlayerLevel = originalPlayerLevel;
+
+    const string alternativeA = "__alternative-consumption-a__";
+    const string alternativeB = "__alternative-consumption-b__";
+    inventory.SetNonFirQuantity(alternativeA, 2);
+    inventory.SetNonFirQuantity(alternativeB, 4);
+    var alternativeResult = inventory.ConsumeBatch([
+        new InventoryConsumptionRequirement(
+            "group:alternative-consumption",
+            5,
+            FirOnly: false,
+            AlternativeItemKeys: [alternativeA, alternativeB])
+    ]);
+    if (alternativeResult.Consumed != 5 || alternativeResult.Missing != 0 ||
+        inventory.GetTotalQuantity(alternativeA) + inventory.GetTotalQuantity(alternativeB) != 1)
+    {
+        throw new InvalidDataException("Collective alternative requirement multiplied or consumed the shared count incorrectly.");
+    }
+    inventory.SetNonFirQuantity(alternativeA, 0);
+    inventory.SetNonFirQuantity(alternativeB, 0);
 
     var markerVisibility = new MiniMapMarkerVisibilityState(
         ShowPmcSpawns: true,
@@ -733,11 +819,12 @@ if (scavOnlyExtracts.IsExtractVisible(ExtractFaction.Shared))
     }
 
     var categories = ItemsDataService.Instance;
-    if (categories.GetParentCategory("Scopes") != "WeaponParts" ||
-        categories.GetParentCategory("Magazines") != "Ammunition" ||
-        categories.GetParentCategory("unrecognized-category") != "Other")
+    if (categories.GetParentCategory("Scopes") != "Scopes" ||
+        categories.GetParentCategory("Magazines") != "Magazines" ||
+        categories.GetParentCategory("Chest rigs") != "Chest rigs" ||
+        categories.GetParentCategory("unrecognized-category") != "unrecognized-category")
     {
-        throw new InvalidDataException("Practical item category grouping failed.");
+        throw new InvalidDataException("Detailed item category preservation failed.");
     }
 
     var selector = new QuestStatusSelector();
@@ -772,14 +859,68 @@ static async Task<int> RunExternalApiSmokeAsync()
         var linkedAmmoRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo a JOIN Items i ON i.BsgId = a.ItemId OR i.Id = a.ItemId;");
         var koreanAmmoRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo a JOIN Items i ON i.BsgId = a.ItemId OR i.Id = a.ItemId WHERE COALESCE(NULLIF(i.NameKO, ''), '') != ''; ");
         var caliberRows = await ScalarAsync(connection, "SELECT COUNT(DISTINCT Caliber) FROM Ammo;");
-        var specificSourceRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo WHERE LOWER(TRIM(COALESCE(AcquisitionSource, ''))) NOT IN ('', 'raid/other', '레이드 획득/기타');");
+        var specificSourceRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo WHERE LOWER(COALESCE(AcquisitionSource, '')) LIKE '%trader:%' OR LOWER(COALESCE(AcquisitionSource, '')) LIKE '%craft:%';");
+        var invalidConcreteRequirements = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequiredItems r
+            LEFT JOIN Items i ON i.Id = r.ItemId
+            WHERE r.IsAlternativeGroup = 0 AND (r.ItemId IS NULL OR i.Id IS NULL);
+            """);
+        var invalidAlternativeRequirements = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequiredItems r
+            WHERE r.IsAlternativeGroup = 1 AND (
+                r.ItemId IS NOT NULL
+                OR COALESCE(r.RequirementGroupId, '') = ''
+                OR json_valid(r.AlternativeItemIds) != 1
+                OR json_array_length(r.AlternativeItemIds) < 2
+                OR json_valid(r.AlternativeItemNames) != 1
+                OR json_array_length(r.AlternativeItemNames) != json_array_length(r.AlternativeItemIds)
+            );
+            """);
+        var unresolvedAlternativeRequirements = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequiredItems r, json_each(r.AlternativeItemIds) alternative
+            LEFT JOIN Items i ON i.Id = alternative.value
+            WHERE r.IsAlternativeGroup = 1 AND i.Id IS NULL;
+            """);
+        var missingPrerequisiteLinks = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequirements r
+            LEFT JOIN Quests q ON q.Id = r.RequiredQuestId
+            WHERE q.Id IS NULL;
+            """);
+        var helpingHandLevel = await ScalarAsync(connection, "SELECT COALESCE(MAX(MinLevel), -1) FROM Quests WHERE Name = 'A Helping Hand';");
+        var helpingHandPrerequisites = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequirements r
+            JOIN Quests source ON source.Id = r.QuestId
+            JOIN Quests required ON required.Id = r.RequiredQuestId
+            WHERE source.Name = 'A Helping Hand' AND required.Name = 'Saving the Mole';
+            """);
         if (ammoRows < 150 || linkedAmmoRows != ammoRows || koreanAmmoRows < 150 || caliberRows < 20 || specificSourceRows < 20)
         {
             throw new InvalidDataException(
                 $"Live ammo data validation failed: rows={ammoRows}, linked={linkedAmmoRows}, korean={koreanAmmoRows}, calibers={caliberRows}, sources={specificSourceRows}.");
         }
+        if (invalidConcreteRequirements != 0 || invalidAlternativeRequirements != 0 ||
+            unresolvedAlternativeRequirements != 0 || missingPrerequisiteLinks != 0)
+        {
+            throw new InvalidDataException(
+                $"Live quest item/prerequisite integrity failed: concrete={invalidConcreteRequirements}, " +
+                $"groups={invalidAlternativeRequirements}, unresolved={unresolvedAlternativeRequirements}, " +
+                $"prerequisites={missingPrerequisiteLinks}.");
+        }
+        if (helpingHandLevel != 20 || helpingHandPrerequisites != 1)
+        {
+            throw new InvalidDataException(
+                $"A Helping Hand start conditions were lost during API refresh: " +
+                $"level={helpingHandLevel}, prerequisites={helpingHandPrerequisites}.");
+        }
 
-        Console.WriteLine($"Live ammo data validated: rows={ammoRows}, calibers={caliberRows}, sources={specificSourceRows}.");
+        Console.WriteLine(
+            $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, sources={specificSourceRows}, " +
+            $"A Helping Hand level={helpingHandLevel}, prerequisiteLinks={helpingHandPrerequisites}.");
         return 0;
     }
     finally

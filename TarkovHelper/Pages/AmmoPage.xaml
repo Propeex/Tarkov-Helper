@@ -14,34 +14,15 @@
 
         <Grid Grid.Row="0" Margin="0,0,0,12">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                <ListBox x:Name="CaliberList"
-                         SelectionChanged="CaliberList_SelectionChanged"
-                         Background="Transparent"
-                         BorderThickness="0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                    <ListBox.ItemsPanel>
-                        <ItemsPanelTemplate><WrapPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                    </ListBox.ItemsPanel>
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Padding" Value="11,7"/>
-                            <Setter Property="Margin" Value="0,0,7,7"/>
-                            <Setter Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
-                            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-                            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-                            <Setter Property="BorderThickness" Value="1"/>
-                            <Setter Property="HorizontalContentAlignment" Value="Center"/>
-                            <Style.Triggers>
-                                <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-                                    <Setter Property="Foreground" Value="White"/>
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ListBox.ItemContainerStyle>
-                </ListBox>
-            </ScrollViewer>
+            <ComboBox x:Name="CaliberList"
+                      MinWidth="260"
+                      MaxWidth="420"
+                      HorizontalAlignment="Left"
+                      Padding="12,8"
+                      Background="{StaticResource BackgroundMediumBrush}"
+                      Foreground="{StaticResource TextPrimaryBrush}"
+                      BorderBrush="{StaticResource BorderBrush}"
+                      SelectionChanged="CaliberList_SelectionChanged"/>
 
             <ToggleButton x:Name="BtnColumnSettings"
                           Grid.Column="1"

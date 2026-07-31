@@ -56,13 +56,11 @@ internal sealed class InventoryConsumptionService
 
         var requirements = task.RequiredItems
             .Where(item => !string.IsNullOrWhiteSpace(item.ItemNormalizedName) && item.Amount > 0)
-            .GroupBy(
-                item => (Key: item.ItemNormalizedName, FirOnly: item.FoundInRaid),
-                new RequirementKeyComparer())
-            .Select(group => new InventoryConsumptionRequirement(
-                group.Key.Key,
-                group.Sum(item => item.Amount),
-                group.Key.FirOnly))
+            .Select(item => new InventoryConsumptionRequirement(
+                item.ItemNormalizedName,
+                item.Amount,
+                item.FoundInRaid,
+                item.IsAlternativeGroup ? item.AlternativeItemIds : null))
             .ToList();
 
         var questId = task.Ids?.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
@@ -305,7 +303,8 @@ internal sealed class InventoryConsumptionService
 public sealed record InventoryConsumptionRequirement(
     string ItemNormalizedName,
     int Quantity,
-    bool FirOnly);
+    bool FirOnly,
+    IReadOnlyList<string>? AlternativeItemKeys = null);
 
 public sealed record InventoryConsumptionResult(
     int Requested,

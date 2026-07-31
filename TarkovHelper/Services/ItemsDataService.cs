@@ -25,88 +25,6 @@ namespace TarkovHelper.Services
 
         private static bool IsCurrency(string normalizedName) => CurrencyItems.Contains(normalizedName);
 
-        private static readonly Dictionary<string, string> CategoryMapping = new(StringComparer.OrdinalIgnoreCase)
-        {
-            // Food and medicine
-            { "Food", "Provisions" },
-            { "Drinks", "Provisions" },
-            { "Medkits", "Medical" },
-            { "Medical supplies", "Medical" },
-            { "Injury treatment", "Medical" },
-            { "Stimulants", "Medical" },
-            { "Drugs", "Medical" },
-
-            // Barter and construction materials
-            { "Electronics", "Barter" },
-            { "Building materials", "Barter" },
-            { "Flammable materials", "Barter" },
-            { "Energy elements", "Barter" },
-            { "Household goods", "Barter" },
-            { "Tools", "Barter" },
-            { "Valuables", "Barter" },
-            { "Other", "Barter" },
-
-            // Keys and information
-            { "Info items", "KeysIntel" },
-            { "Keys", "KeysIntel" },
-            { "Keycards", "KeysIntel" },
-            { "Maps", "KeysIntel" },
-            { "Extraction intel", "KeysIntel" },
-            { "Notes", "KeysIntel" },
-
-            // Weapons, ammunition and parts
-            { "Weapons", "Weapons" },
-            { "Rounds", "Ammunition" },
-            { "Ammo boxes", "Ammunition" },
-            { "Shrapnel", "Ammunition" },
-            { "Magazines", "Ammunition" },
-            { "Mounts", "WeaponParts" },
-            { "Stocks & chassis", "WeaponParts" },
-            { "Handguards", "WeaponParts" },
-            { "Barrels", "WeaponParts" },
-            { "Flash hiders & muzzle brakes", "WeaponParts" },
-            { "Suppressors", "WeaponParts" },
-            { "Muzzle adapters", "WeaponParts" },
-            { "Iron sights", "WeaponParts" },
-            { "Pistol grips", "WeaponParts" },
-            { "Receivers and slides", "WeaponParts" },
-            { "Charging handles", "WeaponParts" },
-            { "Gas blocks", "WeaponParts" },
-            { "Foregrips", "WeaponParts" },
-            { "Auxiliary parts", "WeaponParts" },
-            { "Bipods", "WeaponParts" },
-            { "Underbarrel grenade launchers", "WeaponParts" },
-            { "Scopes", "WeaponParts" },
-            { "Assault scopes", "WeaponParts" },
-            { "Reflex sights", "WeaponParts" },
-            { "Compact reflex sights", "WeaponParts" },
-            { "Night vision scopes", "WeaponParts" },
-            { "Thermal vision sights", "WeaponParts" },
-            { "Flashlights", "WeaponParts" },
-            { "Tactical combo devices", "WeaponParts" },
-
-            // Wearable equipment
-            { "Armor vests", "Equipment" },
-            { "Armor plates", "Equipment" },
-            { "Chest rigs", "Equipment" },
-            { "Backpacks", "Equipment" },
-            { "Headwear", "Equipment" },
-            { "Eyewear", "Equipment" },
-            { "Face cover", "Equipment" },
-            { "Earpieces", "Equipment" },
-            { "Armbands", "Equipment" },
-            { "Special equipment", "Equipment" },
-            { "Helmet mods", "Equipment" },
-
-            // Storage, money and special items
-            { "Containers & cases", "Containers" },
-            { "Secure containers", "Containers" },
-            { "Money", "Currency" },
-            { "Quest Items", "Quest" },
-            { "Dogtag", "Quest" },
-            { "Posters", "Other" },
-        };
-
         public string GetParentCategory(string? category)
         {
             if (string.IsNullOrEmpty(category))
@@ -114,9 +32,7 @@ namespace TarkovHelper.Services
 
             var baseCategory = category.Contains('|') ? category.Split('|')[0] : category;
 
-            return CategoryMapping.TryGetValue(baseCategory, out var parentCategory)
-                ? parentCategory
-                : "Other";
+            return string.IsNullOrWhiteSpace(baseCategory) ? "Other" : baseCategory.Trim();
         }
 
         public async Task<List<AggregatedItemViewModel>> GetAggregatedItemsAsync(Dictionary<string, TarkovItem>? itemLookup)
@@ -195,6 +111,7 @@ namespace TarkovHelper.Services
                     {
                         ItemId = questItem.ItemId,
                         ItemNormalizedName = questItem.ItemNormalizedName,
+                        AlternativeItemKeys = questItem.AlternativeItemKeys,
                         DisplayName = displayName,
                         SubtitleName = subtitle,
                         SubtitleVisibility = showSubtitle ? Visibility.Visible : Visibility.Collapsed,
@@ -234,7 +151,11 @@ namespace TarkovHelper.Services
                 foreach (var questItem in task.RequiredItems)
                 {
                     TarkovItem? itemInfo = null;
-                    itemLookup?.TryGetValue(questItem.ItemNormalizedName, out itemInfo);
+                    var lookupKey = questItem.IsAlternativeGroup
+                        ? questItem.AlternativeItemIds.FirstOrDefault()
+                        : questItem.ItemNormalizedName;
+                    if (!string.IsNullOrWhiteSpace(lookupKey))
+                        itemLookup?.TryGetValue(lookupKey, out itemInfo);
 
                     if (itemInfo == null)
                         continue;
@@ -253,7 +174,12 @@ namespace TarkovHelper.Services
                         : IsCurrency(questItem.ItemNormalizedName) ? 1 : questItem.Amount;
                     var firCountToAdd = questItem.FoundInRaid ? countToAdd : 0;
 
-                    if (result.TryGetValue(questItem.ItemNormalizedName, out var existing))
+                    var aggregateKey = questItem.ItemNormalizedName;
+                    var aggregateName = questItem.IsAlternativeGroup && questItem.AlternativeItemNames.Count > 0
+                        ? string.Join(", ", questItem.AlternativeItemNames)
+                        : itemName;
+
+                    if (result.TryGetValue(aggregateKey, out var existing))
                     {
                         existing.QuestCount += countToAdd;
                         if (questItem.FoundInRaid)
@@ -264,13 +190,14 @@ namespace TarkovHelper.Services
                     }
                     else
                     {
-                        result[questItem.ItemNormalizedName] = new QuestItemAggregate
+                        result[aggregateKey] = new QuestItemAggregate
                         {
-                            ItemId = itemInfo?.Id ?? questItem.ItemNormalizedName,
-                            ItemName = itemName,
-                            ItemNameKo = itemInfo?.NameKo,
-                            ItemNameJa = itemInfo?.NameJa,
-                            ItemNormalizedName = questItem.ItemNormalizedName,
+                            ItemId = questItem.IsAlternativeGroup ? string.Empty : itemInfo?.Id ?? questItem.ItemNormalizedName,
+                            ItemName = aggregateName,
+                            ItemNameKo = questItem.IsAlternativeGroup ? aggregateName : itemInfo?.NameKo,
+                            ItemNameJa = questItem.IsAlternativeGroup ? null : itemInfo?.NameJa,
+                            ItemNormalizedName = aggregateKey,
+                            AlternativeItemKeys = questItem.IsAlternativeGroup ? questItem.AlternativeItemIds : Array.Empty<string>(),
                             IconLink = iconLink,
                             WikiLink = wikiLink,
                             Category = itemInfo?.Category,

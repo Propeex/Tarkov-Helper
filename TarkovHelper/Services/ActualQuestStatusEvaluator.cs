@@ -3,9 +3,9 @@ using TarkovHelper.Models;
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// Calculates the status exposed by the helper. Because the helper has no
-/// separate quest-accept action, every quest whose start conditions are met is
-/// represented as Active. Done and Failed remain explicit user progress.
+/// Calculates the status exposed by the helper. Start conditions determine
+/// whether a quest is available, while Active is reserved for a quest that was
+/// explicitly started and persisted in user progress.
 /// </summary>
 internal sealed class ActualQuestStatusEvaluator
 {
@@ -54,7 +54,9 @@ internal sealed class ActualQuestStatusEvaluator
                 return Cache(taskKey, QuestStatus.LevelLocked);
             }
 
-            return Cache(taskKey, QuestStatus.Active);
+            return Cache(
+                taskKey,
+                storedStatus == QuestStatus.Active ? QuestStatus.Active : QuestStatus.Available);
         }
         finally
         {

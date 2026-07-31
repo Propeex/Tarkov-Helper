@@ -34,6 +34,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
         await ExecuteNonQueryAsync(connection, "PRAGMA foreign_keys=OFF;", cancellationToken);
         await ExecuteNonQueryAsync(connection, "PRAGMA busy_timeout=60000;", cancellationToken);
         await EnsureAmmoTableAsync(connection, cancellationToken);
+        await EnsureQuestRequiredItemColumnsAsync(connection, cancellationToken);
 
         var requiredTables = new[]
         {
@@ -60,6 +61,10 @@ internal sealed partial class TarkovDataDatabaseBuilder
         var stationOldById = IndexRows(snapshots["HideoutStations"].Rows, "Id");
         var objectiveOldById = IndexRows(snapshots["QuestObjectives"].Rows, "Id");
         var requirementOld = IndexRows(snapshots["QuestRequirements"].Rows, "QuestId", "RequiredQuestId");
+        var requirementsOldByQuest = snapshots["QuestRequirements"].Rows
+            .Where(row => !string.IsNullOrWhiteSpace(ReadString(row, "QuestId")))
+            .GroupBy(row => ReadString(row, "QuestId")!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var itemRows = new List<RowData>(data.Items.Count);
         var itemIdByApiId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -135,7 +140,17 @@ internal sealed partial class TarkovDataDatabaseBuilder
             PreserveOrSet(row, "NameJA", old, null);
             Set(row, "Trader", Fallback(task.Trader?.Name, task.Trader?.NormalizedName, "Unknown"));
             Set(row, "Location", task.Map?.NormalizedName ?? "any");
-            Set(row, "MinLevel", task.MinPlayerLevel);
+
+            var minPlayerLevel = task.MinPlayerLevel;
+            if (minPlayerLevel.GetValueOrDefault() <= 0 &&
+                TryGetValue(old, "MinLevel", out var oldMinLevelValue) &&
+                oldMinLevelValue is not null &&
+                oldMinLevelValue is not DBNull &&
+                Convert.ToInt32(oldMinLevelValue, CultureInfo.InvariantCulture) > 0)
+            {
+                minPlayerLevel = Convert.ToInt32(oldMinLevelValue, CultureInfo.InvariantCulture);
+            }
+            Set(row, "MinLevel", minPlayerLevel);
             Set(row, "KappaRequired", task.KappaRequired ? 1 : 0);
             Set(row, "Faction", task.FactionName);
             Set(row, "NormalizedName", Fallback(task.NormalizedName, Normalize(task.Name), task.Id));
@@ -145,6 +160,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
             questRows.Add(row);
         }
 
+        var validQuestIds = questIdByApiId.Values.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var questRequirementRows = new List<RowData>();
         var questObjectiveRows = new List<RowData>();
         var questRequiredItemRows = new List<RowData>();
@@ -155,24 +171,39 @@ internal sealed partial class TarkovDataDatabaseBuilder
             if (!questIdByApiId.TryGetValue(task.Id, out var questId))
                 continue;
 
-            for (var index = 0; index < task.TaskRequirements.Count; index++)
+            if (task.TaskRequirements.Count > 0)
             {
-                var requirement = task.TaskRequirements[index];
-                if (requirement.Task?.Id is not { Length: > 0 } apiRequiredId ||
-                    !questIdByApiId.TryGetValue(apiRequiredId, out var requiredQuestId))
-                    continue;
+                for (var index = 0; index < task.TaskRequirements.Count; index++)
+                {
+                    var requirement = task.TaskRequirements[index];
+                    if (requirement.Task?.Id is not { Length: > 0 } apiRequiredId ||
+                        !questIdByApiId.TryGetValue(apiRequiredId, out var requiredQuestId))
+                        continue;
 
-                var oldKey = BuildCompositeKey(questId, requiredQuestId);
-                var old = requirementOld.GetValueOrDefault(oldKey);
-                var row = CloneRow(old);
-                Set(row, "QuestId", questId);
-                Set(row, "RequiredQuestId", requiredQuestId);
-                Set(row, "RequirementType", requirement.Status.FirstOrDefault() ?? "complete");
-                if (!HasValue(row, "GroupId"))
-                    Set(row, "GroupId", 0);
-                Set(row, "SortOrder", index);
-                Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-                questRequirementRows.Add(row);
+                    var oldKey = BuildCompositeKey(questId, requiredQuestId);
+                    var old = requirementOld.GetValueOrDefault(oldKey);
+                    var row = CloneRow(old);
+                    Set(row, "QuestId", questId);
+                    Set(row, "RequiredQuestId", requiredQuestId);
+                    Set(row, "RequirementType", requirement.Status.FirstOrDefault() ?? "complete");
+                    if (!HasValue(row, "GroupId"))
+                        Set(row, "GroupId", 0);
+                    Set(row, "SortOrder", index);
+                    Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                    questRequirementRows.Add(row);
+                }
+            }
+            else if (requirementsOldByQuest.TryGetValue(questId, out var oldRequirements))
+            {
+                foreach (var oldRequirement in oldRequirements)
+                {
+                    var requiredQuestId = ReadString(oldRequirement, "RequiredQuestId");
+                    if (string.IsNullOrWhiteSpace(requiredQuestId) ||
+                        !validQuestIds.Contains(requiredQuestId))
+                        continue;
+
+                    questRequirementRows.Add(CloneRow(oldRequirement));
+                }
             }
 
             var koreanObjectives = localized.Korean?.Objectives
@@ -220,12 +251,42 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     .ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase)
                     ?? new Dictionary<string, ApiItemReference>(StringComparer.OrdinalIgnoreCase);
 
-                foreach (var requiredItem in CollapseLogicalRequiredItems(objective.Items))
-                {
-                    if (string.IsNullOrWhiteSpace(requiredItem.Id) ||
-                        !itemIdByApiId.TryGetValue(requiredItem.Id, out var itemId))
-                        continue;
+                var validRequiredItems = objective.Items
+                    .Where(item => !string.IsNullOrWhiteSpace(item.Id) && itemIdByApiId.ContainsKey(item.Id))
+                    .GroupBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .ToList();
 
+                if (validRequiredItems.Count > 1)
+                {
+                    var alternativeIds = validRequiredItems.Select(item => itemIdByApiId[item.Id]).ToList();
+                    var alternativeNames = validRequiredItems.Select(item =>
+                    {
+                        koItems.TryGetValue(item.Id, out var localizedItem);
+                        return Fallback(localizedItem?.Name, item.Name, item.Id)!;
+                    }).ToList();
+                    var itemRow = new RowData();
+                    Set(itemRow, "QuestId", questId);
+                    Set(itemRow, "ObjectiveId", objectiveId);
+                    Set(itemRow, "ItemId", null);
+                    Set(itemRow, "ItemName", string.Join(", ", alternativeNames));
+                    Set(itemRow, "ItemNameKO", string.Join(", ", alternativeNames));
+                    Set(itemRow, "Count", Math.Max(1, objective.Count ?? 1));
+                    Set(itemRow, "RequiresFIR", objective.FoundInRaid == true ? 1 : 0);
+                    Set(itemRow, "RequirementType", objective.Type);
+                    Set(itemRow, "DogtagMinLevel", objective.DogTagLevel);
+                    Set(itemRow, "RequirementGroupId", objectiveId);
+                    Set(itemRow, "IsAlternativeGroup", 1);
+                    Set(itemRow, "AlternativeItemIds", JsonSerializer.Serialize(alternativeIds));
+                    Set(itemRow, "AlternativeItemNames", JsonSerializer.Serialize(alternativeNames));
+                    Set(itemRow, "SortOrder", index);
+                    Set(itemRow, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                    questRequiredItemRows.Add(itemRow);
+                }
+                else if (validRequiredItems.Count == 1)
+                {
+                    var requiredItem = validRequiredItems[0];
+                    var itemId = itemIdByApiId[requiredItem.Id];
                     koItems.TryGetValue(requiredItem.Id, out var requiredItemKo);
                     var itemRow = new RowData();
                     Set(itemRow, "QuestId", questId);
@@ -237,6 +298,10 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(itemRow, "RequiresFIR", objective.FoundInRaid == true ? 1 : 0);
                     Set(itemRow, "RequirementType", objective.Type);
                     Set(itemRow, "DogtagMinLevel", objective.DogTagLevel);
+                    Set(itemRow, "RequirementGroupId", null);
+                    Set(itemRow, "IsAlternativeGroup", 0);
+                    Set(itemRow, "AlternativeItemIds", null);
+                    Set(itemRow, "AlternativeItemNames", null);
                     Set(itemRow, "SortOrder", index);
                     Set(itemRow, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     questRequiredItemRows.Add(itemRow);
@@ -466,6 +531,34 @@ internal sealed partial class TarkovDataDatabaseBuilder
             hideoutTraderRequirementRows.Count,
             hideoutSkillRequirementRows.Count);
     }
+    private static async Task EnsureQuestRequiredItemColumnsAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "PRAGMA table_info(QuestRequiredItems);";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                columns.Add(reader.GetString(1));
+        }
+
+        var additions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ObjectiveId"] = "TEXT",
+            ["RequirementGroupId"] = "TEXT",
+            ["IsAlternativeGroup"] = "INTEGER NOT NULL DEFAULT 0",
+            ["AlternativeItemIds"] = "TEXT",
+            ["AlternativeItemNames"] = "TEXT"
+        };
+        foreach (var (name, definition) in additions)
+        {
+            if (!columns.Contains(name))
+                await ExecuteNonQueryAsync(connection, $"ALTER TABLE QuestRequiredItems ADD COLUMN [{name}] {definition};", cancellationToken);
+        }
+    }
+
     private static async Task EnsureAmmoTableAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
         await ExecuteNonQueryAsync(connection, """
@@ -496,31 +589,37 @@ internal sealed partial class TarkovDataDatabaseBuilder
         {
             sources.AddRange(ammo.AcquisitionSource
                 .Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(value => !string.Equals(value, "raid/other", StringComparison.OrdinalIgnoreCase) &&
-                                !string.Equals(value, "레이드 획득/기타", StringComparison.OrdinalIgnoreCase)));
+                .Where(source => source.Equals("raid-found", StringComparison.OrdinalIgnoreCase) ||
+                                 source.StartsWith("trader:", StringComparison.OrdinalIgnoreCase) ||
+                                 source.StartsWith("craft:", StringComparison.OrdinalIgnoreCase)));
         }
-        var vendor = item.BuyFor.Select(value => value.Vendor?.Name).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        if (!string.IsNullOrWhiteSpace(vendor))
-            sources.Add($"{vendor} purchase");
-        else if (item.BuyFor.Count > 0)
-            sources.Add("trader purchase");
 
-        var barterTrader = item.BartersFor.Select(value => value.Trader?.Name).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        if (!string.IsNullOrWhiteSpace(barterTrader))
-            sources.Add($"{barterTrader} barter");
-        else if (item.BartersFor.Count > 0)
-            sources.Add("trader barter");
+        foreach (var barter in item.BartersFor)
+        {
+            var trader = barter.Trader?.Name;
+            if (!string.IsNullOrWhiteSpace(trader))
+                sources.Add($"trader:{trader}:level:{Math.Max(1, barter.Level ?? 1)}");
+        }
 
-        var craftStation = item.CraftsFor.Select(value => value.Station?.Name).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        if (!string.IsNullOrWhiteSpace(craftStation))
-            sources.Add($"{craftStation} craft");
-        else if (item.CraftsFor.Count > 0)
-            sources.Add("hideout craft");
+        foreach (var craft in item.CraftsFor)
+        {
+            var station = craft.Station?.Name;
+            if (!string.IsNullOrWhiteSpace(station))
+                sources.Add($"craft:{station}:level:{Math.Max(1, craft.Level ?? 1)}");
+        }
 
-        if (item.ReceivedFromTasks.Count > 0)
-            sources.Add("task reward");
+        foreach (var purchase in item.BuyFor)
+        {
+            var trader = purchase.Vendor?.Name;
+            if (!string.IsNullOrWhiteSpace(trader))
+                sources.Add($"trader:{trader}");
+        }
 
-        return sources.Count == 0 ? "raid/other" : string.Join(" · ", sources.Distinct());
+        if (sources.Count == 0)
+            sources.Add("raid-found");
+
+        return string.Join(" · ", sources.Distinct(StringComparer.OrdinalIgnoreCase));
     }
+
 
 }
