@@ -151,6 +151,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
             54,
             65,
             cancellationToken);
+        var hideoutStationsEn = ParseNamedLookup(hideoutDocuments.English);
+        EnrichAmmoSourcesFromStaticTaskRewards(
+            itemsEn,
+            taskDocuments.English,
+            tradersEn,
+            hideoutStationsEn);
+
         var hideoutEn = ParseHideout(hideoutDocuments.English, itemLookupEn, tradersEn);
         var hideoutKo = ParseHideout(hideoutDocuments.Korean, itemLookupKo, tradersKo);
 

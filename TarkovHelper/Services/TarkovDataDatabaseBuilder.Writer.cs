@@ -491,10 +491,14 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
     private static string ResolveAcquisitionSource(ApiItem item, ApiAmmoProperties ammo)
     {
-        if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))
-            return ammo.AcquisitionSource;
-
         var sources = new List<string>();
+        if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))
+        {
+            sources.AddRange(ammo.AcquisitionSource
+                .Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(value => !string.Equals(value, "raid/other", StringComparison.OrdinalIgnoreCase) &&
+                                !string.Equals(value, "레이드 획득/기타", StringComparison.OrdinalIgnoreCase)));
+        }
         var vendor = item.BuyFor.Select(value => value.Vendor?.Name).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
         if (!string.IsNullOrWhiteSpace(vendor))
             sources.Add($"{vendor} purchase");
