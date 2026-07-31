@@ -2,8 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="스캐너 미니멀 UI"
-        Width="320"
-        MinWidth="220"
+        Width="390"
+        MinWidth="300"
         SizeToContent="Height"
         WindowStyle="None"
         ResizeMode="NoResize"
@@ -15,22 +15,79 @@
         MouseLeftButtonDown="Window_MouseLeftButtonDown"
         LocationChanged="Window_LocationChanged"
         Closing="Window_Closing">
-    <Border Background="#EB1A1A1A"
+    <Border x:Name="MainBorder"
+            Background="#EE1A1A1A"
             BorderBrush="{StaticResource AccentBrush}"
             BorderThickness="1"
             CornerRadius="6"
-            Padding="14,10">
+            Padding="15,11">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.55"/>
+            <DropShadowEffect BlurRadius="9" ShadowDepth="2" Opacity="0.55"/>
         </Border.Effect>
-        <TextBlock x:Name="TxtItemName"
-                   Text="이름 스캔 대기 중"
-                   Foreground="{StaticResource TextPrimaryBrush}"
-                   FontFamily="{DynamicResource MaplestoryFont}"
-                   FontSize="{DynamicResource FontSizeMedium}"
-                   FontWeight="SemiBold"
-                   TextWrapping="Wrap"
-                   TextAlignment="Center"
-                   HorizontalAlignment="Stretch"/>
+        <StackPanel>
+            <TextBlock x:Name="TxtWaiting"
+                       Text="아이템 상세 화면의 돋보기를 클릭하세요."
+                       Foreground="{StaticResource TextSecondaryBrush}"
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"/>
+
+            <TextBlock x:Name="TxtItemName"
+                       Text=""
+                       FontSize="{DynamicResource FontSizeLarge}"
+                       FontWeight="Bold"
+                       TextWrapping="Wrap"
+                       TextAlignment="Center"
+                       HorizontalAlignment="Stretch"
+                       Visibility="Collapsed"/>
+
+            <Separator x:Name="SepPrice" Margin="0,8,0,6" Visibility="Collapsed"/>
+
+            <Grid x:Name="RowAveragePrice" Margin="0,2" Visibility="Collapsed">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="플리마켓 평균가" Foreground="{StaticResource TextSecondaryBrush}"/>
+                <TextBlock x:Name="TxtAveragePrice" Grid.Column="1" FontWeight="SemiBold"/>
+            </Grid>
+
+            <Grid x:Name="RowPricePerSlot" Margin="0,2" Visibility="Collapsed">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="칸당 플리마켓 가격" Foreground="{StaticResource TextSecondaryBrush}"/>
+                <TextBlock x:Name="TxtPricePerSlot" Grid.Column="1" FontWeight="SemiBold"/>
+            </Grid>
+
+            <Grid x:Name="RowTraderPrice" Margin="0,2" Visibility="Collapsed">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock x:Name="TxtTraderLabel" Text="최고 상인 판매가" Foreground="{StaticResource TextSecondaryBrush}"/>
+                <TextBlock x:Name="TxtTraderPrice" Grid.Column="1" FontWeight="SemiBold"/>
+            </Grid>
+
+            <Separator x:Name="SepTracking" Margin="0,7,0,6" Visibility="Collapsed"/>
+
+            <Grid x:Name="RowKappa" Margin="0,2" Visibility="Collapsed">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="카파 퀘스트 필요" Foreground="{StaticResource TextSecondaryBrush}"/>
+                <TextBlock x:Name="TxtKappa" Grid.Column="1" FontWeight="SemiBold"/>
+            </Grid>
+
+            <StackPanel x:Name="RowNeeded" Margin="0,2" Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="추가 필요 수량" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock x:Name="TxtAdditionalNeeded" Grid.Column="1" FontWeight="Bold"/>
+                </Grid>
+                <TextBlock x:Name="TxtRequirementBreakdown"
+                           Margin="0,3,0,0"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           FontSize="{DynamicResource FontSizeSmall}"
+                           TextAlignment="Right"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <TextBlock x:Name="TxtUpdatedAt"
+                       Margin="0,7,0,0"
+                       Foreground="{StaticResource TextSecondaryBrush}"
+                       FontSize="{DynamicResource FontSizeSmall}"
+                       TextAlignment="Right"
+                       Visibility="Collapsed"/>
+        </StackPanel>
     </Border>
 </Window>

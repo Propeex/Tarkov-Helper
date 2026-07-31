@@ -15,7 +15,7 @@ namespace TarkovHelper.Services.Scanner;
 
 /// <summary>
 /// RatScanner의 이름 인식 경로만 Helper에 맞게 분리한 한국어 전용 스캐너입니다.
-/// 아이콘 스캔, 검색 오버레이, 가격 조회는 포함하지 않습니다.
+/// 아이콘 스캔과 검색 오버레이는 포함하지 않으며, 가격은 tarkov.dev 정적 데이터 캐시를 사용합니다.
 /// </summary>
 public sealed class ScannerService : IDisposable
 {
@@ -23,6 +23,13 @@ public sealed class ScannerService : IDisposable
     private const string OpacitySettingKey = "scanner.minimalOpacity";
     private const string LeftSettingKey = "scanner.minimalLeft";
     private const string TopSettingKey = "scanner.minimalTop";
+    private const string ClickThroughSettingKey = "scanner.minimalClickThrough";
+    private const string ShowNameSettingKey = "scanner.showName";
+    private const string ShowAveragePriceSettingKey = "scanner.showAveragePrice";
+    private const string ShowPricePerSlotSettingKey = "scanner.showPricePerSlot";
+    private const string ShowTraderPriceSettingKey = "scanner.showTraderPrice";
+    private const string ShowKappaSettingKey = "scanner.showKappa";
+    private const string ShowNeededSettingKey = "scanner.showNeeded";
     private const string ValidationEnvironmentVariable = "TARKOV_SCANNER_SELF_TEST";
 
     private static readonly ILogger Log = TarkovHelper.Services.Logging.Log.For<ScannerService>();
@@ -32,10 +39,13 @@ public sealed class ScannerService : IDisposable
     private readonly object _engineSync = new();
     private readonly ScannerMouseHook _mouseHook;
     private readonly SettingsService _settings = SettingsService.Instance;
+    private readonly ScannerPriceService _priceService = new();
 
     private RatEyeEngine? _engine;
     private Database? _itemDatabase;
     private Dictionary<string, string> _officialNamesById = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, TarkovItem> _itemsById = new(StringComparer.OrdinalIgnoreCase);
+    private ScannerItemDisplayData? _lastDisplayData;
     private ScannerMinimalWindow? _minimalWindow;
     private int _engineScreenWidth;
     private int _engineScreenHeight;
@@ -51,6 +61,8 @@ public sealed class ScannerService : IDisposable
     public event EventHandler<string>? ItemNameRecognized;
     public event EventHandler<bool>? EnabledChanged;
     public event EventHandler<int>? MinimalOpacityChanged;
+    public event EventHandler? MinimalStateChanged;
+    public event EventHandler? DisplaySettingsChanged;
 
     private ScannerService()
     {
@@ -93,6 +105,40 @@ public sealed class ScannerService : IDisposable
 
     public string Status => _status;
 
+    public bool IsMinimalVisible => _minimalWindow?.IsVisible == true;
+
+    public bool MinimalClickThrough
+    {
+        get => ReadBool(ClickThroughSettingKey, false);
+        set
+        {
+            if (MinimalClickThrough == value)
+                return;
+            _settings.SetValue(ClickThroughSettingKey, value.ToString());
+            _minimalWindow?.SetClickThrough(value);
+            MinimalStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public bool ShowName { get => ReadBool(ShowNameSettingKey, true); set => SetDisplayOption(ShowNameSettingKey, value); }
+    public bool ShowAveragePrice { get => ReadBool(ShowAveragePriceSettingKey, true); set => SetDisplayOption(ShowAveragePriceSettingKey, value); }
+    public bool ShowPricePerSlot { get => ReadBool(ShowPricePerSlotSettingKey, true); set => SetDisplayOption(ShowPricePerSlotSettingKey, value); }
+    public bool ShowTraderPrice { get => ReadBool(ShowTraderPriceSettingKey, true); set => SetDisplayOption(ShowTraderPriceSettingKey, value); }
+    public bool ShowKappa { get => ReadBool(ShowKappaSettingKey, true); set => SetDisplayOption(ShowKappaSettingKey, value); }
+    public bool ShowNeeded { get => ReadBool(ShowNeededSettingKey, true); set => SetDisplayOption(ShowNeededSettingKey, value); }
+
+    private bool ReadBool(string key, bool defaultValue) =>
+        bool.TryParse(_settings.GetValue(key, defaultValue.ToString()), out var value) ? value : defaultValue;
+
+    private void SetDisplayOption(string key, bool value)
+    {
+        if (ReadBool(key, true) == value)
+            return;
+        _settings.SetValue(key, value.ToString());
+        RefreshMinimalDisplay();
+        DisplaySettingsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public bool IsReady => _initialized && _itemDatabase != null && File.Exists(KoreanTrainedDataPath);
 
     private static string ScannerDataDirectory => Path.Combine(
@@ -121,6 +167,7 @@ public sealed class ScannerService : IDisposable
                 await ItemDbService.Instance.LoadItemsAsync();
 
             RebuildItemDatabase();
+            await _priceService.InitializeAsync();
             ItemDbService.Instance.DataRefreshed += OnItemDataRefreshed;
             _initialized = true;
 
@@ -159,6 +206,7 @@ public sealed class ScannerService : IDisposable
                 _engine = null;
                 _engineScreenWidth = 0;
                 _engineScreenHeight = 0;
+                _priceService.RequestRefresh();
             }
             catch (Exception ex)
             {
@@ -187,6 +235,11 @@ public sealed class ScannerService : IDisposable
                 group => group.Key,
                 group => group.First().NameKo!.Trim(),
                 StringComparer.OrdinalIgnoreCase);
+
+        _itemsById = ItemDbService.Instance.AllItems
+            .Where(item => !string.IsNullOrWhiteSpace(item.Id))
+            .GroupBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
         _itemDatabase = items.Count > 0 ? Database.FromItems(items) : null;
         Log.Info($"Scanner Korean item database prepared: {items.Count} items");
@@ -260,11 +313,34 @@ public sealed class ScannerService : IDisposable
                 return;
             }
 
+            if (!_itemsById.TryGetValue(inspection.Item.Id, out var item))
+            {
+                SetStatus("아이템은 인식했지만 최신 로컬 데이터를 찾지 못했습니다.");
+                return;
+            }
+
+            var context = await ScannerItemContextService.BuildAsync(item);
+            var price = _priceService.Get(item.Id);
+            var displayData = new ScannerItemDisplayData(
+                item.Id,
+                officialName,
+                price?.AverageFleaPrice,
+                price?.FleaPricePerSlot,
+                price?.BestTraderName,
+                price?.BestTraderPrice,
+                context.IsKappaRequired,
+                context.QuestRequired,
+                context.HideoutRequired,
+                context.Owned,
+                context.AdditionalNeeded,
+                price?.UpdatedAt);
+
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
-                EnsureMinimalWindow().SetItemName(officialName);
+                _lastDisplayData = displayData;
+                RefreshMinimalDisplay();
                 ItemNameRecognized?.Invoke(this, officialName);
-                SetStatus("아이템 이름을 인식했습니다.");
+                SetStatus("아이템 정보를 인식했습니다.");
             });
         }
         catch (Exception ex)
@@ -336,29 +412,45 @@ public sealed class ScannerService : IDisposable
         return bitmap;
     }
 
-    public void EnterMinimalMode()
+    public void ToggleMinimalWindow()
     {
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
-            var window = EnsureMinimalWindow();
-            PositionMinimalWindow(window);
-            window.Opacity = MinimalOpacity / 100.0;
-            window.Show();
-
-            if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
-                mainWindow.Hide();
+            if (IsMinimalVisible)
+                HideMinimalWindowCore();
+            else
+                ShowMinimalWindowCore();
         });
     }
 
-    public void RestoreMainWindow()
+    public void ShowMinimalWindow()
     {
-        System.Windows.Application.Current.Dispatcher.Invoke(() =>
-        {
-            _minimalWindow?.Hide();
-            if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
-                mainWindow.ShowScannerTab();
-        });
+        System.Windows.Application.Current.Dispatcher.Invoke(ShowMinimalWindowCore);
     }
+
+    public void HideMinimalWindow()
+    {
+        System.Windows.Application.Current.Dispatcher.Invoke(HideMinimalWindowCore);
+    }
+
+    private void ShowMinimalWindowCore()
+    {
+        var window = EnsureMinimalWindow();
+        PositionMinimalWindow(window);
+        window.Opacity = MinimalOpacity / 100.0;
+        window.SetClickThrough(MinimalClickThrough);
+        RefreshMinimalDisplay();
+        window.Show();
+        MinimalStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void HideMinimalWindowCore()
+    {
+        _minimalWindow?.Hide();
+        MinimalStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ToggleMinimalClickThrough() => MinimalClickThrough = !MinimalClickThrough;
 
     private ScannerMinimalWindow EnsureMinimalWindow()
     {
@@ -369,7 +461,23 @@ public sealed class ScannerService : IDisposable
         {
             Opacity = MinimalOpacity / 100.0
         };
+        _minimalWindow.SetClickThrough(MinimalClickThrough);
         return _minimalWindow;
+    }
+
+    private void RefreshMinimalDisplay()
+    {
+        if (_minimalWindow == null)
+            return;
+
+        _minimalWindow.SetDisplay(
+            _lastDisplayData,
+            ShowName,
+            ShowAveragePrice,
+            ShowPricePerSlot,
+            ShowTraderPrice,
+            ShowKappa,
+            ShowNeeded);
     }
 
     private void PositionMinimalWindow(ScannerMinimalWindow window)
