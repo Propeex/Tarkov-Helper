@@ -18,7 +18,7 @@ jobs:
           ref: agent/scanner-name-ui-1.7.0
           fetch-depth: 0
 
-      - name: Apply verified scanner integration
+      - name: Apply verified product source
         shell: bash
         run: |
           set -euo pipefail
@@ -27,10 +27,12 @@ jobs:
           echo "c4aa244389cc1cce7d030cda97ae8d6b2fc37f225101e83fe5544481f938ff3b  /tmp/scanner-integration.zip" | sha256sum -c -
           unzip -o /tmp/scanner-integration.zip -d .
 
+          # GitHub Actions tokens cannot update workflow files. Restore the current
+          # workflow directory and apply those files separately through the GitHub app.
+          git checkout HEAD -- .github/workflows
+
           rm -rf .scanner-payload
           rm -f .scanner-apply-trigger
-          rm -f .github/workflows/apply-scanner-integration.yml
-          rm -f .github/workflows/export-source-temp.yml
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
