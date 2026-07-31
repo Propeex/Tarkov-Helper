@@ -1,25 +1,79 @@
-name: Source Export
+name: Apply Map Lifecycle Fix
 
 on:
   push:
     branches:
       - agent/scanner-minimal-ui-data-1.7.1
-  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  export:
+  apply:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Upload source snapshot
-        uses: actions/upload-artifact@v4
         with:
-          name: source-snapshot
-          path: |
-            .
-            !.git/**
-          include-hidden-files: true
-          if-no-files-found: error
+          fetch-depth: 0
+
+      - name: Keep minimap alive outside map tab
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("TarkovHelper/Pages/Map/MapPage.xaml.cs")
+          text = path.read_text(encoding="utf-8")
+
+          old_unload = '''        GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
+        GlobalKeyboardHookService.Instance.IsEnabled = false;
+        _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
+        _overlayService.HideOverlay();
+        StopAutoTracking();
+        StopRaidEventMonitoring();'''
+          new_unload = '''        var keepMiniMapRunning = _overlayService.IsOverlayVisible;
+        if (!keepMiniMapRunning)
+        {
+            GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
+            GlobalKeyboardHookService.Instance.IsEnabled = false;
+            _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
+            _overlayService.HideOverlay();
+            StopAutoTracking();
+            StopRaidEventMonitoring();
+        }'''
+
+          old_raid = '''        // 이벤트 구독
+        _raidEventService.RaidEvent += OnRaidEvent;'''
+          new_raid = '''        // 지도 탭 재진입 시 중복 구독되지 않도록 정규화합니다.
+        _raidEventService.RaidEvent -= OnRaidEvent;
+        _raidEventService.RaidEvent += OnRaidEvent;'''
+
+          changed = False
+          if old_unload in text:
+              text = text.replace(old_unload, new_unload, 1)
+              changed = True
+          elif new_unload not in text:
+              raise SystemExit("Map unload block was not found")
+
+          if old_raid in text:
+              text = text.replace(old_raid, new_raid, 1)
+              changed = True
+          elif new_raid not in text:
+              raise SystemExit("Raid subscription block was not found")
+
+          if changed:
+              path.write_text(text, encoding="utf-8", newline="\n")
+
+      - name: Commit map lifecycle fix
+        shell: bash
+        run: |
+          if git diff --quiet -- TarkovHelper/Pages/Map/MapPage.xaml.cs; then
+            echo "Map lifecycle fix is already applied."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TarkovHelper/Pages/Map/MapPage.xaml.cs
+          git commit -m "Keep minimap running outside map tab"
+          git push origin HEAD:${GITHUB_REF_NAME}
