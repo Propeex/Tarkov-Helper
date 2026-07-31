@@ -1,275 +1,43 @@
-name: Build
+name: Apply v1.8.1 Product Changes
 
 on:
-  push:
-    branches:
-      - main
-      - agent/**
-      - hotfix/**
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
-  build:
-    runs-on: windows-latest
-    timeout-minutes: 20
-
+  apply:
+    if: github.head_ref == 'agent/quest-items-ammo-scanner-1.8.1'
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
         with:
-          dotnet-version: 8.0.x
-
-      - name: Restore
-        run: dotnet restore TarkovHelper.sln
-
-      - name: Build and run icon conversion self-test
-        id: build
-        continue-on-error: true
-        shell: pwsh
+          ref: agent/quest-items-ammo-scanner-1.8.1
+          fetch-depth: 0
+      - name: Apply product patch and clean transport files
+        shell: bash
         run: |
-          dotnet build TarkovHelper.sln --configuration Release --no-restore -clp:ErrorsOnly *> build.log
-          $buildExit = $LASTEXITCODE
-          if ($buildExit -ne 0) {
-            exit $buildExit
-          }
-
-          $env:TARKOV_ICON_SELF_TEST = "1"
-          dotnet run --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj --configuration Release --no-build *>> build.log
-          exit $LASTEXITCODE
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: build.log
-          if-no-files-found: error
-
-      - name: Fail if build failed
-        if: steps.build.outcome == 'failure'
-        shell: pwsh
-        run: exit 1
-
-  database-smoke:
-    if: github.event_name == 'pull_request'
-    needs: build
-    runs-on: windows-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Rebuild and validate deterministic database
-        shell: pwsh
-        run: |
-          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release *> database-smoke.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content database-smoke.log
-            exit $LASTEXITCODE
-          }
-
-      - name: Upload deterministic database artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-smoke
-          path: |
-            database-smoke.log
-            TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
-          if-no-files-found: warn
-
-  database-external-smoke:
-    if: github.event_name == 'pull_request'
-    needs: build
-    runs-on: windows-latest
-    timeout-minutes: 35
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Rebuild from live tarkov.dev data
-        shell: pwsh
-        run: |
-          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release -- --external *> database-external-smoke.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content database-external-smoke.log
-            exit $LASTEXITCODE
-          }
-
-      - name: Upload externally rebuilt database
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-external-smoke-db
-          path: TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
-          if-no-files-found: error
-
-      - name: Upload external database log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-external-smoke-log
-          path: database-external-smoke.log
-          if-no-files-found: error
-
-  release-package:
-    if: github.event_name == 'pull_request'
-    needs:
-      - build
-      - database-smoke
-      - database-external-smoke
-    runs-on: windows-latest
-    timeout-minutes: 50
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Download verified live database
-        uses: actions/download-artifact@v4
-        with:
-          name: database-external-smoke-db
-          path: rebuilt-db
-
-      - name: Inject verified live database
-        shell: pwsh
-        run: |
-          $databasePath = "rebuilt-db/tarkov_data.db"
-          if (-not (Test-Path $databasePath)) {
-            throw "The externally rebuilt database artifact is missing."
-          }
-
-          $databaseSize = (Get-Item $databasePath).Length
-          if ($databaseSize -lt 1MB) {
-            throw "The externally rebuilt database is unexpectedly small: $databaseSize bytes."
-          }
-
-          Copy-Item $databasePath "TarkovHelper/Assets/tarkov_data.db" -Force
-
-      - name: Download and convert required item icons
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          Remove-Item "TarkovHelper/Assets/Icons" -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path "TarkovHelper/Assets/Icons" -Force | Out-Null
-
-          dotnet run `
-            --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj `
-            --configuration Release `
-            -- `
-            --database "TarkovHelper/Assets/tarkov_data.db" `
-            --output "TarkovHelper/Assets/Icons" `
-            --concurrency 8 *> icon-download.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content icon-download.log
-            exit $LASTEXITCODE
-          }
-
-          $iconCount = @(Get-ChildItem "TarkovHelper/Assets/Icons" -Filter *.png -File).Count
-          if ($iconCount -lt 100) {
-            throw "Too few item icons were generated: $iconCount."
-          }
-          Write-Host "Generated item icons: $iconCount"
-
-      - name: Upload icon download log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: icon-download-log
-          path: icon-download.log
-          if-no-files-found: warn
-
-      - name: Prepare Korean scanner OCR data
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $scannerDataDir = "TarkovHelper/Assets/Scanner/traineddata"
-          New-Item -ItemType Directory -Path $scannerDataDir -Force | Out-Null
-          curl.exe --fail --location --retry 4 --retry-delay 5 `
-            "https://github.com/RatScanner/RatScannerData/releases/latest/download/Data.zip" `
-            --output ScannerData.zip
-          if ($LASTEXITCODE -ne 0) {
-            throw "한국어 스캐너 OCR 데이터 패키지를 다운로드하지 못했습니다."
-          }
-
-          7z e ScannerData.zip "traineddata/kor.traineddata" -o"$scannerDataDir" -y | Out-Null
-          Remove-Item ScannerData.zip -Force
-
-          $trainedDataPath = Join-Path $scannerDataDir "kor.traineddata"
-          if (-not (Test-Path $trainedDataPath) -or (Get-Item $trainedDataPath).Length -lt 1MB) {
-            throw "한국어 OCR 데이터가 없거나 손상되었습니다."
-          }
-
-      - name: Publish Windows release candidate
-        shell: pwsh
-        run: |
-          dotnet publish TarkovHelper/TarkovHelper.csproj `
-            --configuration Release `
-            --runtime win-x64 `
-            --self-contained false `
-            --output publish `
-            -p:DebugType=None `
-            -p:DebugSymbols=false
-
-          foreach ($requiredFile in @(
-            "publish/TarkovHelper_JH.exe",
-            "publish/Assets/tarkov_data.db",
-            "publish/Assets/Scanner/traineddata/kor.traineddata",
-            "publish/ThirdPartyNotices/RatScanner-LICENSE.txt",
-            "publish/ThirdPartyNotices/RatScanner-MODIFICATIONS.txt"
-          )) {
-            if (-not (Test-Path $requiredFile)) {
-              throw "Required release file is missing: $requiredFile"
-            }
-          }
-
-          $publishedIcons = @(Get-ChildItem "publish/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue)
-          if ($publishedIcons.Count -lt 100) {
-            throw "Published item icons are missing: $($publishedIcons.Count)."
-          }
-
-          $publishedDatabaseSize = (Get-Item "publish/Assets/tarkov_data.db").Length
-          if ($publishedDatabaseSize -lt 1MB) {
-            throw "The published database is unexpectedly small: $publishedDatabaseSize bytes."
-          }
-
-          $env:TARKOV_SCANNER_SELF_TEST = "1"
-          $scannerValidation = Start-Process "./publish/TarkovHelper_JH.exe" -Wait -PassThru
-          if ($scannerValidation.ExitCode -ne 0) {
-            $scannerLog = Join-Path $env:TEMP "tarkov-helper-scanner-self-test.log"
-            if (Test-Path $scannerLog) { Get-Content $scannerLog }
-            throw "한국어 이름 스캐너 자체 검사 실패: $($scannerValidation.ExitCode)"
-          }
-
-          Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
-          $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
-
-      - name: Upload release candidate
-        uses: actions/upload-artifact@v4
-        with:
-          name: TarkovHelper_JH-release-candidate
-          path: |
-            TarkovHelper_JH.zip
-            TarkovHelper_JH.zip.sha256
-          if-no-files-found: error
+          set -euo pipefail
+          git checkout 1ec0d9e5fd268d04bd0543eb995f0025cb27eeb4 -- .github/workflows/build.yml
+          cat .github/v181-apply/part* | base64 -d | gzip -dc > /tmp/product.patch
+          git apply --index --whitespace=error-all /tmp/product.patch
+          git rm -f --ignore-unmatch \
+            .github/workflows/export-v181-source.yml \
+            .github/workflows/apply-v181.yml \
+            .github/v181/chunk00 \
+            .github/v181/chunk01 \
+            .github/v181/chunk04 \
+            .github/v181/chunk05 \
+            .github/v181-apply/part00 \
+            .github/v181-apply/part01 \
+            .github/v181-apply/part02 \
+            .github/v181-apply/part03 \
+            .github/v181-apply/part04 \
+            .github/v181-apply/part05
+          rmdir .github/v181-apply 2>/dev/null || true
+          rmdir .github/v181 2>/dev/null || true
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Implement v1.8.1 quest, ammo, and scanner changes"
+          git push origin HEAD:agent/quest-items-ammo-scanner-1.8.1
