@@ -12,9 +12,9 @@
     <Title>타르코프헬퍼_JH</Title>
     <Description>Escape from Tarkov PVP 진행도·아이템·은신처 관리 도우미</Description>
     <!-- Version Info for Auto-Update -->
-    <Version>1.8.4</Version>
-    <AssemblyVersion>1.8.4.0</AssemblyVersion>
-    <FileVersion>1.8.4.0</FileVersion>
+    <Version>1.8.5</Version>
+    <AssemblyVersion>1.8.5.0</AssemblyVersion>
+    <FileVersion>1.8.5.0</FileVersion>
     <ApplicationIcon>1764579946.ico</ApplicationIcon>
     <SatelliteResourceLanguages>ko</SatelliteResourceLanguages>
     <!-- Run as Administrator -->

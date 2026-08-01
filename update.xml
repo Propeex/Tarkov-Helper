@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- v1.8.5 startup hotfix -->
 <item>
-    <version>1.8.4</version>
+    <version>1.8.5</version>
     <url>https://github.com/Propeex/Tarkov-Helper/releases/latest/download/TarkovHelper_JH.zip</url>
     <changelog>https://github.com/Propeex/Tarkov-Helper/releases/latest</changelog>
     <mandatory>false</mandatory>
