@@ -1,0 +1,87 @@
+name: Startup Smoke
+
+on:
+  push:
+    branches:
+      - main
+      - agent/**
+      - hotfix/**
+  pull_request:
+
+jobs:
+  startup-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet restore TarkovHelper.sln
+          dotnet publish TarkovHelper/TarkovHelper.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained false `
+            --output publish `
+            -p:DebugType=None `
+            -p:DebugSymbols=false
+
+          if (-not (Test-Path "publish/TarkovHelper_JH.exe")) {
+            throw "Published executable is missing."
+          }
+
+      - name: Launch published executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $workDir = (Resolve-Path "publish").Path
+          $exePath = Join-Path $workDir "TarkovHelper_JH.exe"
+          $crashLog = Join-Path $workDir "crash_log.txt"
+
+          Remove-Item $crashLog -Force -ErrorAction SilentlyContinue
+          $process = Start-Process `
+            -FilePath $exePath `
+            -WorkingDirectory $workDir `
+            -PassThru
+
+          try {
+            $deadline = (Get-Date).AddSeconds(20)
+            do {
+              Start-Sleep -Milliseconds 500
+              $process.Refresh()
+              if ($process.HasExited) {
+                if (Test-Path $crashLog) {
+                  Write-Host "--- crash_log.txt ---"
+                  Get-Content $crashLog
+                }
+                throw "Application exited during startup with code $($process.ExitCode)."
+              }
+            } while ((Get-Date) -lt $deadline)
+
+            Write-Host "Application remained alive for the startup validation window. PID=$($process.Id)"
+          }
+          finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              $process.WaitForExit(5000) | Out-Null
+            }
+          }
+
+      - name: Upload crash evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-smoke-failure
+          path: |
+            publish/crash_log.txt
+            publish/Logs/**
+          if-no-files-found: warn
