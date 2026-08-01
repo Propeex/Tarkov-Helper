@@ -1,0 +1,231 @@
+name: Verify v1.8.4 Release
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-v1.8.4-release'
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout verification branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+
+      - name: Wait for and download public release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path verification -Force | Out-Null
+
+          $found = $false
+          for ($attempt = 1; $attempt -le 60; $attempt++) {
+            gh release view v1.8.4 `
+              --repo $env:GITHUB_REPOSITORY `
+              --json name,tagName,isDraft,isPrerelease,url,publishedAt,targetCommitish,assets `
+              2>$null | Set-Content verification/release.json -Encoding utf8
+            if ($LASTEXITCODE -eq 0) {
+              $found = $true
+              break
+            }
+            Start-Sleep -Seconds 10
+          }
+          if (-not $found) { throw "The public v1.8.4 release did not become available." }
+
+          git fetch origin refs/tags/v1.8.4:refs/tags/v1.8.4 --force
+          if ($LASTEXITCODE -ne 0) { throw "Failed to fetch the v1.8.4 tag." }
+
+          gh release download v1.8.4 `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern "TarkovHelper_JH.zip" `
+            --dir verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the public release ZIP." }
+
+          gh release download v1.8.4 `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern "TarkovHelper_JH.zip.sha256" `
+            --dir verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the public checksum." }
+
+      - name: Verify tag, source, package, executable, and database
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zipPath = (Resolve-Path "verification/TarkovHelper_JH.zip").Path
+          $shaPath = (Resolve-Path "verification/TarkovHelper_JH.zip.sha256").Path
+          $releaseJson = (Resolve-Path "verification/release.json").Path
+          $tagCommit = (git rev-list -n 1 v1.8.4).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Failed to resolve the v1.8.4 tag." }
+
+          Expand-Archive $zipPath -DestinationPath verification/extracted -Force
+          $exePath = "verification/extracted/TarkovHelper_JH.exe"
+          $dbPath = "verification/extracted/Assets/tarkov_data.db"
+          $fileVersion = (Get-Item $exePath).VersionInfo.FileVersion
+          if ($fileVersion -ne "1.8.4.0") {
+            throw "Published executable version is invalid: $fileVersion"
+          }
+
+          $env:ZIP_PATH = $zipPath
+          $env:SHA_PATH = $shaPath
+          $env:RELEASE_JSON = $releaseJson
+          $env:DB_PATH = (Resolve-Path $dbPath).Path
+          $env:TAG_COMMIT = $tagCommit
+          $env:FILE_VERSION = $fileVersion
+
+          @'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import sqlite3
+          import subprocess
+          import zipfile
+
+          expected_commit = '615ec8ed18fcfd307811a9f96f2484c6459aee76'
+          tag_commit = os.environ['TAG_COMMIT']
+          if tag_commit != expected_commit:
+              raise SystemExit(f'tag target mismatch: expected={expected_commit}, actual={tag_commit}')
+
+          release = json.loads(pathlib.Path(os.environ['RELEASE_JSON']).read_text(encoding='utf-8-sig'))
+          if release['name'] != '타르코프헬퍼_JH v1.8.4' or release['tagName'] != 'v1.8.4':
+              raise SystemExit('release identity is invalid')
+          if release['isDraft'] or release['isPrerelease']:
+              raise SystemExit('v1.8.4 is not a public final release')
+          if release['targetCommitish'] != expected_commit:
+              raise SystemExit(f'release target mismatch: {release["targetCommitish"]}')
+
+          assets = {asset['name']: int(asset['size']) for asset in release['assets']}
+          for required in ('TarkovHelper_JH.zip', 'TarkovHelper_JH.zip.sha256'):
+              if assets.get(required, 0) <= 0:
+                  raise SystemExit(f'missing or empty release asset: {required}')
+
+          zip_path = pathlib.Path(os.environ['ZIP_PATH'])
+          declared_hash = pathlib.Path(os.environ['SHA_PATH']).read_text(encoding='ascii').strip().split()[0].lower()
+          actual_hash = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+          if declared_hash != actual_hash:
+              raise SystemExit(f'checksum mismatch: declared={declared_hash}, actual={actual_hash}')
+
+          def released_source(path):
+              return subprocess.check_output(
+                  ['git', 'show', f'v1.8.4:{path}'],
+                  text=True,
+                  encoding='utf-8',
+              )
+
+          project = released_source('TarkovHelper/TarkovHelper.csproj')
+          if '<Version>1.8.4</Version>' not in project or '<FileVersion>1.8.4.0</FileVersion>' not in project:
+              raise SystemExit('released project version metadata is invalid')
+
+          navigation = released_source('TarkovHelper/MainWindow.MiniMapNavigation.cs')
+          for marker in (
+              'PreserveMiniMapAcrossNextTabUnload',
+              'ReleaseForPermanentPageReplacement',
+              'RadioPvp',
+              'RadioPve',
+              'PageContent.Content is not MapPage',
+          ):
+              if marker not in navigation:
+                  raise SystemExit(f'minimap navigation marker is missing: {marker}')
+
+          lifetime = released_source('TarkovHelper/Pages/Map/MapPage.MiniMapLifetime.cs')
+          for marker in (
+              'MapTrackerPage_UnloadedWithMiniMapPersistence',
+              'NormalizeMiniMapRuntimeSubscriptions',
+              '_overlayService.IsOverlayVisible',
+              '_overlayService.HideOverlay()',
+              'StopAutoTracking()',
+              'StopRaidEventMonitoring()',
+          ):
+              if marker not in lifetime:
+                  raise SystemExit(f'minimap lifetime marker is missing: {marker}')
+
+          forbidden_names = {
+              'user_data.db', 'quest_progress.json', 'quest_progress_v2.json',
+              'objective_progress.json', 'hideout_progress.json', 'item_inventory.json',
+              'settings.json', 'app_settings.json'
+          }
+          required_files = {
+              'tarkovhelper_jh.exe',
+              'assets/tarkov_data.db',
+              'assets/db/icons/markers/boss.svg',
+              'assets/db/icons/markers/cultist.svg',
+              'assets/db/icons/markers/lever.svg',
+              'assets/db/icons/markers/pmc spawn.svg',
+              'assets/db/icons/markers/rogue.svg',
+              'assets/db/icons/markers/sniperscav.svg',
+          }
+
+          with zipfile.ZipFile(zip_path) as archive:
+              entries = archive.infolist()
+              names = [entry.filename.replace('\\', '/') for entry in entries]
+              lowered = [name.lower() for name in names]
+              files = {name for name in lowered if not name.endswith('/')}
+              if len(names) != len(set(names)):
+                  raise SystemExit('duplicate ZIP entries')
+              if any(name.startswith('/') or '..' in pathlib.PurePosixPath(name).parts for name in names):
+                  raise SystemExit('unsafe ZIP path')
+              if required_files - files:
+                  raise SystemExit(f'required packaged files are missing: {sorted(required_files - files)}')
+              if any(not entry.is_dir() and entry.file_size == 0 for entry in entries):
+                  raise SystemExit('empty packaged file')
+              if any(pathlib.PurePosixPath(name).name in forbidden_names for name in lowered):
+                  raise SystemExit('user progress or settings file included')
+              if any(name.endswith('.pdb') for name in lowered):
+                  raise SystemExit('debug symbols included')
+              item_icons = [name for name in lowered if name.startswith('assets/icons/') and name.endswith('.png')]
+              if len(item_icons) < 100:
+                  raise SystemExit(f'too few item icons: {len(item_icons)}')
+
+          connection = sqlite3.connect(os.environ['DB_PATH'])
+          if connection.execute('pragma integrity_check').fetchone()[0] != 'ok':
+              raise SystemExit('SQLite integrity check failed')
+          if connection.execute('pragma foreign_key_check').fetchall():
+              raise SystemExit('SQLite foreign-key violation')
+
+          counts = {
+              'items': connection.execute('select count(*) from Items').fetchone()[0],
+              'quests': connection.execute('select count(*) from Quests').fetchone()[0],
+              'ammo': connection.execute('select count(*) from Ammo').fetchone()[0],
+              'range_groups': connection.execute('select count(*) from QuestRequiredItems where IsAlternativeGroup = 1').fetchone()[0],
+          }
+          if counts['items'] < 4000 or counts['quests'] < 200 or counts['ammo'] < 150 or counts['range_groups'] < 20:
+              raise SystemExit(f'published database counts are unexpectedly low: {counts}')
+          connection.close()
+
+          result = {
+              'release_url': release['url'],
+              'published_at': release['publishedAt'],
+              'target_commit': tag_commit,
+              'file_version': os.environ['FILE_VERSION'],
+              'sha256': actual_hash,
+              'zip_entries': len(names),
+              'item_icons': len(item_icons),
+              **counts,
+          }
+          pathlib.Path('verification-result.json').write_text(
+              json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True),
+              encoding='utf-8',
+          )
+          print('RELEASE_OK ' + json.dumps(result, ensure_ascii=False, sort_keys=True))
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload independent verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1.8.4-release-verification
+          path: verification-result.json
+          if-no-files-found: error
