@@ -52,6 +52,48 @@ public partial class MapPage
     }
 
     /// <summary>
+    /// 프로필 전환처럼 지도 페이지 인스턴스가 영구적으로 교체되기 전에
+    /// 탭 밖에서 유지 중인 미니맵 런타임과 모든 장기 이벤트 구독을 정리합니다.
+    /// </summary>
+    internal void ReleaseForPermanentPageReplacement()
+    {
+        _preserveMiniMapAcrossNextUnload = false;
+
+        Loaded -= MapTrackerPage_Loaded;
+        Unloaded -= MapTrackerPage_Unloaded;
+        Unloaded -= MapTrackerPage_UnloadedWithMiniMapPersistence;
+
+        _mapPageActive = false;
+        _loadingCts?.Cancel();
+        _loadingCts?.Dispose();
+        _loadingCts = null;
+        SaveMapState();
+
+        _progressService.ProgressChanged -= OnQuestProgressChanged;
+        ActualQuestStatusService.Instance.StatusChanged -= OnQuestProgressChanged;
+        ObjectiveProgressService.Instance.ObjectiveProgressChanged -= OnObjectiveProgressChanged;
+        MapMarkerDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+        QuestObjectiveDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+
+        if (_trackerService != null)
+        {
+            _trackerService.PositionUpdated -= OnPositionUpdated;
+            _trackerService.ErrorOccurred -= OnErrorOccurred;
+            _trackerService.StatusMessage -= OnStatusMessage;
+            _trackerService.WatchingStateChanged -= OnWatchingStateChanged;
+        }
+
+        _loc.LanguageChanged -= OnLanguageChanged;
+        _raidEventService.RaidEvent -= OnRaidEvent;
+        GlobalKeyboardHookService.Instance.FloorKeyPressed -= OnFloorKeyPressed;
+        GlobalKeyboardHookService.Instance.IsEnabled = false;
+        _overlayService.OverlayVisibilityChanged -= OnOverlayVisibilityChanged;
+        _overlayService.HideOverlay();
+        StopAutoTracking();
+        StopRaidEventMonitoring();
+    }
+
+    /// <summary>
     /// 지도 탭 재진입과 탭 전환이 반복되어도 런타임 이벤트가 한 번만 실행되도록 정규화합니다.
     /// </summary>
     internal void NormalizeMiniMapRuntimeSubscriptions()
