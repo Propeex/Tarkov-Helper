@@ -1,7 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using TarkovHelper.Models;
 using TarkovHelper.Pages.Map;
+using TarkovHelper.Services;
 
 namespace TarkovHelper;
 
@@ -15,16 +17,33 @@ public partial class MainWindow
         EventManager.RegisterClassHandler(
             typeof(RadioButton),
             ToggleButton.CheckedEvent,
-            new RoutedEventHandler(OnNavigationTabChecked),
+            new RoutedEventHandler(OnNavigationRadioChecked),
             handledEventsToo: true);
         return true;
     }
 
-    private static void OnNavigationTabChecked(object sender, RoutedEventArgs e)
+    private static void OnNavigationRadioChecked(object sender, RoutedEventArgs e)
     {
         if (sender is not RadioButton radioButton ||
-            !radioButton.Name.StartsWith("Tab", StringComparison.Ordinal) ||
-            Window.GetWindow(radioButton) is not MainWindow window ||
+            Window.GetWindow(radioButton) is not MainWindow window)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(radioButton, window.RadioPvp) ||
+            ReferenceEquals(radioButton, window.RadioPve))
+        {
+            var requestedProfile = ReferenceEquals(radioButton, window.RadioPve)
+                ? ProfileType.Pve
+                : ProfileType.Pvp;
+
+            if (ProfileService.Instance.CurrentProfile != requestedProfile)
+                window._mapTrackerPage?.ReleaseForPermanentPageReplacement();
+
+            return;
+        }
+
+        if (!radioButton.Name.StartsWith("Tab", StringComparison.Ordinal) ||
             ReferenceEquals(radioButton, window.TabMap) ||
             window.PageContent.Content is not MapPage mapPage)
         {
