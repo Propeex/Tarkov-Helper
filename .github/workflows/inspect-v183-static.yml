@@ -11,24 +11,29 @@ jobs:
     if: github.head_ref == 'agent/item-categories-ammo-sources-1.8.3'
     runs-on: ubuntu-latest
     steps:
-      - name: Download static API documents
+      - name: Probe static API documents
         shell: bash
         run: |
           set -euo pipefail
           mkdir static-data
-          curl --fail --retry 4 --retry-all-errors --location --output static-data/items.json https://json.tarkov.dev/regular/items
-          curl --fail --retry 4 --retry-all-errors --location --output static-data/traders.json https://json.tarkov.dev/regular/traders
-          curl --fail --retry 4 --retry-all-errors --location --output static-data/hideout.json https://json.tarkov.dev/regular/hideout
+          for endpoint in items traders hideout barters crafts productions trader-inventory traderInventory; do
+            status=$(curl --silent --show-error --location --output "static-data/${endpoint}.body" --write-out '%{http_code}' "https://json.tarkov.dev/regular/${endpoint}" || true)
+            echo "${endpoint} ${status} $(wc -c < "static-data/${endpoint}.body")" | tee -a static-data/status.txt
+            if [ "$status" = 200 ]; then
+              mv "static-data/${endpoint}.body" "static-data/${endpoint}.json"
+            fi
+          done
+          cat static-data/status.txt
           python - <<'PY'
           import json
           from pathlib import Path
-          for path in Path('static-data').glob('*.json'):
+          for path in sorted(Path('static-data').glob('*.json')):
               data=json.loads(path.read_text(encoding='utf-8'))
               print(path.name, type(data).__name__, list(data)[:20] if isinstance(data,dict) else len(data))
           PY
       - name: Upload static data
         uses: actions/upload-artifact@v4
         with:
-          name: v183-static-data
+          name: v183-static-data-probe
           path: static-data
           if-no-files-found: error
