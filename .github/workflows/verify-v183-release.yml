@@ -1,0 +1,343 @@
+name: Verify v1.8.3 Release
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-v1.8.3-release'
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout verification branch
+        uses: actions/checkout@v4
+
+      - name: Checkout released source
+        uses: actions/checkout@v4
+        with:
+          ref: v1.8.3
+          path: released-source
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+
+      - name: Verify published release independently
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "v1.8.3"
+          $version = "1.8.3"
+          $expectedTitle = "타르코프헬퍼_JH v$version"
+
+          $release = gh release view $tag `
+            --repo $env:GITHUB_REPOSITORY `
+            --json name,tagName,isDraft,isPrerelease,url,publishedAt,targetCommitish,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $null -eq $release) {
+            throw "The published v1.8.3 release could not be read."
+          }
+          if ($release.name -ne $expectedTitle -or $release.tagName -ne $tag) {
+            throw "Release title or tag is invalid: name=$($release.name), tag=$($release.tagName)."
+          }
+          if ($release.isDraft -or $release.isPrerelease) {
+            throw "v1.8.3 must be a public final release."
+          }
+
+          $releasedCommit = (git -C released-source rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($releasedCommit)) {
+            throw "The released source commit could not be resolved."
+          }
+          if ($release.targetCommitish -ne $releasedCommit) {
+            throw "Release target does not match the v1.8.3 tag: target=$($release.targetCommitish), tag=$releasedCommit"
+          }
+
+          $assets = @($release.assets)
+          foreach ($requiredAsset in @("TarkovHelper_JH.zip", "TarkovHelper_JH.zip.sha256")) {
+            $asset = $assets | Where-Object { $_.name -eq $requiredAsset } | Select-Object -First 1
+            if ($null -eq $asset -or [int64]$asset.size -le 0) {
+              throw "Required non-empty release asset is missing: $requiredAsset"
+            }
+          }
+
+          New-Item -ItemType Directory -Path verification -Force | Out-Null
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip" --dir verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download release ZIP." }
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip.sha256" --dir verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download release checksum." }
+
+          $zipPath = "verification/TarkovHelper_JH.zip"
+          $shaPath = "verification/TarkovHelper_JH.zip.sha256"
+          $declaredHash = ((Get-Content $shaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declaredHash -notmatch '^[0-9a-f]{64}$' -or $declaredHash -ne $actualHash) {
+            throw "Published SHA-256 is invalid: declared=$declaredHash actual=$actualHash"
+          }
+
+          $env:ZIP_PATH = (Resolve-Path $zipPath).Path
+          $env:SOURCE_PATH = (Resolve-Path "released-source").Path
+          @'
+          import json
+          import os
+          import pathlib
+          import re
+          import sqlite3
+          import zipfile
+
+          zip_path = pathlib.Path(os.environ['ZIP_PATH'])
+          source_path = pathlib.Path(os.environ['SOURCE_PATH'])
+
+          def read_source(relative):
+              return (source_path / relative).read_text(encoding='utf-8-sig')
+
+          project = read_source('TarkovHelper/TarkovHelper.csproj')
+          if '<Version>1.8.3</Version>' not in project or '<FileVersion>1.8.3.0</FileVersion>' not in project:
+              raise SystemExit('released project version metadata is invalid')
+
+          sort_source = read_source('TarkovHelper/Services/UiSortOrder.cs')
+          expected_categories = [
+              'Weapons', 'Magazines', 'Ammunition', 'Medical', 'Food', 'Melee',
+              'Parts', 'Grenades', 'Barter', 'Rigs', 'Eyewear', 'Containers',
+              'Armor', 'Info', 'Keys', 'Special', 'RangeSubmission'
+          ]
+          category_block = re.search(
+              r'ItemCategories\s*=\s*\[(.*?)\];',
+              sort_source,
+              flags=re.S,
+          )
+          if not category_block:
+              raise SystemExit('canonical item category list is missing')
+          actual_categories = re.findall(r'"([^"]+)"', category_block.group(1))
+          if actual_categories != expected_categories:
+              raise SystemExit(f'item category order is invalid: {actual_categories}')
+
+          localization = read_source('TarkovHelper/Services/LocalizationService.Items.cs')
+          if 'RangeSubmission => "범위 제출"' not in localization:
+              raise SystemExit('range-submission localization is missing')
+
+          item_page = read_source('TarkovHelper/Pages/ItemsPage.xaml.cs')
+          if 'foreach (var category in UiSortOrder.ItemCategories)' not in item_page:
+              raise SystemExit('item category dropdown does not use the canonical 17-category list')
+
+          classifier = read_source('TarkovHelper/Services/ItemCategoryClassifier.cs')
+          if 'isRangeSubmission' not in classifier or 'return RangeSubmission;' not in classifier:
+              raise SystemExit('range-submission category override is missing')
+
+          json_api = read_source('TarkovHelper/Services/TarkovDataDatabaseBuilder.JsonApi.cs')
+          for marker in ('regular/barters', 'regular/crafts', 'buyFromTrader'):
+              if marker not in json_api:
+                  raise SystemExit(f'static ammo acquisition source is missing: {marker}')
+          if 'EnrichAmmoSourcesFromStaticTaskRewards(' in json_api:
+              raise SystemExit('quest rewards are still used as permanent ammo acquisition sources')
+
+          forbidden_names = {
+              'user_data.db', 'quest_progress.json', 'quest_progress_v2.json',
+              'objective_progress.json', 'hideout_progress.json', 'item_inventory.json',
+              'settings.json', 'app_settings.json'
+          }
+          forbidden_scanner_binaries = {'rateye.dll', 'ratstash.dll', 'tesseract.dll'}
+          required_marker_icons = {
+              'assets/db/icons/markers/boss.svg',
+              'assets/db/icons/markers/cultist.svg',
+              'assets/db/icons/markers/lever.svg',
+              'assets/db/icons/markers/pmc spawn.svg',
+              'assets/db/icons/markers/rogue.svg',
+              'assets/db/icons/markers/sniperscav.svg',
+          }
+
+          with zipfile.ZipFile(zip_path) as archive:
+              entries = archive.infolist()
+              names = [entry.filename.replace('\\', '/') for entry in entries]
+              lowered = [name.lower() for name in names]
+              files = {name for name in lowered if not name.endswith('/')}
+
+              if len(names) != len(set(names)):
+                  raise SystemExit('duplicate ZIP entries')
+              if any(name.startswith('/') or '..' in pathlib.PurePosixPath(name).parts for name in names):
+                  raise SystemExit('unsafe ZIP path')
+              if {'tarkovhelper_jh.exe', 'assets/tarkov_data.db'} - files:
+                  raise SystemExit('required executable or database is missing')
+              if required_marker_icons - files:
+                  raise SystemExit('required minimap marker icon is missing')
+              if any(pathlib.PurePosixPath(name).name in forbidden_names for name in lowered):
+                  raise SystemExit('user progress or settings file included')
+              if any(name.endswith('.pdb') for name in lowered):
+                  raise SystemExit('debug symbols included')
+              if any(name.startswith('assets/scanner/') for name in lowered):
+                  raise SystemExit('removed scanner asset included')
+              if any(name.startswith('thirdpartynotices/ratscanner-') for name in lowered):
+                  raise SystemExit('removed RatScanner notice included')
+              if any(pathlib.PurePosixPath(name).name in forbidden_scanner_binaries for name in lowered):
+                  raise SystemExit('removed scanner runtime dependency included')
+              if any(not entry.is_dir() and entry.file_size == 0 for entry in entries):
+                  raise SystemExit('empty file included in release ZIP')
+
+              item_icons = [name for name in lowered if name.startswith('assets/icons/') and name.endswith('.png')]
+              if len(item_icons) < 100:
+                  raise SystemExit(f'too few packaged item icons: {len(item_icons)}')
+
+              print(f'ZIP_OK entries={len(names)} item_icons={len(item_icons)}')
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Expand-Archive $zipPath -DestinationPath verification/extracted -Force
+          $exePath = "verification/extracted/TarkovHelper_JH.exe"
+          $databasePath = "verification/extracted/Assets/tarkov_data.db"
+          $fileVersion = (Get-Item $exePath).VersionInfo.FileVersion
+          if ($fileVersion -ne "1.8.3.0") {
+            throw "Published executable version is invalid: $fileVersion"
+          }
+          if ((Get-Item $databasePath).Length -lt 1MB) {
+            throw "Published database is unexpectedly small."
+          }
+
+          $env:DB_PATH = (Resolve-Path $databasePath).Path
+          @'
+          import collections
+          import json
+          import os
+          import re
+          import sqlite3
+
+          connection = sqlite3.connect(os.environ['DB_PATH'])
+          connection.row_factory = sqlite3.Row
+
+          if connection.execute('pragma integrity_check').fetchone()[0] != 'ok':
+              raise SystemExit('SQLite integrity check failed')
+          if connection.execute('pragma foreign_key_check').fetchall():
+              raise SystemExit('SQLite foreign-key violation')
+
+          ammo_rows = connection.execute('''
+              select i.Name, a.AcquisitionSource
+              from Ammo a
+              join Items i on i.Id = a.ItemId
+          ''').fetchall()
+          if len(ammo_rows) != 195:
+              raise SystemExit(f'unexpected ammo count: {len(ammo_rows)}')
+
+          trader_pattern = re.compile(r'^trader:[^:·]+:level:[1-4]$')
+          craft_pattern = re.compile(r'^craft:Workbench:level:[1-3]$')
+          trader_rows = craft_rows = raid_rows = coexist_rows = level_one_rows = 0
+          for row in ammo_rows:
+              source = (row['AcquisitionSource'] or '').strip()
+              if not source:
+                  raise SystemExit(f'empty acquisition source: {row["Name"]}')
+              tokens = [token.strip() for token in source.split('·')]
+              is_raid = tokens == ['raid-found']
+              has_trader = any(trader_pattern.fullmatch(token) for token in tokens)
+              has_craft = any(craft_pattern.fullmatch(token) for token in tokens)
+
+              if 'raid-found' in tokens and len(tokens) != 1:
+                  raise SystemExit(f'raid-only token coexists with permanent route: {row["Name"]}: {source}')
+              if not is_raid and not (has_trader or has_craft):
+                  raise SystemExit(f'invalid permanent acquisition route: {row["Name"]}: {source}')
+              if any(
+                  token != 'raid-found'
+                  and not trader_pattern.fullmatch(token)
+                  and not craft_pattern.fullmatch(token)
+                  for token in tokens
+              ):
+                  raise SystemExit(f'malformed acquisition token: {row["Name"]}: {source}')
+              if any(word in source.lower() for word in ('flea', 'task', 'quest', 'reward')):
+                  raise SystemExit(f'temporary or flea route included: {row["Name"]}: {source}')
+
+              trader_rows += int(has_trader)
+              craft_rows += int(has_craft)
+              raid_rows += int(is_raid)
+              coexist_rows += int(has_trader and has_craft)
+              level_one_rows += int(any(token.endswith(':level:1') and token.startswith('trader:') for token in tokens))
+
+          if trader_rows != 164 or craft_rows != 29 or raid_rows != 22:
+              raise SystemExit(
+                  f'acquisition distribution changed: trader={trader_rows}, craft={craft_rows}, raid={raid_rows}'
+              )
+          if coexist_rows < 1 or level_one_rows < 1:
+              raise SystemExit('trader/craft coexistence or level-one trader acquisition is missing')
+
+          category_sets = {
+              'Magazines': {'Magazine','Cylinder Magazine','Spring Driven Cylinder','Magazines'},
+              'Ammunition': {'Ammo','Ammo container','Rocket','Rounds','Ammo boxes','Shrapnel','Ammunition'},
+              'Medical': {'Medikit','Medkits','Medical item','Medical supplies','Injury treatment','Stimulant','Stimulants','Drug','Drugs','Meds','Medical'},
+              'Food': {'Food','Drink','Drinks','Food and drink'},
+              'Melee': {'Knife','Melee','Melee weapons'},
+              'Grenades': {'Throwable weapon','Volumetric Throw Weapon','Grenades','Throwables','Special grenades'},
+              'Eyewear': {'Vis. observ. device','Night Vision','Thermal Vision','Eyewear'},
+              'Weapons': {'Weapon','Weapons','Assault rifle','Assault carbine','Machinegun','SMG','Handgun','Revolver','Shotgun','Sniper rifle','Marksman rifle','Grenade launcher','Rocket Launcher'},
+              'Parts': {'Weapon mod','Gear mod','Functional mod','Sights','Parts','Mount','Mounts','Stock','Stocks & chassis','Handguard','Handguards','Barrel','Barrels','Flashhider','Flash hiders & muzzle brakes','Silencer','Suppressors','Comb. muzzle device','Muzzle adapters','Ironsight','Iron sights','Pistol grip','Pistol grips','Receiver','Receivers and slides','Charging handle','Charging handles','Gas block','Gas blocks','Foregrip','Foregrips','Auxiliary Mod','Auxiliary parts','Bipod','Bipods','UBGL','Underbarrel grenade launchers','Scope','Scopes','Assault scope','Assault scopes','Reflex sight','Reflex sights','Compact reflex sight','Compact reflex sights','Special scope','Night vision scopes','Thermal vision sights','Flashlight','Flashlights','Comb. tact. device','Tactical combo devices','Helmet mods'},
+              'Barter': {'Barter item','Barter','Electronics','Building material','Building materials','Flammable materials','Energy elements','Household goods','Tool','Tools','Jewelry','Valuables','Battery','Fuel','Lubricant'},
+              'Rigs': {'Chest rig','Chest rigs','Backpack','Backpacks','Rigs'},
+              'Containers': {'Common container','Port. container','Locking container','Random Loot Container','Containers & cases','Secure containers','Containers'},
+              'Armor': {'Armor','Armor Plate','Armor plates','Armor vests','Armored equipment','Headwear','Face Cover','Face cover','Headphones','Earpieces'},
+              'Info': {'Info','Info items','Dialog Item','Notes','Tapes','Flyer','Map','Maps','Extraction intel','Dogtag'},
+              'Keys': {'Key','Keys','Mechanical Key','Keycard','Keycards'},
+          }
+          precedence = ['Magazines','Ammunition','Medical','Food','Melee','Grenades','Eyewear','Weapons','Parts','Barter','Rigs','Containers','Armor','Info','Keys']
+          categories = collections.Counter()
+          for row in connection.execute('select Category, Categories from Items'):
+              values = set()
+              if row['Category']:
+                  values.add(row['Category'])
+              if row['Categories']:
+                  values.update(json.loads(row['Categories']))
+              result = 'Special'
+              for category in precedence:
+                  if values & category_sets[category]:
+                      result = category
+                      break
+              categories[result] += 1
+
+          canonical = ['Weapons','Magazines','Ammunition','Medical','Food','Melee','Parts','Grenades','Barter','Rigs','Eyewear','Containers','Armor','Info','Keys','Special']
+          missing_categories = [category for category in canonical if categories[category] == 0]
+          if missing_categories:
+              raise SystemExit(f'empty canonical item categories: {missing_categories}')
+
+          range_groups = connection.execute('select count(*) from QuestRequiredItems where IsAlternativeGroup = 1').fetchone()[0]
+          range_members = sum(
+              len(json.loads(value or '[]'))
+              for (value,) in connection.execute('select AlternativeItemIds from QuestRequiredItems where IsAlternativeGroup = 1')
+          )
+          if range_groups != 38 or range_members != 410:
+              raise SystemExit(f'range submission data changed: groups={range_groups}, members={range_members}')
+
+          result = {
+              'ammo': len(ammo_rows),
+              'trader_rows': trader_rows,
+              'craft_rows': craft_rows,
+              'raid_only': raid_rows,
+              'trader_craft_coexist': coexist_rows,
+              'level_one_trader_rows': level_one_rows,
+              'item_categories': dict(categories),
+              'range_groups': range_groups,
+              'range_members': range_members,
+          }
+          print('DB_OK ' + json.dumps(result, ensure_ascii=False, sort_keys=True))
+          with open('verification-database-result.json', 'w', encoding='utf-8') as handle:
+              json.dump(result, handle, ensure_ascii=False, indent=2, sort_keys=True)
+          connection.close()
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @(
+            "RELEASE=$($release.url)",
+            "TAG=$tag",
+            "TARGET=$releasedCommit",
+            "VERSION=$fileVersion",
+            "SHA256=$actualHash",
+            "PUBLISHED_AT=$($release.publishedAt)"
+          ) | Set-Content verification-result.txt -Encoding utf8
+
+      - name: Upload independent verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1.8.3-release-verification
+          path: |
+            verification-result.txt
+            verification-database-result.json
+          if-no-files-found: error
