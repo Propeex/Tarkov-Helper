@@ -1,0 +1,160 @@
+name: Verify v1.8.5 Release
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-v1.8.5-release'
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout verification branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for public release and download assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path verification -Force | Out-Null
+
+          $found = $false
+          for ($attempt = 1; $attempt -le 90; $attempt++) {
+            gh release view v1.8.5 `
+              --repo $env:GITHUB_REPOSITORY `
+              --json name,tagName,isDraft,isPrerelease,url,publishedAt,targetCommitish,assets `
+              2>$null | Set-Content verification/release.json -Encoding utf8
+            if ($LASTEXITCODE -eq 0) {
+              $found = $true
+              break
+            }
+            Start-Sleep -Seconds 10
+          }
+          if (-not $found) { throw "The public v1.8.5 release did not become available." }
+
+          git fetch origin refs/tags/v1.8.5:refs/tags/v1.8.5 --force
+          if ($LASTEXITCODE -ne 0) { throw "Failed to fetch the v1.8.5 tag." }
+
+          gh release download v1.8.5 --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip" --dir verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the public ZIP." }
+          gh release download v1.8.5 --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip.sha256" --dir verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the public checksum." }
+
+      - name: Verify public package and launch executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $expectedCommit = "8e7c5a7e67aa916c50529893bdfacd94b96049a5"
+          $tagCommit = (git rev-list -n 1 v1.8.5).Trim()
+          if ($tagCommit -ne $expectedCommit) {
+            throw "Tag target mismatch: expected=$expectedCommit actual=$tagCommit"
+          }
+
+          $release = Get-Content verification/release.json -Raw | ConvertFrom-Json
+          if ($release.name -ne "타르코프헬퍼_JH v1.8.5" -or
+              $release.tagName -ne "v1.8.5" -or
+              $release.isDraft -or $release.isPrerelease -or
+              $release.targetCommitish -ne $expectedCommit) {
+            throw "Public release metadata is invalid."
+          }
+
+          $zipPath = (Resolve-Path verification/TarkovHelper_JH.zip).Path
+          $shaPath = (Resolve-Path verification/TarkovHelper_JH.zip.sha256).Path
+          $declaredHash = ((Get-Content $shaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declaredHash -ne $actualHash) {
+            throw "Published checksum mismatch: declared=$declaredHash actual=$actualHash"
+          }
+
+          Expand-Archive $zipPath -DestinationPath verification/extracted -Force
+          $workDir = (Resolve-Path verification/extracted).Path
+          $exePath = Join-Path $workDir "TarkovHelper_JH.exe"
+          $dbPath = Join-Path $workDir "Assets/tarkov_data.db"
+          if (-not (Test-Path $exePath) -or -not (Test-Path $dbPath)) {
+            throw "Required executable or database is missing."
+          }
+
+          $fileVersion = (Get-Item $exePath).VersionInfo.FileVersion
+          if ($fileVersion -ne "1.8.5.0") {
+            throw "Published executable version is invalid: $fileVersion"
+          }
+
+          $crashLog = Join-Path $workDir "crash_log.txt"
+          Remove-Item $crashLog -Force -ErrorAction SilentlyContinue
+          $process = Start-Process -FilePath $exePath -WorkingDirectory $workDir -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(20)
+            do {
+              Start-Sleep -Milliseconds 500
+              $process.Refresh()
+              if ($process.HasExited) {
+                if (Test-Path $crashLog) { Get-Content $crashLog }
+                throw "Public executable exited during startup with code $($process.ExitCode)."
+              }
+            } while ((Get-Date) -lt $deadline)
+            Write-Host "Public executable remained alive for 20 seconds. PID=$($process.Id)"
+          }
+          finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              $process.WaitForExit(5000) | Out-Null
+            }
+          }
+
+          $env:DB_PATH = $dbPath
+          $env:ZIP_PATH = $zipPath
+          $env:RELEASE_URL = $release.url
+          $env:PUBLISHED_AT = $release.publishedAt
+          $env:SHA256 = $actualHash
+          @'
+          import json, os, pathlib, sqlite3, zipfile
+          zip_path = pathlib.Path(os.environ['ZIP_PATH'])
+          with zipfile.ZipFile(zip_path) as z:
+              names = [x.filename.replace('\\', '/') for x in z.infolist()]
+              if len(names) != len(set(names)):
+                  raise SystemExit('duplicate ZIP entries')
+              if any(name.startswith('/') or '..' in pathlib.PurePosixPath(name).parts for name in names):
+                  raise SystemExit('unsafe ZIP path')
+              icons = [n for n in names if n.lower().startswith('assets/icons/') and n.lower().endswith('.png')]
+          con = sqlite3.connect(os.environ['DB_PATH'])
+          if con.execute('pragma integrity_check').fetchone()[0] != 'ok':
+              raise SystemExit('SQLite integrity check failed')
+          if con.execute('pragma foreign_key_check').fetchall():
+              raise SystemExit('SQLite foreign-key violation')
+          counts = {
+              'items': con.execute('select count(*) from Items').fetchone()[0],
+              'quests': con.execute('select count(*) from Quests').fetchone()[0],
+              'ammo': con.execute('select count(*) from Ammo').fetchone()[0],
+              'range_groups': con.execute('select count(*) from QuestRequiredItems where IsAlternativeGroup = 1').fetchone()[0],
+          }
+          con.close()
+          result = {
+              'release_url': os.environ['RELEASE_URL'],
+              'published_at': os.environ['PUBLISHED_AT'],
+              'target_commit': '8e7c5a7e67aa916c50529893bdfacd94b96049a5',
+              'file_version': '1.8.5.0',
+              'sha256': os.environ['SHA256'],
+              'zip_entries': len(names),
+              'item_icons': len(icons),
+              **counts,
+              'startup_seconds': 20,
+          }
+          pathlib.Path('verification-result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+          print('RELEASE_OK ' + json.dumps(result, ensure_ascii=False, sort_keys=True))
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1.8.5-release-verification
+          path: verification-result.json
+          if-no-files-found: error
