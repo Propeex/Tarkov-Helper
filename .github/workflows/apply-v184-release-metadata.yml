@@ -1,6 +1,9 @@
 name: Apply v1.8.4 Release Metadata
 
 on:
+  push:
+    branches:
+      - hotfix/minimap-tab-persistence-1.8.4
   pull_request:
 
 permissions:
@@ -8,7 +11,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.head_ref == 'hotfix/minimap-tab-persistence-1.8.4' && github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
