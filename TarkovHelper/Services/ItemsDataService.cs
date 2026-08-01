@@ -25,51 +25,14 @@ namespace TarkovHelper.Services
 
         private static bool IsCurrency(string normalizedName) => CurrencyItems.Contains(normalizedName);
 
-        private static readonly IReadOnlyDictionary<string, string> CategoryMapping =
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Weapons"] = "Weapons",
-                ["Magazines"] = "Magazines",
-                ["Rounds"] = "Ammunition", ["Ammo boxes"] = "Ammunition", ["Shrapnel"] = "Ammunition",
-                ["Medkits"] = "Medical", ["Medical supplies"] = "Medical", ["Injury treatment"] = "Medical",
-                ["Stimulants"] = "Medical", ["Drugs"] = "Medical",
-                ["Food"] = "Food", ["Drinks"] = "Food", ["Food and drink"] = "Food",
-                ["Melee weapons"] = "Melee", ["Melee"] = "Melee",
-                ["Mounts"] = "Parts", ["Stocks & chassis"] = "Parts", ["Handguards"] = "Parts",
-                ["Barrels"] = "Parts", ["Flash hiders & muzzle brakes"] = "Parts", ["Suppressors"] = "Parts",
-                ["Muzzle adapters"] = "Parts", ["Iron sights"] = "Parts", ["Pistol grips"] = "Parts",
-                ["Receivers and slides"] = "Parts", ["Charging handles"] = "Parts", ["Gas blocks"] = "Parts",
-                ["Foregrips"] = "Parts", ["Auxiliary parts"] = "Parts", ["Bipods"] = "Parts",
-                ["Underbarrel grenade launchers"] = "Parts", ["Scopes"] = "Parts", ["Assault scopes"] = "Parts",
-                ["Reflex sights"] = "Parts", ["Compact reflex sights"] = "Parts", ["Night vision scopes"] = "Parts",
-                ["Thermal vision sights"] = "Parts", ["Flashlights"] = "Parts", ["Tactical combo devices"] = "Parts",
-                ["Helmet mods"] = "Parts",
-                ["Grenades"] = "Grenades", ["Throwables"] = "Grenades", ["Special grenades"] = "Grenades",
-                ["Electronics"] = "Barter", ["Building materials"] = "Barter", ["Flammable materials"] = "Barter",
-                ["Energy elements"] = "Barter", ["Household goods"] = "Barter", ["Tools"] = "Barter",
-                ["Valuables"] = "Barter",
-                ["Chest rigs"] = "Rigs", ["Backpacks"] = "Rigs",
-                ["Eyewear"] = "Eyewear",
-                ["Containers & cases"] = "Containers", ["Secure containers"] = "Containers",
-                ["Armor vests"] = "Armor", ["Armor plates"] = "Armor", ["Headwear"] = "Armor",
-                ["Face cover"] = "Armor", ["Earpieces"] = "Armor",
-                ["Info items"] = "Info", ["Maps"] = "Info", ["Extraction intel"] = "Info",
-                ["Notes"] = "Info", ["Dogtag"] = "Info",
-                ["Keys"] = "Keys", ["Keycards"] = "Keys",
-                ["Special equipment"] = "Special", ["Quest Items"] = "Special", ["Money"] = "Special",
-                ["Posters"] = "Special", ["Armbands"] = "Special", ["Other"] = "Special"
-            };
+        public string GetParentCategory(string? category) =>
+            ItemCategoryClassifier.Classify(category);
 
-        public string GetParentCategory(string? category)
-        {
-            if (string.IsNullOrWhiteSpace(category))
-                return "Special";
-
-            var baseCategory = category.Contains('|') ? category.Split('|')[0] : category;
-            return CategoryMapping.TryGetValue(baseCategory.Trim(), out var parent)
-                ? parent
-                : "Special";
-        }
+        public string GetParentCategory(
+            string? category,
+            IEnumerable<string>? categoryHierarchy,
+            bool isRangeSubmission = false) =>
+            ItemCategoryClassifier.Classify(category, categoryHierarchy, isRangeSubmission);
 
         public async Task<List<AggregatedItemViewModel>> GetAggregatedItemsAsync(Dictionary<string, TarkovItem>? itemLookup)
         {
@@ -85,10 +48,12 @@ namespace TarkovHelper.Services
 
                 string? wikiLink = null;
                 string? category = null;
+                IReadOnlyList<string> categoryHierarchy = Array.Empty<string>();
                 if (itemLookup != null && itemLookup.TryGetValue(hideoutItem.ItemNormalizedName, out var itemInfo))
                 {
                     wikiLink = itemInfo.WikiLink;
                     category = itemInfo.Category;
+                    categoryHierarchy = itemInfo.Categories;
                 }
 
                 mergedItems[kvp.Key] = new AggregatedItemViewModel
@@ -100,7 +65,8 @@ namespace TarkovHelper.Services
                     SubtitleName = subtitle,
                     SubtitleVisibility = showSubtitle ? Visibility.Visible : Visibility.Collapsed,
                     Category = category,
-                    ParentCategory = GetParentCategory(category),
+                    Categories = categoryHierarchy,
+                    ParentCategory = GetParentCategory(category, categoryHierarchy),
                     HideoutCount = hideoutItem.HideoutCount,
                     HideoutFIRCount = hideoutItem.HideoutFIRCount,
                     TotalCount = hideoutItem.HideoutCount,
@@ -125,7 +91,11 @@ namespace TarkovHelper.Services
                     if (string.IsNullOrEmpty(existing.Category))
                     {
                         existing.Category = questItem.Category;
-                        existing.ParentCategory = GetParentCategory(questItem.Category);
+                        existing.Categories = questItem.Categories;
+                        existing.ParentCategory = GetParentCategory(
+                            questItem.Category,
+                            questItem.Categories,
+                            questItem.IsAlternativeGroupMember);
                     }
                     continue;
                 }
@@ -150,7 +120,11 @@ namespace TarkovHelper.Services
                     SubtitleName = subtitle,
                     SubtitleVisibility = showSubtitle ? Visibility.Visible : Visibility.Collapsed,
                     Category = questItem.Category,
-                    ParentCategory = GetParentCategory(questItem.Category),
+                    Categories = questItem.Categories,
+                    ParentCategory = GetParentCategory(
+                        questItem.Category,
+                        questItem.Categories,
+                        questItem.IsAlternativeGroupMember),
                     QuestCount = questItem.QuestCount,
                     QuestFIRCount = questItem.QuestFIRCount,
                     TotalCount = questItem.QuestCount,
@@ -216,6 +190,7 @@ namespace TarkovHelper.Services
                                 IconLink = itemInfo.IconLink,
                                 WikiLink = itemInfo.WikiLink,
                                 Category = itemInfo.Category,
+                                Categories = itemInfo.Categories,
                                 QuestCount = countToAdd,
                                 QuestFIRCount = firCountToAdd,
                                 FoundInRaid = questItem.FoundInRaid
@@ -250,6 +225,7 @@ namespace TarkovHelper.Services
                             IconLink = concreteInfo.IconLink,
                             WikiLink = concreteInfo.WikiLink,
                             Category = concreteInfo.Category,
+                            Categories = concreteInfo.Categories,
                             QuestCount = countToAdd,
                             QuestFIRCount = firCountToAdd,
                             FoundInRaid = questItem.FoundInRaid

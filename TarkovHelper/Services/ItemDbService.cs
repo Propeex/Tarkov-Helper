@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Models;
 using TarkovHelper.Services.Logging;
@@ -185,7 +186,7 @@ public sealed class ItemDbService
             SELECT
                 Id, BsgId, Name, NameEN, NameKO, NameJA,
                 ShortNameEN, ShortNameKO, ShortNameJA,
-                WikiPageLink, IconUrl, Category
+                WikiPageLink, IconUrl, Category, Categories
             FROM Items
             ORDER BY Name";
 
@@ -207,13 +208,36 @@ public sealed class ItemDbService
                 ShortName = reader.IsDBNull(6) ? null : reader.GetString(6),
                 WikiLink = reader.IsDBNull(9) ? null : reader.GetString(9),
                 IconLink = reader.IsDBNull(10) ? null : reader.GetString(10),
-                Category = reader.IsDBNull(11) ? null : reader.GetString(11)
+                Category = reader.IsDBNull(11) ? null : reader.GetString(11),
+                Categories = ParseCategories(reader.IsDBNull(12) ? null : reader.GetString(12))
             };
 
             items.Add(item);
         }
 
         return items;
+    }
+
+
+    private static IReadOnlyList<string> ParseCategories(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return Array.Empty<string>();
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(json)?
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+                ?? Array.Empty<string>();
+        }
+        catch (JsonException)
+        {
+            return json.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
     }
 
     /// <summary>

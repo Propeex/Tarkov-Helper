@@ -95,8 +95,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                      '·',
                      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (value.Equals("raid-found", StringComparison.OrdinalIgnoreCase) ||
-                value.StartsWith("trader:", StringComparison.OrdinalIgnoreCase) ||
+            if (value.StartsWith("trader:", StringComparison.OrdinalIgnoreCase) ||
                 value.StartsWith("craft:", StringComparison.OrdinalIgnoreCase))
             {
                 result.Add(value);

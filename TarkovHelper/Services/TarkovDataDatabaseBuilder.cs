@@ -148,10 +148,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     initialSpeed
                   }
                 }
-                buyFor { priceRUB vendor { name normalizedName } }
+                buyFor {
+                  priceRUB
+                  vendor { name normalizedName }
+                  requirements { type value stringValue }
+                }
                 bartersFor { trader { name normalizedName } level }
                 craftsFor { station { name normalizedName } level }
-                receivedFromTasks { name normalizedName }
               }
             }
             """;

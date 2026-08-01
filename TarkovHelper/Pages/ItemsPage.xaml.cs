@@ -408,9 +408,7 @@ namespace TarkovHelper.Pages
             CmbCategory.Items.Clear();
             CmbCategory.Items.Add(new ComboBoxItem { Content = _loc.ItemsFilterAllCategories, Tag = "All" });
 
-            foreach (var category in _allCategories
-                         .OrderBy(UiSortOrder.GetItemCategoryRank)
-                         .ThenBy(c => _loc.GetCategoryName(c), StringComparer.CurrentCulture))
+            foreach (var category in UiSortOrder.ItemCategories)
             {
                 CmbCategory.Items.Add(new ComboBoxItem { Content = _loc.GetCategoryName(category), Tag = category });
             }

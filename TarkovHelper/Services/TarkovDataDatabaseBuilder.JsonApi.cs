@@ -186,10 +186,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 item.BuyFor = source.BuyFor;
                 item.BartersFor = source.BartersFor;
                 item.CraftsFor = source.CraftsFor;
-                item.ReceivedFromTasks = source.ReceivedFromTasks;
                 item.Properties.AcquisitionSource = null;
                 if (source.BuyFor.Count > 0 || source.BartersFor.Count > 0 ||
-                    source.CraftsFor.Count > 0 || source.ReceivedFromTasks.Count > 0)
+                    source.CraftsFor.Count > 0)
                 {
                     enriched++;
                 }
@@ -203,8 +202,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
         }
         catch (Exception ex)
         {
-            Log.Warning($"Ammo acquisition source enrichment skipped: {ex.Message}");
-            Report("API", "탄약 입수 경로 온라인 보강을 건너뛰고 기본 데이터로 계속합니다", 22, 0, null);
+            Log.Warning($"Ammo acquisition source enrichment failed: {ex.Message}");
+            Report("API", "탄약 입수 경로 보강 실패 · 정확한 데이터 생성을 위해 예비 경로로 전환합니다", 22, 0, null);
+            throw new InvalidOperationException("탄약 상인·제작 입수 경로를 확인하지 못했습니다.", ex);
         }
     }
 
@@ -498,15 +498,46 @@ internal sealed partial class TarkovDataDatabaseBuilder
         };
     }
 
-    private static string ParseAcquisitionSource(JsonObject itemObject)
+    private static string? ParseAcquisitionSource(JsonObject itemObject)
     {
         var sources = new List<string>();
-        AddStructuredSources(itemObject["buyFor"] as JsonArray, "vendor", "trader", sources, includeLevel: false);
+        AddTraderPurchaseSources(itemObject["buyFor"] as JsonArray, sources);
         AddStructuredSources(itemObject["bartersFor"] as JsonArray, "trader", "trader", sources, includeLevel: true);
         AddStructuredSources(itemObject["craftsFor"] as JsonArray, "station", "craft", sources, includeLevel: true);
         return sources.Count == 0
-            ? "raid-found"
+            ? null
             : string.Join(" · ", sources.Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static void AddTraderPurchaseSources(JsonArray? values, ICollection<string> sources)
+    {
+        if (values == null)
+            return;
+
+        foreach (var value in values.OfType<JsonObject>())
+        {
+            if (value["vendor"] is not JsonObject vendor)
+                continue;
+
+            var name = GetString(vendor, "name", "normalizedName");
+            if (string.IsNullOrWhiteSpace(name) || IsFleaMarket(name))
+                continue;
+
+            var level = 1;
+            if (value["requirements"] is JsonArray requirements)
+            {
+                foreach (var requirement in requirements.OfType<JsonObject>())
+                {
+                    if (!string.Equals(GetString(requirement, "type"), "loyaltyLevel", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    level = Math.Max(1, GetInt(requirement, "value") ?? 1);
+                    break;
+                }
+            }
+
+            sources.Add($"trader:{name}:level:{level}");
+        }
     }
 
     private static void AddStructuredSources(
@@ -525,13 +556,16 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 continue;
 
             var name = GetString(sourceObject, "name", "normalizedName");
-            if (string.IsNullOrWhiteSpace(name))
+            if (string.IsNullOrWhiteSpace(name) ||
+                (sourceType.Equals("trader", StringComparison.OrdinalIgnoreCase) && IsFleaMarket(name)))
+            {
                 continue;
+            }
 
             var source = $"{sourceType}:{name}";
             var level = includeLevel ? GetInt(value, "level") : null;
-            if (level.HasValue)
-                source += $":level:{Math.Max(1, level.Value)}";
+            if (includeLevel)
+                source += $":level:{Math.Max(1, level ?? 1)}";
             sources.Add(source);
         }
     }

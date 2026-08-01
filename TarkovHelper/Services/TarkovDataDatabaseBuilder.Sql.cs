@@ -126,6 +126,14 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (missingAmmoItems != 0)
             throw new InvalidDataException($"탄약 아이템 연결 실패: {missingAmmoItems}개");
 
+        var invalidAmmoSources = await ReadInvalidAmmoSourcesAsync(connection, cancellationToken);
+        if (invalidAmmoSources.Count != 0)
+        {
+            throw new InvalidDataException(
+                $"탄약 입수 경로 형식 오류: {invalidAmmoSources.Count}개 · " +
+                string.Join("; ", invalidAmmoSources.Take(12)));
+        }
+
         var missingQuestReferences = await ExecuteScalarLongAsync(connection, """
             SELECT COUNT(*)
             FROM QuestRequirements r
@@ -145,6 +153,25 @@ internal sealed partial class TarkovDataDatabaseBuilder
         }
 
         Report("검증", "아이템·탄약·퀘스트·은신처 연결 검증 완료", 98, counts.TotalRows, counts.TotalRows);
+    }
+
+    private static async Task<List<string>> ReadInvalidAmmoSourcesAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var invalid = new List<string>();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT ItemId, AcquisitionSource FROM Ammo ORDER BY ItemId;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var itemId = reader.IsDBNull(0) ? "?" : reader.GetString(0);
+            var source = reader.IsDBNull(1) ? null : reader.GetString(1);
+            if (!IsValidAcquisitionSource(source))
+                invalid.Add($"{itemId}={source ?? "<null>"}");
+        }
+
+        return invalid;
     }
 
     private static async Task<int> PruneDanglingOptionalQuestsAsync(

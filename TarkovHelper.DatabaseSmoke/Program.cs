@@ -135,6 +135,12 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         """);
     var hideoutItemLinks = await ScalarAsync(connection,
         "SELECT COUNT(*) FROM HideoutItemRequirements h JOIN Items i ON h.ItemId = i.BsgId;");
+    var validFixtureAmmoSource = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM Ammo
+        WHERE ItemId = 'fixture-item-bolts'
+          AND AcquisitionSource = 'trader:Prapor:level:1 · trader:Jaeger:level:2 · craft:Workbench:level:3';
+        """);
     var iconLinks = await ScalarAsync(connection, """
         SELECT COUNT(*)
         FROM Items
@@ -305,6 +311,9 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Rebuilt child rows contain {missingChildIds} missing primary keys.");
     if (invalidMaxLevels != 0)
         throw new InvalidDataException($"Rebuilt hideout stations contain {invalidMaxLevels} invalid maximum levels.");
+    if (validFixtureAmmoSource != 1)
+        throw new InvalidDataException("Deterministic ammo acquisition source did not preserve trader and craft levels.");
+
     if (missingPrerequisiteLinks != 0 || invalidConcreteRequirementLinks != 0)
     {
         throw new InvalidDataException(
@@ -324,7 +333,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, ammo={result.AmmoCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"acquisitionRows={acquisitionRequirementRows}, pairedBolts={pairedBoltRequirementRows}, " +
-        $"iconLinks={iconLinks}, neutralRestrictions={restrictedNeutralQuests}, sellItemRows={sellItemRequirements}, " +
+        $"iconLinks={iconLinks}, ammoSources={validFixtureAmmoSource}, neutralRestrictions={restrictedNeutralQuests}, sellItemRows={sellItemRequirements}, " +
         $"dogtagRows={dogtagAlternativeRows}, validDogtagGroups={validDogtagAlternativeGroups}, " +
         $"unresolvedAlternativeItems={unresolvedAlternativeItems}, malformedAlternativeGroups={malformedAlternativeGroups}, " +
         $"mapQuestObjectives={loadedMapQuestObjectives}, " +
@@ -813,34 +822,44 @@ if (scavOnlyExtracts.IsExtractVisible(ExtractFaction.Shared))
     }
 
     var categories = ItemsDataService.Instance;
-    if (categories.GetParentCategory("Weapons") != "Weapons" ||
-        categories.GetParentCategory("Magazines") != "Magazines" ||
-        categories.GetParentCategory("Rounds") != "Ammunition" ||
-        categories.GetParentCategory("Medkits") != "Medical" ||
-        categories.GetParentCategory("Food") != "Food" ||
-        categories.GetParentCategory("Melee weapons") != "Melee" ||
-        categories.GetParentCategory("Scopes") != "Parts" ||
-        categories.GetParentCategory("Grenades") != "Grenades" ||
-        categories.GetParentCategory("Electronics") != "Barter" ||
-        categories.GetParentCategory("Chest rigs") != "Rigs" ||
-        categories.GetParentCategory("Eyewear") != "Eyewear" ||
-        categories.GetParentCategory("Containers & cases") != "Containers" ||
-        categories.GetParentCategory("Armor vests") != "Armor" ||
-        categories.GetParentCategory("Info items") != "Info" ||
-        categories.GetParentCategory("Keys") != "Keys" ||
-        categories.GetParentCategory("unrecognized-category") != "Special")
+    var categoryCases = new (string Primary, string[] Hierarchy, string Expected)[]
     {
-        throw new InvalidDataException("Canonical sixteen item categories failed.");
+        ("Assault rifle", ["Assault rifle", "Weapon", "Item"], "Weapons"),
+        ("Magazine", ["Magazine", "Weapon mod", "Item"], "Magazines"),
+        ("Ammo container", ["Ammo container", "Item"], "Ammunition"),
+        ("Medical supplies", ["Medical supplies", "Barter item", "Item"], "Medical"),
+        ("Drink", ["Drink", "Food and drink", "Item"], "Food"),
+        ("Knife", ["Knife", "Item"], "Melee"),
+        ("Stock", ["Stock", "Weapon mod", "Item"], "Parts"),
+        ("Throwable weapon", ["Throwable weapon", "Item"], "Grenades"),
+        ("Electronics", ["Electronics", "Barter item", "Item"], "Barter"),
+        ("Chest rig", ["Chest rig", "Armored equipment", "Item"], "Rigs"),
+        ("Thermal Vision", ["Thermal Vision", "Special scope", "Weapon mod", "Item"], "Eyewear"),
+        ("Common container", ["Common container", "Item"], "Containers"),
+        ("Headphones", ["Headphones", "Equipment", "Item"], "Armor"),
+        ("Notes", ["Notes", "Item"], "Info"),
+        ("Mechanical Key", ["Mechanical Key", "Key", "Item"], "Keys"),
+        ("Compass", ["Compass", "Special item", "Item"], "Special")
+    };
+    if (categoryCases.Any(test =>
+            categories.GetParentCategory(test.Primary, test.Hierarchy) != test.Expected) ||
+        categories.GetParentCategory("Ammo", ["Ammo", "Item"], isRangeSubmission: true) !=
+            ItemCategoryClassifier.RangeSubmission)
+    {
+        throw new InvalidDataException("Canonical item category hierarchy classification failed.");
     }
 
     var categoryOrder = new[]
     {
         "Weapons", "Magazines", "Ammunition", "Medical", "Food", "Melee",
         "Parts", "Grenades", "Barter", "Rigs", "Eyewear", "Containers",
-        "Armor", "Info", "Keys", "Special"
+        "Armor", "Info", "Keys", "Special", ItemCategoryClassifier.RangeSubmission
     };
-    if (!categoryOrder.Select(UiSortOrder.GetItemCategoryRank).SequenceEqual(Enumerable.Range(0, 16)))
+    if (!categoryOrder.SequenceEqual(UiSortOrder.ItemCategories) ||
+        !categoryOrder.Select(UiSortOrder.GetItemCategoryRank).SequenceEqual(Enumerable.Range(0, 17)))
+    {
         throw new InvalidDataException("Item category dropdown order is not canonical.");
+    }
 
     var rangeTask = new TarkovTask
     {
@@ -897,7 +916,8 @@ static async Task<int> RunExternalApiSmokeAsync()
         var linkedAmmoRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo a JOIN Items i ON i.BsgId = a.ItemId OR i.Id = a.ItemId;");
         var koreanAmmoRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo a JOIN Items i ON i.BsgId = a.ItemId OR i.Id = a.ItemId WHERE COALESCE(NULLIF(i.NameKO, ''), '') != ''; ");
         var caliberRows = await ScalarAsync(connection, "SELECT COUNT(DISTINCT Caliber) FROM Ammo;");
-        var specificSourceRows = await ScalarAsync(connection, "SELECT COUNT(*) FROM Ammo WHERE LOWER(COALESCE(AcquisitionSource, '')) LIKE '%trader:%' OR LOWER(COALESCE(AcquisitionSource, '')) LIKE '%craft:%';");
+        var sourceSummary = await ValidateAmmoAcquisitionSourcesAsync(connection);
+        var specificSourceRows = sourceSummary.PermanentRows;
         var invalidConcreteRequirements = await ScalarAsync(connection, """
             SELECT COUNT(*)
             FROM QuestRequiredItems r
@@ -936,10 +956,12 @@ static async Task<int> RunExternalApiSmokeAsync()
             JOIN Quests required ON required.Id = r.RequiredQuestId
             WHERE source.Name = 'A Helping Hand' AND required.Name = 'Saving the Mole';
             """);
-        if (ammoRows < 150 || linkedAmmoRows != ammoRows || koreanAmmoRows < 150 || caliberRows < 20 || specificSourceRows < 20)
+        if (ammoRows < 150 || linkedAmmoRows != ammoRows || koreanAmmoRows < 150 || caliberRows < 20 ||
+            sourceSummary.TotalRows != ammoRows || specificSourceRows < 50)
         {
             throw new InvalidDataException(
-                $"Live ammo data validation failed: rows={ammoRows}, linked={linkedAmmoRows}, korean={koreanAmmoRows}, calibers={caliberRows}, sources={specificSourceRows}.");
+                $"Live ammo data validation failed: rows={ammoRows}, linked={linkedAmmoRows}, korean={koreanAmmoRows}, " +
+                $"calibers={caliberRows}, permanentSources={specificSourceRows}, raidOnly={sourceSummary.RaidOnlyRows}.");
         }
         if (invalidConcreteRequirements != 0 || invalidAlternativeRequirements != 0 ||
             unresolvedAlternativeRequirements != 0 || missingPrerequisiteLinks != 0)
@@ -957,7 +979,8 @@ static async Task<int> RunExternalApiSmokeAsync()
         }
 
         Console.WriteLine(
-            $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, sources={specificSourceRows}, " +
+            $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, permanentSources={specificSourceRows}, " +
+            $"traderRows={sourceSummary.TraderRows}, craftRows={sourceSummary.CraftRows}, raidOnly={sourceSummary.RaidOnlyRows}, " +
             $"A Helping Hand level={helpingHandLevel}, prerequisiteLinks={helpingHandPrerequisites}.");
         return 0;
     }
@@ -973,3 +996,85 @@ static async Task<long> ScalarAsync(SqliteConnection connection, string sql)
     command.CommandText = sql;
     return Convert.ToInt64(await command.ExecuteScalarAsync());
 }
+
+
+static async Task<AmmoSourceSummary> ValidateAmmoAcquisitionSourcesAsync(SqliteConnection connection)
+{
+    long totalRows = 0;
+    long permanentRows = 0;
+    long traderRows = 0;
+    long craftRows = 0;
+    long raidOnlyRows = 0;
+
+    await using var command = connection.CreateCommand();
+    command.CommandText = "SELECT ItemId, AcquisitionSource FROM Ammo ORDER BY ItemId;";
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        totalRows++;
+        var itemId = reader.IsDBNull(0) ? "?" : reader.GetString(0);
+        var source = reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim();
+        if (string.IsNullOrWhiteSpace(source))
+            throw new InvalidDataException($"Ammo acquisition source is empty: {itemId}.");
+
+        var tokens = source.Split(
+            '·',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (tokens.Length == 0)
+            throw new InvalidDataException($"Ammo acquisition source has no tokens: {itemId}.");
+
+        var hasRaid = tokens.Any(token => token.Equals("raid-found", StringComparison.OrdinalIgnoreCase));
+        var hasTrader = false;
+        var hasCraft = false;
+        foreach (var token in tokens)
+        {
+            if (token.Equals("raid-found", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var parts = token.Split(':', StringSplitOptions.TrimEntries);
+            if (parts.Length != 4 ||
+                !parts[2].Equals("level", StringComparison.OrdinalIgnoreCase) ||
+                !int.TryParse(parts[3], out var level) || level < 1)
+            {
+                throw new InvalidDataException($"Malformed ammo acquisition source: item={itemId}, source={source}.");
+            }
+
+            if (parts[0].Equals("trader", StringComparison.OrdinalIgnoreCase))
+                hasTrader = true;
+            else if (parts[0].Equals("craft", StringComparison.OrdinalIgnoreCase))
+                hasCraft = true;
+            else
+                throw new InvalidDataException($"Unsupported ammo acquisition source: item={itemId}, source={source}.");
+        }
+
+        if (hasRaid && (hasTrader || hasCraft || tokens.Length != 1))
+        {
+            throw new InvalidDataException(
+                $"Raid-only source coexists with a permanent ammo source: item={itemId}, source={source}.");
+        }
+
+        if (hasTrader || hasCraft)
+        {
+            permanentRows++;
+            if (hasTrader) traderRows++;
+            if (hasCraft) craftRows++;
+        }
+        else if (hasRaid)
+        {
+            raidOnlyRows++;
+        }
+        else
+        {
+            throw new InvalidDataException($"Ammo has neither a permanent source nor raid-only status: {itemId}.");
+        }
+    }
+
+    return new AmmoSourceSummary(totalRows, permanentRows, traderRows, craftRows, raidOnlyRows);
+}
+
+internal sealed record AmmoSourceSummary(
+    long TotalRows,
+    long PermanentRows,
+    long TraderRows,
+    long CraftRows,
+    long RaidOnlyRows);

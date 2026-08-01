@@ -34,7 +34,8 @@ public static class UiSortOrder
         "groundzero",
         "terminal");
 
-    private static readonly IReadOnlyDictionary<string, int> CategoryRanks = BuildRanks(
+    public static IReadOnlyList<string> ItemCategories { get; } =
+    [
         "Weapons",
         "Magazines",
         "Ammunition",
@@ -50,7 +51,12 @@ public static class UiSortOrder
         "Armor",
         "Info",
         "Keys",
-        "Special");
+        "Special",
+        ItemCategoryClassifier.RangeSubmission
+    ];
+
+    private static readonly IReadOnlyDictionary<string, int> CategoryRanks =
+        BuildRanks(ItemCategories.ToArray());
 
     public static int GetTraderRank(string? trader)
     {

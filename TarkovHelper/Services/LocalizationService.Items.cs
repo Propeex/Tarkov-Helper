@@ -69,7 +69,8 @@ public partial class LocalizationService
             ["Armor"] = "보호구",
             ["Info"] = "정보",
             ["Keys"] = "열쇠",
-            ["Special"] = "특수"
+            ["Special"] = "특수",
+            [ItemCategoryClassifier.RangeSubmission] = "범위 제출"
         };
 
     public string GetCategoryName(string categoryKey) =>

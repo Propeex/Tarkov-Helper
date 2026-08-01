@@ -158,45 +158,53 @@ internal static class AmmoLocalization
             .Replace("Skier", "스키어", StringComparison.OrdinalIgnoreCase)
             .Replace("Peacekeeper", "피스키퍼", StringComparison.OrdinalIgnoreCase)
             .Replace("Mechanic", "메카닉", StringComparison.OrdinalIgnoreCase)
-            .Replace("Ragman", "라그맨", StringComparison.OrdinalIgnoreCase)
+            .Replace("Ragman", "래그맨", StringComparison.OrdinalIgnoreCase)
             .Replace("Jaeger", "예거", StringComparison.OrdinalIgnoreCase)
             .Replace("Fence", "펜스", StringComparison.OrdinalIgnoreCase)
             .Replace("Ref", "레프", StringComparison.OrdinalIgnoreCase)
-            .Replace("Lightkeeper", "라이트키퍼", StringComparison.OrdinalIgnoreCase);
+            .Replace("Lightkeeper", "등대지기", StringComparison.OrdinalIgnoreCase)
+            .Replace("BTR Driver", "BTR 운전수", StringComparison.OrdinalIgnoreCase);
 
         static string Station(string value) => value
             .Replace("Workbench", "작업대", StringComparison.OrdinalIgnoreCase)
             .Replace("Lavatory", "화장실", StringComparison.OrdinalIgnoreCase)
             .Replace("Nutrition Unit", "영양 공급소", StringComparison.OrdinalIgnoreCase);
 
-        var translated = new List<string>();
+        var permanentSources = new List<string>();
+        var hasRaidSource = false;
         foreach (var raw in source.Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (raw.Equals("raid-found", StringComparison.OrdinalIgnoreCase))
             {
-                translated.Add("레이드 획득");
+                hasRaidSource = true;
                 continue;
             }
 
             var parts = raw.Split(':', StringSplitOptions.TrimEntries);
+            var level = 1;
+            for (var index = 2; index + 1 < parts.Length; index++)
+            {
+                if (parts[index].Equals("level", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(parts[index + 1], out var parsedLevel))
+                {
+                    level = Math.Max(1, parsedLevel);
+                    break;
+                }
+            }
+
             if (parts.Length >= 2 && parts[0].Equals("trader", StringComparison.OrdinalIgnoreCase))
             {
-                var text = $"상인 {Trader(parts[1])}";
-                if (parts.Length >= 4 && int.TryParse(parts[3], out var level))
-                    text += $" Lv.{level}";
-                translated.Add(text);
+                permanentSources.Add($"{Trader(parts[1])} {level}레벨");
                 continue;
             }
+
             if (parts.Length >= 2 && parts[0].Equals("craft", StringComparison.OrdinalIgnoreCase))
-            {
-                var text = $"제작 {Station(parts[1])}";
-                if (parts.Length >= 4 && int.TryParse(parts[3], out var level))
-                    text += $" Lv.{level}";
-                translated.Add(text);
-            }
+                permanentSources.Add($"제작 {Station(parts[1])} {level}레벨");
         }
 
-        return translated.Count == 0 ? "레이드 획득" : string.Join(" · ", translated.Distinct());
+        return permanentSources.Count > 0
+            ? string.Join(" · ", permanentSources.Distinct(StringComparer.OrdinalIgnoreCase))
+            : hasRaidSource ? "레이드 획득" : "레이드 획득";
     }
 
 }
