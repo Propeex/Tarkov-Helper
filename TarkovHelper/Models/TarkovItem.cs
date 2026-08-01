@@ -66,5 +66,11 @@ namespace TarkovHelper.Models
         /// </summary>
         [JsonPropertyName("category")]
         public string? Category { get; set; }
+
+        /// <summary>
+        /// Full tarkov.dev category hierarchy, from the most specific category upward.
+        /// </summary>
+        [JsonPropertyName("categories")]
+        public IReadOnlyList<string> Categories { get; set; } = Array.Empty<string>();
     }
 }

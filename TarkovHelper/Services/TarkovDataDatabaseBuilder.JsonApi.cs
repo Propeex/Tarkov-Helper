@@ -109,23 +109,33 @@ internal sealed partial class TarkovDataDatabaseBuilder
             "regular/items",
             "아이템",
             1,
-            22,
+            18,
             cancellationToken);
         var itemsEn = ParseItems(itemDocuments.English);
         var itemsKo = ParseItems(itemDocuments.Korean);
-        if (_enrichAmmoSources)
-            await TryEnrichAmmoSourcesAsync(itemsEn, cancellationToken);
         var itemLookupEn = UniqueById(itemsEn);
         var itemLookupKo = UniqueById(itemsKo);
 
         var traderDocuments = await FetchLocalizedJsonAsync(
             "regular/traders",
             "상인 참조",
-            22,
-            27,
+            18,
+            23,
             cancellationToken);
         var tradersEn = ParseNamedLookup(traderDocuments.English, "traders");
         var tradersKo = ParseNamedLookup(traderDocuments.Korean, "traders");
+        ResolveStaticTraderPurchases(itemsEn, tradersEn);
+
+        if (_enrichAmmoSources)
+        {
+            var barterDocument = await DownloadJsonAsync(
+                "regular/barters",
+                "상인 교환 데이터",
+                23,
+                27,
+                cancellationToken);
+            EnrichAmmoSourcesFromStaticBarters(itemsEn, barterDocument, tradersEn);
+        }
 
         var mapDocuments = await FetchLocalizedJsonAsync(
             "regular/maps",
@@ -140,7 +150,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
             "regular/tasks",
             "퀘스트",
             32,
-            54,
+            52,
             cancellationToken);
         var tasksEn = ParseTasks(taskDocuments.English, itemLookupEn, tradersEn, mapsEn);
         var tasksKo = ParseTasks(taskDocuments.Korean, itemLookupKo, tradersKo, mapsKo);
@@ -148,18 +158,23 @@ internal sealed partial class TarkovDataDatabaseBuilder
         var hideoutDocuments = await FetchLocalizedJsonAsync(
             "regular/hideout",
             "은신처",
-            54,
-            65,
+            52,
+            60,
             cancellationToken);
         var hideoutStationsEn = ParseNamedLookup(hideoutDocuments.English);
-        EnrichAmmoSourcesFromStaticTaskRewards(
-            itemsEn,
-            taskDocuments.English,
-            tradersEn,
-            hideoutStationsEn);
-
         var hideoutEn = ParseHideout(hideoutDocuments.English, itemLookupEn, tradersEn);
         var hideoutKo = ParseHideout(hideoutDocuments.Korean, itemLookupKo, tradersKo);
+
+        if (_enrichAmmoSources)
+        {
+            var craftDocument = await DownloadJsonAsync(
+                "regular/crafts",
+                "제작 데이터",
+                60,
+                65,
+                cancellationToken);
+            EnrichAmmoSourcesFromStaticCrafts(itemsEn, craftDocument, hideoutStationsEn);
+        }
 
         if (itemsEn.Count == 0 || tasksEn.Count == 0 || hideoutEn.Count == 0)
             throw new InvalidDataException("tarkov.dev 정적 JSON API 데이터가 비어 있습니다.");
@@ -167,46 +182,120 @@ internal sealed partial class TarkovDataDatabaseBuilder
         return MergeApiData(itemsEn, itemsKo, tasksEn, tasksKo, hideoutEn, hideoutKo);
     }
 
-    private async Task TryEnrichAmmoSourcesAsync(
-        List<ApiItem> staticItems,
-        CancellationToken cancellationToken)
+    private static void ResolveStaticTraderPurchases(
+        IEnumerable<ApiItem> items,
+        IReadOnlyDictionary<string, ApiNamedEntity> traderLookup)
     {
-        try
+        foreach (var item in items)
         {
-            Report("API", "탄약 입수 경로를 보강하는 중", 20, 0, null);
-            var graphQlItems = await FetchItemsAsync("en", 20, 22, cancellationToken);
-            var sourceLookup = UniqueById(graphQlItems);
-            var enriched = 0;
-
-            foreach (var item in staticItems)
+            foreach (var purchase in item.BuyFor)
             {
-                if (item.Properties == null || !sourceLookup.TryGetValue(item.Id, out var source))
-                    continue;
-
-                item.BuyFor = source.BuyFor;
-                item.BartersFor = source.BartersFor;
-                item.CraftsFor = source.CraftsFor;
-                item.ReceivedFromTasks = source.ReceivedFromTasks;
-                item.Properties.AcquisitionSource = null;
-                if (source.BuyFor.Count > 0 || source.BartersFor.Count > 0 ||
-                    source.CraftsFor.Count > 0 || source.ReceivedFromTasks.Count > 0)
+                var traderId = purchase.Vendor?.Id;
+                if (string.IsNullOrWhiteSpace(traderId) ||
+                    !traderLookup.TryGetValue(traderId, out var trader))
                 {
-                    enriched++;
+                    continue;
                 }
-            }
 
-            Log.Info($"Ammo acquisition sources enriched from GraphQL: {enriched}");
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Log.Warning($"Ammo acquisition source enrichment skipped: {ex.Message}");
-            Report("API", "탄약 입수 경로 온라인 보강을 건너뛰고 기본 데이터로 계속합니다", 22, 0, null);
+                purchase.Vendor = CloneNamedEntity(trader);
+            }
         }
     }
+
+    private static void EnrichAmmoSourcesFromStaticBarters(
+        IEnumerable<ApiItem> items,
+        JsonObject barterRoot,
+        IReadOnlyDictionary<string, ApiNamedEntity> traderLookup)
+    {
+        var itemLookup = UniqueById(items);
+        if (barterRoot["data"] is not JsonArray barters)
+            throw new InvalidDataException("tarkov.dev 상인 교환 응답에 data 배열이 없습니다.");
+
+        var enriched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var barter in barters.OfType<JsonObject>())
+        {
+            var offeredItemId = barter["offeredItem"] is JsonObject offeredItem
+                ? ReferenceId(offeredItem["item"])
+                : null;
+            if (string.IsNullOrWhiteSpace(offeredItemId) ||
+                !itemLookup.TryGetValue(offeredItemId, out var item) ||
+                item.Properties == null)
+            {
+                continue;
+            }
+
+            var traderId = ReferenceId(barter["trader"]);
+            var trader = ResolveStaticNamedEntity(traderId, traderLookup, "trader");
+            if (IsFleaMarket(trader.Name) || IsFleaMarket(trader.NormalizedName))
+                continue;
+
+            item.BartersFor.Add(new ApiSourceReference
+            {
+                Trader = trader,
+                Level = Math.Max(1, GetInt(barter, "minTraderLevel") ?? 1)
+            });
+            enriched.Add(item.Id);
+        }
+
+        Log.Info($"Ammo barter sources enriched from static API: {enriched.Count}");
+    }
+
+    private static void EnrichAmmoSourcesFromStaticCrafts(
+        IEnumerable<ApiItem> items,
+        JsonObject craftRoot,
+        IReadOnlyDictionary<string, ApiNamedEntity> stationLookup)
+    {
+        var itemLookup = UniqueById(items);
+        if (craftRoot["data"] is not JsonArray crafts)
+            throw new InvalidDataException("tarkov.dev 제작 응답에 data 배열이 없습니다.");
+
+        var enriched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var craft in crafts.OfType<JsonObject>())
+        {
+            var productItemId = craft["productItem"] is JsonObject productItem
+                ? ReferenceId(productItem["item"])
+                : null;
+            if (string.IsNullOrWhiteSpace(productItemId) ||
+                !itemLookup.TryGetValue(productItemId, out var item) ||
+                item.Properties == null)
+            {
+                continue;
+            }
+
+            var stationId = ReferenceId(craft["station"]);
+            item.CraftsFor.Add(new ApiSourceReference
+            {
+                Station = ResolveStaticNamedEntity(stationId, stationLookup, "hideout"),
+                Level = Math.Max(1, GetInt(craft, "level") ?? 1)
+            });
+            enriched.Add(item.Id);
+        }
+
+        Log.Info($"Ammo craft sources enriched from static API: {enriched.Count}");
+    }
+
+    private static ApiNamedEntity ResolveStaticNamedEntity(
+        string? id,
+        IReadOnlyDictionary<string, ApiNamedEntity> lookup,
+        string fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(id) && lookup.TryGetValue(id, out var known))
+            return CloneNamedEntity(known);
+
+        return new ApiNamedEntity
+        {
+            Id = id ?? string.Empty,
+            Name = id ?? fallback,
+            NormalizedName = id ?? fallback
+        };
+    }
+
+    private static ApiNamedEntity CloneNamedEntity(ApiNamedEntity source) => new()
+    {
+        Id = source.Id,
+        Name = source.Name,
+        NormalizedName = source.NormalizedName
+    };
 
     private async Task<LocalizedJsonDocuments> FetchLocalizedJsonAsync(
         string path,
@@ -463,7 +552,39 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 WikiLink = GetString(itemObject, "wikiLink"),
                 Category = itemCategories.FirstOrDefault(),
                 Categories = itemCategories,
-                Properties = ParseAmmoProperties(itemObject)
+                Properties = ParseAmmoProperties(itemObject),
+                BuyFor = ParseStaticTraderPurchases(itemObject["buyFromTrader"] as JsonArray)
+            });
+        }
+
+        return result;
+    }
+
+    private static List<ApiItemPrice> ParseStaticTraderPurchases(JsonArray? purchases)
+    {
+        var result = new List<ApiItemPrice>();
+        if (purchases == null)
+            return result;
+
+        foreach (var purchase in purchases.OfType<JsonObject>())
+        {
+            var traderId = ReferenceId(purchase["trader"]);
+            if (string.IsNullOrWhiteSpace(traderId))
+                continue;
+
+            var level = Math.Max(1, GetInt(purchase, "minTraderLevel") ?? 1);
+            result.Add(new ApiItemPrice
+            {
+                PriceRUB = GetInt(purchase, "priceRUB"),
+                Vendor = new ApiNamedEntity { Id = traderId },
+                Requirements =
+                [
+                    new ApiPriceRequirement
+                    {
+                        Type = "loyaltyLevel",
+                        Value = level
+                    }
+                ]
             });
         }
 
@@ -498,15 +619,46 @@ internal sealed partial class TarkovDataDatabaseBuilder
         };
     }
 
-    private static string ParseAcquisitionSource(JsonObject itemObject)
+    private static string? ParseAcquisitionSource(JsonObject itemObject)
     {
         var sources = new List<string>();
-        AddStructuredSources(itemObject["buyFor"] as JsonArray, "vendor", "trader", sources, includeLevel: false);
+        AddTraderPurchaseSources(itemObject["buyFor"] as JsonArray, sources);
         AddStructuredSources(itemObject["bartersFor"] as JsonArray, "trader", "trader", sources, includeLevel: true);
         AddStructuredSources(itemObject["craftsFor"] as JsonArray, "station", "craft", sources, includeLevel: true);
         return sources.Count == 0
-            ? "raid-found"
+            ? null
             : string.Join(" · ", sources.Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static void AddTraderPurchaseSources(JsonArray? values, ICollection<string> sources)
+    {
+        if (values == null)
+            return;
+
+        foreach (var value in values.OfType<JsonObject>())
+        {
+            if (value["vendor"] is not JsonObject vendor)
+                continue;
+
+            var name = GetString(vendor, "name", "normalizedName");
+            if (string.IsNullOrWhiteSpace(name) || IsFleaMarket(name))
+                continue;
+
+            var level = 1;
+            if (value["requirements"] is JsonArray requirements)
+            {
+                foreach (var requirement in requirements.OfType<JsonObject>())
+                {
+                    if (!string.Equals(GetString(requirement, "type"), "loyaltyLevel", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    level = Math.Max(1, GetInt(requirement, "value") ?? 1);
+                    break;
+                }
+            }
+
+            sources.Add($"trader:{name}:level:{level}");
+        }
     }
 
     private static void AddStructuredSources(
@@ -525,13 +677,16 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 continue;
 
             var name = GetString(sourceObject, "name", "normalizedName");
-            if (string.IsNullOrWhiteSpace(name))
+            if (string.IsNullOrWhiteSpace(name) ||
+                (sourceType.Equals("trader", StringComparison.OrdinalIgnoreCase) && IsFleaMarket(name)))
+            {
                 continue;
+            }
 
             var source = $"{sourceType}:{name}";
             var level = includeLevel ? GetInt(value, "level") : null;
-            if (level.HasValue)
-                source += $":level:{Math.Max(1, level.Value)}";
+            if (includeLevel)
+                source += $":level:{Math.Max(1, level ?? 1)}";
             sources.Add(source);
         }
     }

@@ -23,7 +23,8 @@ namespace TarkovHelper.Pages
         public string SubtitleName { get; set; } = string.Empty;
         public Visibility SubtitleVisibility { get; set; } = Visibility.Collapsed;
         public string? Category { get; set; }
-        public string ParentCategory { get; set; } = "Other";
+        public IReadOnlyList<string> Categories { get; set; } = Array.Empty<string>();
+        public string ParentCategory { get; set; } = "Special";
         public int QuestCount { get; set; }
         public int QuestFIRCount { get; set; }
         public int HideoutCount { get; set; }
@@ -251,6 +252,7 @@ namespace TarkovHelper.Pages
         public string? IconLink { get; set; }
         public string? WikiLink { get; set; }
         public string? Category { get; set; }
+        public IReadOnlyList<string> Categories { get; set; } = Array.Empty<string>();
         public int QuestCount { get; set; }
         public int QuestFIRCount { get; set; }
         public bool FoundInRaid { get; set; }

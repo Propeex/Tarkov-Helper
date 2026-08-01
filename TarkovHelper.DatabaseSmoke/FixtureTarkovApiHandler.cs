@@ -110,7 +110,22 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                             heavyBleedModifier = 0.0,
                             initialSpeed = 700.0
                         },
-                        buyFor = new[] { new { vendor = new { name = "Prapor" } } }
+                        buyFor = new[]
+                        {
+                            new
+                            {
+                                vendor = new { name = "Prapor", normalizedName = "prapor" },
+                                requirements = new[] { new { type = "loyaltyLevel", value = 1, stringValue = (string?)null } }
+                            }
+                        },
+                        bartersFor = new[]
+                        {
+                            new { trader = new { name = "Jaeger", normalizedName = "jaeger" }, level = 2 }
+                        },
+                        craftsFor = new[]
+                        {
+                            new { station = new { name = "Workbench", normalizedName = "workbench" }, level = 3 }
+                        }
                     },
                     ["fixture-item-wire"] = new
                     {
@@ -341,7 +356,24 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                 iconLink = "https://example.invalid/bolts.png",
                 wikiLink = "https://example.invalid/bolts",
                 category = new { name = "Barter item", normalizedName = "barter-item" },
-                categories = new[] { new { name = "Barter item", normalizedName = "barter-item" } }
+                categories = new[] { new { name = "Barter item", normalizedName = "barter-item" } },
+                buyFor = new[]
+                {
+                    new
+                    {
+                        priceRUB = 100,
+                        vendor = new { name = "Prapor", normalizedName = "prapor" },
+                        requirements = new[] { new { type = "loyaltyLevel", value = 1, stringValue = (string?)null } }
+                    }
+                },
+                bartersFor = new[]
+                {
+                    new { trader = new { name = "Jaeger", normalizedName = "jaeger" }, level = 2 }
+                },
+                craftsFor = new[]
+                {
+                    new { station = new { name = "Workbench", normalizedName = "workbench" }, level = 3 }
+                }
             },
             new
             {
@@ -353,7 +385,10 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                 iconLink = "https://example.invalid/wire.png",
                 wikiLink = "https://example.invalid/wire",
                 category = new { name = "Barter item", normalizedName = "barter-item" },
-                categories = new[] { new { name = "Barter item", normalizedName = "barter-item" } }
+                categories = new[] { new { name = "Barter item", normalizedName = "barter-item" } },
+                buyFor = Array.Empty<object>(),
+                bartersFor = Array.Empty<object>(),
+                craftsFor = Array.Empty<object>()
             }
         ];
     }

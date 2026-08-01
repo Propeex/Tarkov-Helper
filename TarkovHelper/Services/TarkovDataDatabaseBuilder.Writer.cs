@@ -584,42 +584,175 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
     private static string ResolveAcquisitionSource(ApiItem item, ApiAmmoProperties ammo)
     {
-        var sources = new List<string>();
-        if (!string.IsNullOrWhiteSpace(ammo.AcquisitionSource))
-        {
-            sources.AddRange(ammo.AcquisitionSource
-                .Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(source => source.Equals("raid-found", StringComparison.OrdinalIgnoreCase) ||
-                                 source.StartsWith("trader:", StringComparison.OrdinalIgnoreCase) ||
-                                 source.StartsWith("craft:", StringComparison.OrdinalIgnoreCase)));
-        }
+        var traders = new Dictionary<string, AcquisitionSourceEntry>(StringComparer.OrdinalIgnoreCase);
+        var crafts = new Dictionary<string, AcquisitionSourceEntry>(StringComparer.OrdinalIgnoreCase);
+
+        AddEncodedAcquisitionSources(ammo.AcquisitionSource, traders, crafts);
 
         foreach (var barter in item.BartersFor)
-        {
-            var trader = barter.Trader?.Name;
-            if (!string.IsNullOrWhiteSpace(trader))
-                sources.Add($"trader:{trader}:level:{Math.Max(1, barter.Level ?? 1)}");
-        }
+            AddTraderSource(traders, barter.Trader, barter.Level ?? 1);
 
         foreach (var craft in item.CraftsFor)
-        {
-            var station = craft.Station?.Name;
-            if (!string.IsNullOrWhiteSpace(station))
-                sources.Add($"craft:{station}:level:{Math.Max(1, craft.Level ?? 1)}");
-        }
+            AddCraftSource(crafts, craft.Station, craft.Level ?? 1);
 
         foreach (var purchase in item.BuyFor)
         {
-            var trader = purchase.Vendor?.Name;
-            if (!string.IsNullOrWhiteSpace(trader))
-                sources.Add($"trader:{trader}");
+            var vendorName = purchase.Vendor?.Name ?? purchase.Vendor?.NormalizedName;
+            if (string.IsNullOrWhiteSpace(vendorName) || IsFleaMarket(vendorName))
+                continue;
+
+            var loyaltyLevel = purchase.Requirements
+                .FirstOrDefault(requirement =>
+                    string.Equals(requirement.Type, "loyaltyLevel", StringComparison.OrdinalIgnoreCase))
+                ?.Value ?? 1;
+            AddSource(traders, vendorName, loyaltyLevel);
         }
 
-        if (sources.Count == 0)
-            sources.Add("raid-found");
+        if (traders.Count == 0 && crafts.Count == 0)
+            return "raid-found";
 
-        return string.Join(" · ", sources.Distinct(StringComparer.OrdinalIgnoreCase));
+        var sources = traders.Values
+            .OrderBy(source => UiSortOrder.GetTraderRank(source.Name))
+            .ThenBy(source => source.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(source => $"trader:{source.Name}:level:{source.Level}")
+            .Concat(crafts.Values
+                .OrderBy(source => GetCraftSourceRank(source.Name))
+                .ThenBy(source => source.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(source => $"craft:{source.Name}:level:{source.Level}"));
+
+        return string.Join(" · ", sources);
     }
+
+    private static void AddEncodedAcquisitionSources(
+        string? encoded,
+        IDictionary<string, AcquisitionSourceEntry> traders,
+        IDictionary<string, AcquisitionSourceEntry> crafts)
+    {
+        if (string.IsNullOrWhiteSpace(encoded))
+            return;
+
+        foreach (var raw in encoded.Split(
+                     '·',
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = raw.Split(':', StringSplitOptions.TrimEntries);
+            if (parts.Length < 2)
+                continue;
+
+            var level = 1;
+            for (var index = 2; index + 1 < parts.Length; index++)
+            {
+                if (parts[index].Equals("level", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(parts[index + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    level = Math.Max(1, parsed);
+                    break;
+                }
+            }
+
+            if (parts[0].Equals("trader", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!IsFleaMarket(parts[1]))
+                    AddSource(traders, parts[1], level);
+            }
+            else if (parts[0].Equals("craft", StringComparison.OrdinalIgnoreCase))
+            {
+                AddSource(crafts, parts[1], level);
+            }
+        }
+    }
+
+    private static void AddTraderSource(
+        IDictionary<string, AcquisitionSourceEntry> traders,
+        ApiNamedEntity? trader,
+        int level)
+    {
+        var name = trader?.Name ?? trader?.NormalizedName;
+        if (!string.IsNullOrWhiteSpace(name) && !IsFleaMarket(name))
+            AddSource(traders, name, level);
+    }
+
+    private static void AddCraftSource(
+        IDictionary<string, AcquisitionSourceEntry> crafts,
+        ApiNamedEntity? station,
+        int level)
+    {
+        var name = station?.Name ?? station?.NormalizedName;
+        if (!string.IsNullOrWhiteSpace(name))
+            AddSource(crafts, name, level);
+    }
+
+    private static void AddSource(
+        IDictionary<string, AcquisitionSourceEntry> sources,
+        string name,
+        int level)
+    {
+        var key = NormalizeSourceName(name);
+        if (string.IsNullOrWhiteSpace(key))
+            return;
+
+        var normalizedLevel = Math.Max(1, level);
+        if (!sources.TryGetValue(key, out var existing) || normalizedLevel < existing.Level)
+            sources[key] = new AcquisitionSourceEntry(name.Trim(), normalizedLevel);
+    }
+
+    private static bool IsFleaMarket(string? value)
+    {
+        var normalized = NormalizeSourceName(value);
+        return normalized is "fleamarket" or "ragfair";
+    }
+
+    private static string NormalizeSourceName(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : new string(value.Trim().ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+
+    private static int GetCraftSourceRank(string name) =>
+        NormalizeSourceName(name) == "workbench" ? 0 : 1;
+
+    private static bool IsValidAcquisitionSource(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+            return false;
+
+        var tokens = source.Split(
+            '·',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (tokens.Length == 0)
+            return false;
+
+        var hasRaid = false;
+        var hasPermanent = false;
+        foreach (var token in tokens)
+        {
+            if (token.Equals("raid-found", StringComparison.OrdinalIgnoreCase))
+            {
+                hasRaid = true;
+                continue;
+            }
+
+            var parts = token.Split(':', StringSplitOptions.TrimEntries);
+            if (parts.Length != 4 ||
+                !(parts[0].Equals("trader", StringComparison.OrdinalIgnoreCase) ||
+                  parts[0].Equals("craft", StringComparison.OrdinalIgnoreCase)) ||
+                string.IsNullOrWhiteSpace(parts[1]) ||
+                !parts[2].Equals("level", StringComparison.OrdinalIgnoreCase) ||
+                !int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var level) ||
+                level < 1)
+            {
+                return false;
+            }
+
+            if (parts[0].Equals("trader", StringComparison.OrdinalIgnoreCase) && IsFleaMarket(parts[1]))
+                return false;
+
+            hasPermanent = true;
+        }
+
+        return hasPermanent ? !hasRaid : hasRaid && tokens.Length == 1;
+    }
+
+    private sealed record AcquisitionSourceEntry(string Name, int Level);
 
 
 }

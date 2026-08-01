@@ -36,7 +36,6 @@ internal sealed partial class TarkovDataDatabaseBuilder
         public List<ApiItemPrice> BuyFor { get; set; } = [];
         public List<ApiSourceReference> BartersFor { get; set; } = [];
         public List<ApiSourceReference> CraftsFor { get; set; } = [];
-        public List<ApiNamedEntity> ReceivedFromTasks { get; set; } = [];
     }
 
     private sealed class ApiAmmoProperties
@@ -59,6 +58,14 @@ internal sealed partial class TarkovDataDatabaseBuilder
     {
         public int? PriceRUB { get; set; }
         public ApiNamedEntity? Vendor { get; set; }
+        public List<ApiPriceRequirement> Requirements { get; set; } = [];
+    }
+
+    private sealed class ApiPriceRequirement
+    {
+        public string? Type { get; set; }
+        public int? Value { get; set; }
+        public string? StringValue { get; set; }
     }
 
     private sealed class ApiSourceReference

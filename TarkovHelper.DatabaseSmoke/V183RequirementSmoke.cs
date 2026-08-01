@@ -5,12 +5,13 @@ using TarkovHelper.Pages;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Ammo;
 
-internal static class V182RequirementSmoke
+internal static class V183RequirementSmoke
 {
     [ModuleInitializer]
     internal static void Run()
     {
         ValidateCanonicalOrders();
+        ValidateItemCategoryClassification();
         ValidateAmmoPresentation();
         ValidateRangeInventoryIsolation();
         ValidateRangeGroupSorting();
@@ -37,7 +38,7 @@ internal static class V182RequirementSmoke
         {
             "Weapons", "Magazines", "Ammunition", "Medical", "Food", "Melee",
             "Parts", "Grenades", "Barter", "Rigs", "Eyewear", "Containers",
-            "Armor", "Info", "Keys", "Special"
+            "Armor", "Info", "Keys", "Special", ItemCategoryClassifier.RangeSubmission
         };
         AssertSequentialRanks(categories, UiSortOrder.GetItemCategoryRank, "item category");
     }
@@ -52,9 +53,51 @@ internal static class V182RequirementSmoke
         if (!actual.SequenceEqual(expected))
         {
             throw new InvalidDataException(
-                $"v1.8.2 {label} order regression: expected={string.Join(',', expected)}, " +
+                $"v1.8.3 {label} order regression: expected={string.Join(',', expected)}, " +
                 $"actual={string.Join(',', actual)}.");
         }
+    }
+
+    private static void ValidateItemCategoryClassification()
+    {
+        var cases = new (string Primary, string[] Hierarchy, string Expected)[]
+        {
+            ("Assault rifle", ["Assault rifle", "Weapon", "Item"], "Weapons"),
+            ("Magazine", ["Magazine", "Weapon mod", "Item"], "Magazines"),
+            ("Ammo container", ["Ammo container", "Item"], "Ammunition"),
+            ("Medical supplies", ["Medical supplies", "Barter item", "Item"], "Medical"),
+            ("Drink", ["Drink", "Food and drink", "Item"], "Food"),
+            ("Knife", ["Knife", "Item"], "Melee"),
+            ("Stock", ["Stock", "Weapon mod", "Item"], "Parts"),
+            ("Throwable weapon", ["Throwable weapon", "Item"], "Grenades"),
+            ("Electronics", ["Electronics", "Barter item", "Item"], "Barter"),
+            ("Chest rig", ["Chest rig", "Armored equipment", "Item"], "Rigs"),
+            ("Night Vision", ["Night Vision", "Special scope", "Weapon mod", "Item"], "Eyewear"),
+            ("Common container", ["Common container", "Item"], "Containers"),
+            ("Headphones", ["Headphones", "Equipment", "Item"], "Armor"),
+            ("Notes", ["Notes", "Item"], "Info"),
+            ("Mechanical Key", ["Mechanical Key", "Key", "Item"], "Keys"),
+            ("Compass", ["Compass", "Special item", "Item"], "Special")
+        };
+
+        foreach (var test in cases)
+        {
+            var actual = ItemCategoryClassifier.Classify(test.Primary, test.Hierarchy);
+            if (!string.Equals(actual, test.Expected, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Item category classification regression: primary={test.Primary}, expected={test.Expected}, actual={actual}.");
+            }
+        }
+
+        if (ItemCategoryClassifier.Classify("Ammo", ["Ammo", "Item"], isRangeSubmission: true) !=
+            ItemCategoryClassifier.RangeSubmission)
+        {
+            throw new InvalidDataException("Range-submission items were not assigned to their dedicated category.");
+        }
+
+        if (LocalizationService.Instance.GetCategoryName(ItemCategoryClassifier.RangeSubmission) != "범위 제출")
+            throw new InvalidDataException("Range-submission category localization is missing.");
     }
 
     private static void ValidateAmmoPresentation()
@@ -62,6 +105,20 @@ internal static class V182RequirementSmoke
         var grenadeDisplay = AmmoLocalization.GetCaliberDisplay("Caliber40mmRU");
         if (!string.Equals(grenadeDisplay, "40mm 러시아 유탄", StringComparison.Ordinal))
             throw new InvalidDataException($"Caliber display regression: {grenadeDisplay}");
+
+        var acquisition = AmmoLocalization.TranslateAcquisition(
+            "raid-found · trader:Prapor:level:1 · trader:Jaeger:level:2 · craft:Workbench:level:3");
+        if (!string.Equals(
+                acquisition,
+                "프라퍼 1레벨 · 예거 2레벨 · 제작 작업대 3레벨",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"Ammo acquisition display regression: {acquisition}");
+        }
+
+        var raidOnly = AmmoLocalization.TranslateAcquisition("raid-found");
+        if (!string.Equals(raidOnly, "레이드 획득", StringComparison.Ordinal))
+            throw new InvalidDataException($"Raid-only ammo display regression: {raidOnly}");
 
         var efficiency = AmmoArmorClassResult.Create(4, 15, 0).DisplayText;
         if (!int.TryParse(efficiency, out _) || efficiency.Contains("x", StringComparison.OrdinalIgnoreCase))
@@ -72,9 +129,9 @@ internal static class V182RequirementSmoke
     {
         var task = new TarkovHelper.Models.TarkovTask
         {
-            Ids = ["v182-range-smoke"],
-            NormalizedName = "v182-range-smoke",
-            Name = "v1.8.2 Range Smoke"
+            Ids = ["v183-range-smoke"],
+            NormalizedName = "v183-range-smoke",
+            Name = "v1.8.3 Range Smoke"
         };
         var requirement = new TarkovHelper.Models.QuestItem
         {
@@ -90,7 +147,7 @@ internal static class V182RequirementSmoke
             throw new InvalidDataException("Range requirement did not produce three distinct inventory keys.");
         if (keys.Any(key => requirement.AlternativeItemIds.Contains(key, StringComparer.OrdinalIgnoreCase)))
             throw new InvalidDataException("Range inventory keys collided with concrete item inventory keys.");
-        if (keys.Any(key => !key.StartsWith("range:v182-range-smoke:objective-a:", StringComparison.Ordinal)))
+        if (keys.Any(key => !key.StartsWith("range:v183-range-smoke:objective-a:", StringComparison.Ordinal)))
             throw new InvalidDataException($"Range inventory key scope is invalid: {string.Join(',', keys)}");
     }
 
@@ -160,6 +217,7 @@ internal static class V182RequirementSmoke
             AlternativeGroupHeaderText = "범위 제출 · 아래 항목 중 아무거나 3개",
             AlternativeGroupHeaderVisibility = headerVisible ? Visibility.Visible : Visibility.Collapsed,
             DisplayName = displayName,
+            ParentCategory = ItemCategoryClassifier.RangeSubmission,
             QuestCount = 3,
             TotalCount = 3
         };
