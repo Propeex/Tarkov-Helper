@@ -19,7 +19,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 -d .github/v183-static/static-api.patch.gz.b64 | gzip -dc > /tmp/static-api.patch
+          python - <<'PY'
+          import base64
+          import gzip
+          from pathlib import Path
+
+          encoded = Path('.github/v183-static/static-api.patch.gz.b64').read_text(encoding='utf-8').strip()
+          encoded += '=' * (-len(encoded) % 4)
+          compressed = base64.b64decode(encoded)
+          Path('/tmp/static-api.patch').write_bytes(gzip.decompress(compressed))
+          PY
           echo "e6e8a9d66a112f8d07d76c2190a65859eadfad2d898e887fe0be9bed9a452b70  /tmp/static-api.patch" | sha256sum -c -
           git apply --index --whitespace=error-all /tmp/static-api.patch
           git rm -f .github/v183-static/static-api.patch.gz.b64
