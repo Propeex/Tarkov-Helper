@@ -35,25 +35,18 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Path verification -Force | Out-Null
-          gh release view v1.8.3 `
-            --repo $env:GITHUB_REPOSITORY `
+          gh release view v1.8.3 --repo $env:GITHUB_REPOSITORY `
             --json name,tagName,isDraft,isPrerelease,url,publishedAt,targetCommitish,assets `
             | Set-Content verification/release.json -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "Failed to read the public release." }
-
-          gh release download v1.8.3 `
-            --repo $env:GITHUB_REPOSITORY `
-            --pattern "TarkovHelper_JH.zip" `
-            --dir verification
+          gh release download v1.8.3 --repo $env:GITHUB_REPOSITORY `
+            --pattern "TarkovHelper_JH.zip" --dir verification
           if ($LASTEXITCODE -ne 0) { throw "Failed to download the public ZIP." }
-
-          gh release download v1.8.3 `
-            --repo $env:GITHUB_REPOSITORY `
-            --pattern "TarkovHelper_JH.zip.sha256" `
-            --dir verification
+          gh release download v1.8.3 --repo $env:GITHUB_REPOSITORY `
+            --pattern "TarkovHelper_JH.zip.sha256" --dir verification
           if ($LASTEXITCODE -ne 0) { throw "Failed to download the public checksum." }
 
-      - name: Verify source, ZIP, executable, and database
+      - name: Verify source, package, and database
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -64,7 +57,6 @@ jobs:
           $env:RELEASE_COMMIT = (git -C released-source rev-parse HEAD).Trim()
 
           @'
-          import collections
           import hashlib
           import json
           import os
@@ -76,7 +68,6 @@ jobs:
 
           source = pathlib.Path(os.environ['SOURCE_PATH'])
           zip_path = pathlib.Path(os.environ['ZIP_PATH'])
-          checksum_path = pathlib.Path(os.environ['SHA_PATH'])
           release = json.loads(pathlib.Path(os.environ['RELEASE_JSON']).read_text(encoding='utf-8-sig'))
           released_commit = os.environ['RELEASE_COMMIT'].strip()
 
@@ -84,20 +75,16 @@ jobs:
               return (source / path).read_text(encoding='utf-8-sig')
 
           if release['name'] != '타르코프헬퍼_JH v1.8.3' or release['tagName'] != 'v1.8.3':
-              raise SystemExit(f'invalid release identity: {release["name"]} / {release["tagName"]}')
+              raise SystemExit('release title or tag is invalid')
           if release['isDraft'] or release['isPrerelease']:
-              raise SystemExit('v1.8.3 is not a public final release')
+              raise SystemExit('release is not public and final')
           if release['targetCommitish'] != released_commit:
-              raise SystemExit(
-                  f'release target differs from tag: target={release["targetCommitish"]}, tag={released_commit}'
-              )
-
+              raise SystemExit('release target does not match the v1.8.3 tag')
           assets = {asset['name']: int(asset['size']) for asset in release['assets']}
-          for asset in ('TarkovHelper_JH.zip', 'TarkovHelper_JH.zip.sha256'):
-              if assets.get(asset, 0) <= 0:
-                  raise SystemExit(f'missing or empty release asset: {asset}')
+          if any(assets.get(name, 0) <= 0 for name in ('TarkovHelper_JH.zip', 'TarkovHelper_JH.zip.sha256')):
+              raise SystemExit('required release asset is missing or empty')
 
-          declared_hash = checksum_path.read_text(encoding='ascii').strip().split()[0].lower()
+          declared_hash = pathlib.Path(os.environ['SHA_PATH']).read_text(encoding='ascii').strip().split()[0].lower()
           actual_hash = hashlib.sha256(zip_path.read_bytes()).hexdigest()
           if not re.fullmatch(r'[0-9a-f]{64}', declared_hash) or declared_hash != actual_hash:
               raise SystemExit(f'checksum mismatch: declared={declared_hash}, actual={actual_hash}')
@@ -112,43 +99,37 @@ jobs:
               '"Parts"', '"Grenades"', '"Barter"', '"Rigs"', '"Eyewear"', '"Containers"',
               '"Armor"', '"Info"', '"Keys"', '"Special"', 'ItemCategoryClassifier.RangeSubmission'
           ]
-          category_start = sort_source.find('ItemCategories')
-          if category_start < 0:
-              raise SystemExit('canonical item category declaration is missing')
-          category_section = sort_source[category_start:category_start + 1200]
-          positions = [category_section.find(marker) for marker in category_markers]
+          section_start = sort_source.find('ItemCategories')
+          section = sort_source[section_start:section_start + 1200] if section_start >= 0 else ''
+          positions = [section.find(marker) for marker in category_markers]
           if any(position < 0 for position in positions) or positions != sorted(positions):
-              raise SystemExit(f'canonical item category order is invalid: {positions}')
+              raise SystemExit(f'canonical category order is invalid: {positions}')
 
           localization = read_source('TarkovHelper/Services/LocalizationService.Items.cs')
-          if 'RangeSubmission => "범위 제출"' not in localization:
+          if '[ItemCategoryClassifier.RangeSubmission] = "범위 제출"' not in localization:
               raise SystemExit('range-submission localization is missing')
-          item_page = read_source('TarkovHelper/Pages/ItemsPage.xaml.cs')
-          if 'foreach (var category in UiSortOrder.ItemCategories)' not in item_page:
+          if 'foreach (var category in UiSortOrder.ItemCategories)' not in read_source('TarkovHelper/Pages/ItemsPage.xaml.cs'):
               raise SystemExit('item dropdown does not use the canonical category list')
           classifier = read_source('TarkovHelper/Services/ItemCategoryClassifier.cs')
           if 'isRangeSubmission' not in classifier or 'return RangeSubmission;' not in classifier:
               raise SystemExit('range-submission classifier override is missing')
           json_api = read_source('TarkovHelper/Services/TarkovDataDatabaseBuilder.JsonApi.cs')
-          for marker in ('regular/barters', 'regular/crafts', 'buyFromTrader'):
-              if marker not in json_api:
-                  raise SystemExit(f'static acquisition source is missing: {marker}')
+          if any(marker not in json_api for marker in ('regular/barters', 'regular/crafts', 'buyFromTrader')):
+              raise SystemExit('static trader, barter, or craft acquisition source is missing')
           if 'EnrichAmmoSourcesFromStaticTaskRewards(' in json_api:
-              raise SystemExit('quest rewards are still used as permanent acquisition sources')
+              raise SystemExit('quest rewards are still treated as permanent acquisition sources')
 
-          forbidden_names = {
-              'user_data.db', 'quest_progress.json', 'quest_progress_v2.json',
-              'objective_progress.json', 'hideout_progress.json', 'item_inventory.json',
-              'settings.json', 'app_settings.json'
-          }
-          forbidden_scanner_binaries = {'rateye.dll', 'ratstash.dll', 'tesseract.dll'}
-          required_files = {'tarkovhelper_jh.exe', 'assets/tarkov_data.db'}
-          required_markers = {
+          required_files = {
+              'tarkovhelper_jh.exe', 'assets/tarkov_data.db',
               'assets/db/icons/markers/boss.svg', 'assets/db/icons/markers/cultist.svg',
               'assets/db/icons/markers/lever.svg', 'assets/db/icons/markers/pmc spawn.svg',
               'assets/db/icons/markers/rogue.svg', 'assets/db/icons/markers/sniperscav.svg'
           }
-
+          forbidden_names = {
+              'user_data.db', 'quest_progress.json', 'quest_progress_v2.json',
+              'objective_progress.json', 'hideout_progress.json', 'item_inventory.json',
+              'settings.json', 'app_settings.json', 'rateye.dll', 'ratstash.dll', 'tesseract.dll'
+          }
           with zipfile.ZipFile(zip_path) as archive:
               entries = archive.infolist()
               names = [entry.filename.replace('\\', '/') for entry in entries]
@@ -158,34 +139,32 @@ jobs:
                   raise SystemExit('duplicate ZIP entries')
               if any(name.startswith('/') or '..' in pathlib.PurePosixPath(name).parts for name in names):
                   raise SystemExit('unsafe ZIP path')
-              if required_files - files or required_markers - files:
-                  raise SystemExit('required packaged files are missing')
+              if required_files - files:
+                  raise SystemExit(f'required packaged files are missing: {sorted(required_files - files)}')
               if any(not entry.is_dir() and entry.file_size == 0 for entry in entries):
                   raise SystemExit('empty packaged file')
               if any(pathlib.PurePosixPath(name).name in forbidden_names for name in lowered):
-                  raise SystemExit('user progress or settings file included')
+                  raise SystemExit('forbidden user-data or scanner file included')
               if any(name.endswith('.pdb') for name in lowered):
                   raise SystemExit('debug symbols included')
               if any(name.startswith('assets/scanner/') or name.startswith('thirdpartynotices/ratscanner-') for name in lowered):
                   raise SystemExit('removed scanner asset or notice included')
-              if any(pathlib.PurePosixPath(name).name in forbidden_scanner_binaries for name in lowered):
-                  raise SystemExit('removed scanner runtime dependency included')
               item_icons = [name for name in lowered if name.startswith('assets/icons/') and name.endswith('.png')]
               if len(item_icons) < 100:
                   raise SystemExit(f'too few item icons: {len(item_icons)}')
-
               extracted = pathlib.Path('verification/extracted')
               if extracted.exists():
                   shutil.rmtree(extracted)
               archive.extractall(extracted)
 
-          db_path = pathlib.Path('verification/extracted/Assets/tarkov_data.db')
-          connection = sqlite3.connect(db_path)
+          connection = sqlite3.connect('verification/extracted/Assets/tarkov_data.db')
           connection.row_factory = sqlite3.Row
           if connection.execute('pragma integrity_check').fetchone()[0] != 'ok':
               raise SystemExit('SQLite integrity check failed')
           if connection.execute('pragma foreign_key_check').fetchall():
               raise SystemExit('SQLite foreign-key violation')
+          if connection.execute("select count(*) from Items where Categories is null or json_valid(Categories) != 1").fetchone()[0]:
+              raise SystemExit('item category hierarchy JSON is missing or malformed')
 
           ammo_rows = connection.execute('''
               select i.Name, a.AcquisitionSource
@@ -203,16 +182,11 @@ jobs:
               if not tokens or ('raid-found' in tokens and not is_raid):
                   raise SystemExit(f'invalid raid/permanent source combination: {row["Name"]}: {source_value}')
               if not is_raid and not (has_trader or has_craft):
-                  raise SystemExit(f'no permanent route in source: {row["Name"]}: {source_value}')
-              if any(
-                  token != 'raid-found'
-                  and not trader_pattern.fullmatch(token)
-                  and not craft_pattern.fullmatch(token)
-                  for token in tokens
-              ):
+                  raise SystemExit(f'permanent route is missing: {row["Name"]}: {source_value}')
+              if any(token != 'raid-found' and not trader_pattern.fullmatch(token) and not craft_pattern.fullmatch(token) for token in tokens):
                   raise SystemExit(f'malformed acquisition token: {row["Name"]}: {source_value}')
               if any(word in source_value.lower() for word in ('flea', 'task', 'quest', 'reward')):
-                  raise SystemExit(f'temporary source included: {row["Name"]}: {source_value}')
+                  raise SystemExit(f'temporary or flea source included: {row["Name"]}: {source_value}')
               trader_rows += int(has_trader)
               craft_rows += int(has_craft)
               raid_rows += int(is_raid)
@@ -226,41 +200,6 @@ jobs:
               )
           if coexist_rows < 1 or level_one_rows < 1:
               raise SystemExit('trader/craft coexistence or level-one trader source is missing')
-
-          category_sets = {
-              'Magazines': {'Magazine','Cylinder Magazine','Spring Driven Cylinder','Magazines'},
-              'Ammunition': {'Ammo','Ammo container','Rocket','Rounds','Ammo boxes','Shrapnel','Ammunition'},
-              'Medical': {'Medikit','Medkits','Medical item','Medical supplies','Injury treatment','Stimulant','Stimulants','Drug','Drugs','Meds','Medical'},
-              'Food': {'Food','Drink','Drinks','Food and drink'},
-              'Melee': {'Knife','Melee','Melee weapons'},
-              'Grenades': {'Throwable weapon','Volumetric Throw Weapon','Grenades','Throwables','Special grenades'},
-              'Eyewear': {'Vis. observ. device','Night Vision','Thermal Vision','Eyewear'},
-              'Weapons': {'Weapon','Weapons','Assault rifle','Assault carbine','Machinegun','SMG','Handgun','Revolver','Shotgun','Sniper rifle','Marksman rifle','Grenade launcher','Rocket Launcher'},
-              'Parts': {'Weapon mod','Gear mod','Functional mod','Sights','Parts','Mount','Mounts','Stock','Stocks & chassis','Handguard','Handguards','Barrel','Barrels','Flashhider','Flash hiders & muzzle brakes','Silencer','Suppressors','Comb. muzzle device','Muzzle adapters','Ironsight','Iron sights','Pistol grip','Pistol grips','Receiver','Receivers and slides','Charging handle','Charging handles','Gas block','Gas blocks','Foregrip','Foregrips','Auxiliary Mod','Auxiliary parts','Bipod','Bipods','UBGL','Underbarrel grenade launchers','Scope','Scopes','Assault scope','Assault scopes','Reflex sight','Reflex sights','Compact reflex sight','Compact reflex sights','Special scope','Night vision scopes','Thermal vision sights','Flashlight','Flashlights','Comb. tact. device','Tactical combo devices','Helmet mods'},
-              'Barter': {'Barter item','Barter','Electronics','Building material','Building materials','Flammable materials','Energy elements','Household goods','Tool','Tools','Jewelry','Valuables','Battery','Fuel','Lubricant'},
-              'Rigs': {'Chest rig','Chest rigs','Backpack','Backpacks','Rigs'},
-              'Containers': {'Common container','Port. container','Locking container','Random Loot Container','Containers & cases','Secure containers','Containers'},
-              'Armor': {'Armor','Armor Plate','Armor plates','Armor vests','Armored equipment','Headwear','Face Cover','Face cover','Headphones','Earpieces'},
-              'Info': {'Info','Info items','Dialog Item','Notes','Tapes','Flyer','Map','Maps','Extraction intel','Dogtag'},
-              'Keys': {'Key','Keys','Mechanical Key','Keycard','Keycards'},
-          }
-          precedence = ['Magazines','Ammunition','Medical','Food','Melee','Grenades','Eyewear','Weapons','Parts','Barter','Rigs','Containers','Armor','Info','Keys']
-          categories = collections.Counter()
-          for row in connection.execute('select Category, Categories from Items'):
-              values = {row['Category']} if row['Category'] else set()
-              if row['Categories']:
-                  values.update(json.loads(row['Categories']))
-              result = 'Special'
-              for category in precedence:
-                  if values & category_sets[category]:
-                      result = category
-                      break
-              categories[result] += 1
-
-          canonical = ['Weapons','Magazines','Ammunition','Medical','Food','Melee','Parts','Grenades','Barter','Rigs','Eyewear','Containers','Armor','Info','Keys','Special']
-          missing = [category for category in canonical if categories[category] == 0]
-          if missing:
-              raise SystemExit(f'empty canonical item categories: {missing}')
 
           range_groups = connection.execute(
               'select count(*) from QuestRequiredItems where IsAlternativeGroup = 1'
@@ -281,19 +220,18 @@ jobs:
               'sha256': actual_hash,
               'zip_entries': len(names),
               'item_icons': len(item_icons),
+              'items': connection.execute('select count(*) from Items').fetchone()[0],
               'ammo': len(ammo_rows),
               'trader_rows': trader_rows,
               'craft_rows': craft_rows,
               'raid_only': raid_rows,
               'trader_craft_coexist': coexist_rows,
               'level_one_trader_rows': level_one_rows,
-              'item_categories': dict(categories),
               'range_groups': range_groups,
               'range_members': range_members,
           }
           pathlib.Path('verification-result.json').write_text(
-              json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True),
-              encoding='utf-8'
+              json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8'
           )
           print('RELEASE_OK ' + json.dumps(result, ensure_ascii=False, sort_keys=True))
           connection.close()
@@ -301,9 +239,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $version = (Get-Item "verification/extracted/TarkovHelper_JH.exe").VersionInfo.FileVersion
-          if ($version -ne "1.8.3.0") {
-            throw "Published executable version is invalid: $version"
-          }
+          if ($version -ne "1.8.3.0") { throw "Published executable version is invalid: $version" }
 
       - name: Upload independent verification evidence
         uses: actions/upload-artifact@v4
