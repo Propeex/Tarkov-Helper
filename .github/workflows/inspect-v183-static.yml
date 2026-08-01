@@ -1,4 +1,4 @@
-name: Inspect v1.8.3 Static Data
+name: Export Current v1.8.3 Source
 
 on:
   pull_request:
@@ -7,33 +7,17 @@ permissions:
   contents: read
 
 jobs:
-  inspect:
+  export:
     if: github.head_ref == 'agent/item-categories-ammo-sources-1.8.3'
     runs-on: ubuntu-latest
     steps:
-      - name: Probe static API documents
+      - uses: actions/checkout@v4
+      - name: Archive current source
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir static-data
-          for endpoint in items traders hideout barters crafts productions trader-inventory traderInventory; do
-            status=$(curl --silent --show-error --location --output "static-data/${endpoint}.body" --write-out '%{http_code}' "https://json.tarkov.dev/regular/${endpoint}" || true)
-            echo "${endpoint} ${status} $(wc -c < "static-data/${endpoint}.body")" | tee -a static-data/status.txt
-            if [ "$status" = 200 ]; then
-              mv "static-data/${endpoint}.body" "static-data/${endpoint}.json"
-            fi
-          done
-          cat static-data/status.txt
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          for path in sorted(Path('static-data').glob('*.json')):
-              data=json.loads(path.read_text(encoding='utf-8'))
-              print(path.name, type(data).__name__, list(data)[:20] if isinstance(data,dict) else len(data))
-          PY
-      - name: Upload static data
+        run: git archive --format=zip --output=current-v183-source.zip HEAD
+      - name: Upload current source
         uses: actions/upload-artifact@v4
         with:
-          name: v183-static-data-probe
-          path: static-data
+          name: current-v183-source
+          path: current-v183-source.zip
           if-no-files-found: error
