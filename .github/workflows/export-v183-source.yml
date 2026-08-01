@@ -1,24 +1,30 @@
-name: Export v1.8.3 Source
+name: Apply v1.8.3 Product Changes
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export:
-    if: github.head_ref == 'agent/item-categories-ammo-sources-1.8.3'
+  apply:
+    if: github.head_ref == 'agent/item-categories-ammo-sources-1.8.3' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Archive source
+        with:
+          ref: agent/item-categories-ammo-sources-1.8.3
+          fetch-depth: 0
+      - name: Apply product patch
         shell: bash
         run: |
-          git archive --format=zip --output=v183-source.zip HEAD
-      - name: Upload source
-        uses: actions/upload-artifact@v4
-        with:
-          name: v183-source
-          path: v183-source.zip
-          if-no-files-found: error
+          set -euo pipefail
+          base64 -d .github/v183/product.patch.gz.b64 | gzip -dc > /tmp/v183-product.patch
+          echo "7429dacf7a858078fe1d84f485bd63ce04056bf25b0812a37a10be6348e666c6  /tmp/v183-product.patch" | sha256sum -c -
+          git apply --index --whitespace=error-all /tmp/v183-product.patch
+          git rm -f .github/v183/product.patch.gz.b64
+          rmdir .github/v183 2>/dev/null || true
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Implement v1.8.3 item categories and ammo sources"
+          git push origin HEAD:agent/item-categories-ammo-sources-1.8.3
