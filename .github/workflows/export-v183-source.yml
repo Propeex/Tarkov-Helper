@@ -1,0 +1,24 @@
+name: Export v1.8.3 Source
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'agent/item-categories-ammo-sources-1.8.3'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive source
+        shell: bash
+        run: |
+          git archive --format=zip --output=v183-source.zip HEAD
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: v183-source
+          path: v183-source.zip
+          if-no-files-found: error
