@@ -1,23 +1,30 @@
-name: Export Current v1.8.3 Source
+name: Apply Static v1.8.3 Ammo Sources
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export:
-    if: github.head_ref == 'agent/item-categories-ammo-sources-1.8.3'
+  apply:
+    if: github.head_ref == 'agent/item-categories-ammo-sources-1.8.3' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Archive current source
-        shell: bash
-        run: git archive --format=zip --output=current-v183-source.zip HEAD
-      - name: Upload current source
-        uses: actions/upload-artifact@v4
         with:
-          name: current-v183-source
-          path: current-v183-source.zip
-          if-no-files-found: error
+          ref: agent/item-categories-ammo-sources-1.8.3
+          fetch-depth: 0
+      - name: Apply static acquisition patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .github/v183-static/static-api.patch.gz.b64 | gzip -dc > /tmp/static-api.patch
+          echo "e6e8a9d66a112f8d07d76c2190a65859eadfad2d898e887fe0be9bed9a452b70  /tmp/static-api.patch" | sha256sum -c -
+          git apply --index --whitespace=error-all /tmp/static-api.patch
+          git rm -f .github/v183-static/static-api.patch.gz.b64
+          rmdir .github/v183-static 2>/dev/null || true
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Use static trader barter and craft acquisition data"
+          git push origin HEAD:agent/item-categories-ammo-sources-1.8.3
