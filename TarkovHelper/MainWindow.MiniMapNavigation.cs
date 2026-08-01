@@ -30,6 +30,12 @@ public partial class MainWindow
             return;
         }
 
+        // XAML의 기본 선택 탭은 InitializeComponent 도중 Checked 이벤트를 발생시킵니다.
+        // 이 시점에는 PageContent 등 이름이 지정된 컨트롤이 아직 생성되지 않았을 수 있으므로
+        // 창 초기화가 끝날 때까지 미니맵 내비게이션 처리를 실행하지 않습니다.
+        if (window._isLoading || !window.IsInitialized || window.PageContent == null)
+            return;
+
         if (ReferenceEquals(radioButton, window.RadioPvp) ||
             ReferenceEquals(radioButton, window.RadioPve))
         {
