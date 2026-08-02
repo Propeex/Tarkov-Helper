@@ -1,0 +1,27 @@
+name: Create v1.9.2 hotfix branch
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git branch hotfix/startup-loading-1.9.2
+          git push origin hotfix/startup-loading-1.9.2
+          git rm .github/workflows/trigger-v1.9.2-hotfix-branch.yml
+          git commit -m "Remove v1.9.2 branch bootstrap workflow"
+          git push origin HEAD:main
