@@ -34,7 +34,7 @@ internal sealed class ItemIconUpdateService : IDisposable
         {
             Timeout = TimeSpan.FromSeconds(45)
         };
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("TarkovHelper/1.8.5 content-updater");
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("TarkovHelper/1.9.1 content-updater");
     }
 
     public async Task<IconUpdateResult> SynchronizeAsync(

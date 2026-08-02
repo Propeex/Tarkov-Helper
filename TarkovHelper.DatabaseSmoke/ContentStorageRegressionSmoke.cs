@@ -85,5 +85,59 @@ internal static class ContentStorageRegressionSmoke
         {
             throw new InvalidDataException("Rejected staging content modified the active database.");
         }
+
+        VerifyInterruptedCommitRecovery(storage, rebuiltHash);
+    }
+
+    private static void VerifyInterruptedCommitRecovery(
+        ContentStorageService storage,
+        string expectedDatabaseHash)
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        if (Directory.Exists(storage.PreviousPath))
+            Directory.Delete(storage.PreviousPath, recursive: true);
+        if (Directory.Exists(storage.StagingPath))
+            Directory.Delete(storage.StagingPath, recursive: true);
+
+        Directory.Move(storage.CurrentPath, storage.PreviousPath);
+        Directory.CreateDirectory(storage.StagingPath);
+        File.WriteAllText(
+            Path.Combine(storage.StagingPath, "interrupted-commit.marker"),
+            "staging must not become active implicitly");
+
+        var ensureCurrentSeeded = typeof(ContentStorageService).GetMethod(
+            "EnsureCurrentSeeded",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidDataException("Could not locate EnsureCurrentSeeded for recovery smoke.");
+        var cleanupInterruptedStaging = typeof(ContentStorageService).GetMethod(
+            "CleanupInterruptedStaging",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidDataException("Could not locate CleanupInterruptedStaging for recovery smoke.");
+
+        try
+        {
+            ensureCurrentSeeded.Invoke(storage, null);
+            cleanupInterruptedStaging.Invoke(storage, null);
+        }
+        catch (System.Reflection.TargetInvocationException exception)
+        {
+            throw new InvalidDataException(
+                "Interrupted content commit recovery threw an exception.",
+                exception.InnerException ?? exception);
+        }
+
+        if (!File.Exists(storage.DatabasePath))
+            throw new InvalidDataException("Interrupted commit recovery did not restore the active database.");
+        if (Directory.Exists(storage.PreviousPath))
+            throw new InvalidDataException("Interrupted commit recovery did not consume the previous content set.");
+        if (Directory.Exists(storage.StagingPath))
+            throw new InvalidDataException("Interrupted commit recovery did not discard the incomplete staging set.");
+
+        var recoveredHash = ContentStorageService.ComputeSha256(storage.DatabasePath);
+        if (!string.Equals(recoveredHash, expectedDatabaseHash, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Interrupted commit recovery used bundled data instead of the validated previous set.");
+        }
     }
 }

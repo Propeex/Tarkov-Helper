@@ -342,6 +342,9 @@ public sealed class ContentStorageService
             }
         }
 
+        if (!File.Exists(currentDatabase))
+            RecoverCurrentFromPreviousOrBundled();
+
         Directory.CreateDirectory(CurrentPath);
         if (!File.Exists(currentDatabase))
             File.Copy(BundledDatabasePath, currentDatabase, overwrite: false);
