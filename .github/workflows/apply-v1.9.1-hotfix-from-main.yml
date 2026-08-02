@@ -1,0 +1,170 @@
+name: Apply v1.9.1 hotfix to review branch
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hotfix branch
+        uses: actions/checkout@v4
+        with:
+          ref: hotfix/content-recovery-1.9.1
+          fetch-depth: 0
+
+      - name: Apply exact hotfix edits
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          service = Path('TarkovHelper/Services/ContentStorageService.cs')
+          text = service.read_text(encoding='utf-8')
+          old = '''        Directory.CreateDirectory(CurrentPath);
+          if (!File.Exists(currentDatabase))
+              File.Copy(BundledDatabasePath, currentDatabase, overwrite: false);
+          '''
+          new = '''        if (!File.Exists(currentDatabase))
+              RecoverCurrentFromPreviousOrBundled();
+
+          Directory.CreateDirectory(CurrentPath);
+          if (!File.Exists(currentDatabase))
+              File.Copy(BundledDatabasePath, currentDatabase, overwrite: false);
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'ContentStorageService target count was {text.count(old)}, expected 1')
+          service.write_text(text.replace(old, new), encoding='utf-8')
+
+          smoke = Path('TarkovHelper.DatabaseSmoke/ContentStorageRegressionSmoke.cs')
+          text = smoke.read_text(encoding='utf-8')
+          old = '''        {
+              throw new InvalidDataException("Rejected staging content modified the active database.");
+          }
+      }
+  }
+          '''
+          new = '''        {
+              throw new InvalidDataException("Rejected staging content modified the active database.");
+          }
+
+          VerifyInterruptedCommitRecovery(storage, rebuiltHash);
+      }
+
+      private static void VerifyInterruptedCommitRecovery(
+          ContentStorageService storage,
+          string expectedDatabaseHash)
+      {
+          Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+          if (Directory.Exists(storage.PreviousPath))
+              Directory.Delete(storage.PreviousPath, recursive: true);
+          if (Directory.Exists(storage.StagingPath))
+              Directory.Delete(storage.StagingPath, recursive: true);
+
+          Directory.Move(storage.CurrentPath, storage.PreviousPath);
+          Directory.CreateDirectory(storage.StagingPath);
+          File.WriteAllText(
+              Path.Combine(storage.StagingPath, "interrupted-commit.marker"),
+              "staging must not become active implicitly");
+
+          var ensureCurrentSeeded = typeof(ContentStorageService).GetMethod(
+              "EnsureCurrentSeeded",
+              System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+              ?? throw new InvalidDataException("Could not locate EnsureCurrentSeeded for recovery smoke.");
+          var cleanupInterruptedStaging = typeof(ContentStorageService).GetMethod(
+              "CleanupInterruptedStaging",
+              System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+              ?? throw new InvalidDataException("Could not locate CleanupInterruptedStaging for recovery smoke.");
+
+          try
+          {
+              ensureCurrentSeeded.Invoke(storage, null);
+              cleanupInterruptedStaging.Invoke(storage, null);
+          }
+          catch (System.Reflection.TargetInvocationException exception)
+          {
+              throw new InvalidDataException(
+                  "Interrupted content commit recovery threw an exception.",
+                  exception.InnerException ?? exception);
+          }
+
+          if (!File.Exists(storage.DatabasePath))
+              throw new InvalidDataException("Interrupted commit recovery did not restore the active database.");
+          if (Directory.Exists(storage.PreviousPath))
+              throw new InvalidDataException("Interrupted commit recovery did not consume the previous content set.");
+          if (Directory.Exists(storage.StagingPath))
+              throw new InvalidDataException("Interrupted commit recovery did not discard the incomplete staging set.");
+
+          var recoveredHash = ContentStorageService.ComputeSha256(storage.DatabasePath);
+          if (!string.Equals(recoveredHash, expectedDatabaseHash, StringComparison.Ordinal))
+          {
+              throw new InvalidDataException(
+                  "Interrupted commit recovery used bundled data instead of the validated previous set.");
+          }
+      }
+  }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'ContentStorageRegressionSmoke target count was {text.count(old)}, expected 1')
+          smoke.write_text(text.replace(old, new), encoding='utf-8')
+
+          project = Path('TarkovHelper/TarkovHelper.csproj')
+          text = project.read_text(encoding='utf-8')
+          for old, new in [
+              ('<Version>1.9.0</Version>', '<Version>1.9.1</Version>'),
+              ('<AssemblyVersion>1.9.0.0</AssemblyVersion>', '<AssemblyVersion>1.9.1.0</AssemblyVersion>'),
+              ('<FileVersion>1.9.0.0</FileVersion>', '<FileVersion>1.9.1.0</FileVersion>'),
+          ]:
+              if text.count(old) != 1:
+                  raise SystemExit(f'Project version target {old!r} count was {text.count(old)}, expected 1')
+              text = text.replace(old, new)
+          project.write_text(text, encoding='utf-8')
+
+          update_xml = Path('update.xml')
+          text = update_xml.read_text(encoding='utf-8')
+          if text.count('<!-- v1.9.0 PVP content updater -->') != 1:
+              raise SystemExit('update.xml comment target was not unique')
+          text = text.replace(
+              '<!-- v1.9.0 PVP content updater -->',
+              '<!-- v1.9.1 interrupted content recovery hotfix -->')
+          if text.count('<version>1.9.0</version>') != 1:
+              raise SystemExit('update.xml version target was not unique')
+          update_xml.write_text(text.replace('<version>1.9.0</version>', '<version>1.9.1</version>'), encoding='utf-8')
+
+          icon_service = Path('TarkovHelper/Services/ItemIconUpdateService.cs')
+          text = icon_service.read_text(encoding='utf-8')
+          if text.count('TarkovHelper/1.8.5 content-updater') != 1:
+              raise SystemExit('ItemIconUpdateService user-agent target was not unique')
+          icon_service.write_text(
+              text.replace('TarkovHelper/1.8.5 content-updater', 'TarkovHelper/1.9.1 content-updater'),
+              encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/apply-content-recovery-hotfix.yml
+          git diff --check
+
+      - name: Commit hotfix branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix interrupted content recovery for v1.9.1"
+          git push origin HEAD:hotfix/content-recovery-1.9.1
+
+      - name: Remove one-time main workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B main origin/main
+          git rm .github/workflows/apply-v1.9.1-hotfix-from-main.yml
+          git commit -m "Remove v1.9.1 hotfix application workflow"
+          git push origin HEAD:main
