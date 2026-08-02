@@ -1,0 +1,141 @@
+name: Verify public v1.9.0 release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: verify-public-v1.9.0
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'Propeex/Tarkov-Helper'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download and inspect public release
+        id: inspect
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zipUrl = "https://github.com/Propeex/Tarkov-Helper/releases/download/v1.9.0/TarkovHelper_JH.zip"
+          $shaUrl = "https://github.com/Propeex/Tarkov-Helper/releases/download/v1.9.0/TarkovHelper_JH.zip.sha256"
+          Invoke-WebRequest $zipUrl -OutFile TarkovHelper_JH.zip
+          Invoke-WebRequest $shaUrl -OutFile TarkovHelper_JH.zip.sha256
+
+          $declared = ((Get-Content TarkovHelper_JH.zip.sha256 -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declared -ne $actual) {
+            throw "Release SHA-256 mismatch: declared=$declared actual=$actual"
+          }
+
+          Expand-Archive TarkovHelper_JH.zip -DestinationPath extracted -Force
+          $exePath = "extracted/TarkovHelper_JH.exe"
+          $databasePath = "extracted/Assets/tarkov_data.db"
+          if (-not (Test-Path $exePath) -or -not (Test-Path $databasePath)) {
+            throw "Required release files are missing."
+          }
+
+          $fileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exePath)).FileVersion
+          if (-not $fileVersion.StartsWith("1.9.0.")) {
+            throw "Release executable version mismatch: $fileVersion"
+          }
+
+          $pdbCount = @(Get-ChildItem extracted -Recurse -Filter *.pdb -File -ErrorAction SilentlyContinue).Count
+          if ($pdbCount -ne 0) {
+            throw "Release contains $pdbCount PDB file(s)."
+          }
+          $iconCount = @(Get-ChildItem "extracted/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue).Count
+          if ($iconCount -lt 100) {
+            throw "Release contains too few item icons: $iconCount"
+          }
+
+          @'
+          import sqlite3
+          import sys
+          path = r"extracted/Assets/tarkov_data.db"
+          connection = sqlite3.connect(path)
+          integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+          foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+          counts = {
+              "items": connection.execute("SELECT COUNT(*) FROM Items").fetchone()[0],
+              "quests": connection.execute("SELECT COUNT(*) FROM Quests").fetchone()[0],
+              "hideout": connection.execute("SELECT COUNT(*) FROM HideoutStations").fetchone()[0],
+              "ammo": connection.execute("SELECT COUNT(*) FROM Ammo").fetchone()[0],
+          }
+          connection.close()
+          if integrity != "ok" or foreign_keys:
+              raise SystemExit(f"database validation failed: integrity={integrity}, foreign_keys={len(foreign_keys)}")
+          print(f"{counts['items']}|{counts['quests']}|{counts['hideout']}|{counts['ammo']}")
+          '@ | python - > database-counts.txt
+          if ($LASTEXITCODE -ne 0) {
+            throw "SQLite release validation failed."
+          }
+
+          $counts = (Get-Content database-counts.txt -Raw).Trim().Split('|')
+          @"
+          ## v1.9.0 공개 릴리스 검증 완료
+
+          - 공개 ZIP 다운로드 성공
+          - SHA-256 일치: ``$actual``
+          - 실행 파일 버전: ``$fileVersion``
+          - PDB 파일: ``$pdbCount``개
+          - 아이템 아이콘: ``$iconCount``개
+          - SQLite 무결성: ``ok``
+          - 외래키 위반: ``0``개
+          - 아이템: ``$($counts[0])``개
+          - 퀘스트: ``$($counts[1])``개
+          - 은신처: ``$($counts[2])``개
+          - 탄약: ``$($counts[3])``개
+          "@ | Set-Content verification.md -Encoding utf8
+
+      - name: Record verification result
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path verification.md) {
+            gh pr comment 29 --repo $env:GITHUB_REPOSITORY --body-file verification.md
+          }
+          else {
+            @"
+            ## v1.9.0 공개 릴리스 검증 실패
+
+            공개 릴리스 자산 검사 단계가 실패했습니다. Actions 실행 로그 확인이 필요합니다.
+            "@ | Set-Content verification-failed.md -Encoding utf8
+            gh pr comment 29 --repo $env:GITHUB_REPOSITORY --body-file verification-failed.md
+          }
+
+      - name: Remove one-time verification workflow
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/verify-v1.9.0-release.yml
+          git commit -m "Remove v1.9.0 release verification workflow"
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "The one-time verification workflow could not remove itself."
+            exit 0
+          }
+
+      - name: Fail when public release verification failed
+        if: steps.inspect.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
