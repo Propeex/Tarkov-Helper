@@ -35,7 +35,7 @@ jobs:
           gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             "exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            Write-Host "$env:RELEASE_TAG already exists; publishing will be skipped."
+            Write-Host "$env:RELEASE_TAG already exists; rebuilding will be skipped."
           }
           else {
             "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -64,11 +64,8 @@ jobs:
           }
 
           $databasePath = "TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db"
-          if (-not (Test-Path $databasePath)) {
-            throw "The externally rebuilt database is missing."
-          }
-          if ((Get-Item $databasePath).Length -lt 1MB) {
-            throw "The externally rebuilt database is unexpectedly small."
+          if (-not (Test-Path $databasePath) -or (Get-Item $databasePath).Length -lt 1MB) {
+            throw "The externally rebuilt database is missing or unexpectedly small."
           }
           Copy-Item $databasePath "TarkovHelper/Assets/tarkov_data.db" -Force
 
@@ -79,7 +76,6 @@ jobs:
           $ErrorActionPreference = "Stop"
           Remove-Item "TarkovHelper/Assets/Icons" -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path "TarkovHelper/Assets/Icons" -Force | Out-Null
-
           dotnet run `
             --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj `
             --configuration Release `
@@ -91,12 +87,10 @@ jobs:
             Get-Content release-icons.log
             exit $LASTEXITCODE
           }
-
           $iconCount = @(Get-ChildItem "TarkovHelper/Assets/Icons" -Filter *.png -File).Count
           if ($iconCount -lt 100) {
             throw "Too few item icons were generated: $iconCount."
           }
-          Write-Host "Generated item icons: $iconCount"
 
       - name: Publish and validate Windows package
         if: steps.guard.outputs.exists != 'true'
@@ -113,43 +107,29 @@ jobs:
 
           $exePath = "publish/TarkovHelper_JH.exe"
           $databasePath = "publish/Assets/tarkov_data.db"
-          foreach ($requiredFile in @($exePath, $databasePath)) {
-            if (-not (Test-Path $requiredFile)) {
-              throw "Required release file is missing: $requiredFile"
-            }
+          if (-not (Test-Path $exePath) -or -not (Test-Path $databasePath)) {
+            throw "Required release files are missing."
           }
-
           $fileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exePath)).FileVersion
           if (-not $fileVersion.StartsWith("$env:RELEASE_VERSION.")) {
             throw "Published executable version mismatch: $fileVersion"
           }
-
-          $publishedIcons = @(Get-ChildItem "publish/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue)
-          if ($publishedIcons.Count -lt 100) {
-            throw "Published item icons are missing: $($publishedIcons.Count)."
-          }
-          if ((Get-Item $databasePath).Length -lt 1MB) {
-            throw "The published database is unexpectedly small."
-          }
-          $pdbFiles = @(Get-ChildItem publish -Recurse -Filter *.pdb -File -ErrorAction SilentlyContinue)
-          if ($pdbFiles.Count -ne 0) {
-            throw "Published package contains $($pdbFiles.Count) PDB file(s)."
+          $iconCount = @(Get-ChildItem "publish/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue).Count
+          $pdbCount = @(Get-ChildItem publish -Recurse -Filter *.pdb -File -ErrorAction SilentlyContinue).Count
+          if ($iconCount -lt 100 -or $pdbCount -ne 0 -or (Get-Item $databasePath).Length -lt 1MB) {
+            throw "Published package validation failed: icons=$iconCount pdb=$pdbCount"
           }
 
-          $process = Start-Process `
-            -FilePath (Resolve-Path $exePath) `
-            -WorkingDirectory (Resolve-Path publish) `
-            -PassThru
+          $process = Start-Process -FilePath (Resolve-Path $exePath) -WorkingDirectory (Resolve-Path publish) -PassThru
           Start-Sleep -Seconds 20
           if ($process.HasExited) {
-            throw "Published executable exited during the 20-second startup smoke test with code $($process.ExitCode)."
+            throw "Published executable exited during the startup smoke test with code $($process.ExitCode)."
           }
           Stop-Process -Id $process.Id -Force
 
           Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
           $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
-          Write-Host "Release ZIP SHA-256: $hash"
 
       - name: Create GitHub release
         id: publish
@@ -160,17 +140,17 @@ jobs:
           @'
           ## 수정 사항
 
-          - 콘텐츠 교체 도중 프로세스 또는 PC가 중단되어 `current`가 사라진 경우, 검증된 `previous` 콘텐츠를 번들 자료보다 먼저 복구합니다.
-          - 불완전한 `staging` 콘텐츠는 자동으로 활성화하지 않고 제거합니다.
+          - 콘텐츠 교체 도중 `current`가 사라진 경우 검증된 `previous` 콘텐츠를 우선 복구합니다.
+          - 불완전한 `staging` 콘텐츠는 활성화하지 않고 제거합니다.
           - 해당 중단 상태를 재현하는 회귀 검사를 추가했습니다.
 
           ## v1.9.0 포함 주요 기능
 
-          - tarkov.dev PVP 데이터와 필요한 아이템 이미지를 프로그램에서 직접 갱신
-          - 현재·스테이징·이전 콘텐츠를 분리하여 실패 시 기존 데이터 보존
+          - tarkov.dev PVP 데이터와 필요한 아이템 이미지 직접 갱신
+          - 현재·스테이징·이전 콘텐츠 분리와 실패 시 기존 데이터 보존
           - 이전 콘텐츠 복구 및 다운로드 콘텐츠 초기화
           - PVE 선택 UI와 런타임 경로 제거
-          - 층 감지 실패 시 일반 지도와 미니맵 모두 지상층 표시
+          - 층 감지 실패 시 지상층 표시
           '@ | Set-Content release-notes.md -Encoding utf8
 
           git ls-remote --exit-code --tags origin "refs/tags/$env:RELEASE_TAG" *> $null
@@ -187,12 +167,73 @@ jobs:
             --notes-file release-notes.md `
             --verify-tag
 
-      - name: Remove successful one-time workflow
+      - name: Verify public release assets
+        id: verify
         if: steps.guard.outputs.exists == 'true' || steps.publish.outcome == 'success'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path public-release -Force | Out-Null
+          gh release download $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern "TarkovHelper_JH.zip*" `
+            --dir public-release `
+            --clobber
+
+          $zipPath = "public-release/TarkovHelper_JH.zip"
+          $shaPath = "public-release/TarkovHelper_JH.zip.sha256"
+          if (-not (Test-Path $zipPath) -or -not (Test-Path $shaPath)) {
+            throw "Public release assets are missing."
+          }
+          $declared = ((Get-Content $shaPath -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declared -ne $actual) {
+            throw "Public release SHA-256 mismatch: declared=$declared actual=$actual"
+          }
+
+          Expand-Archive $zipPath -DestinationPath public-extracted -Force
+          $exePath = "public-extracted/TarkovHelper_JH.exe"
+          $databasePath = "public-extracted/Assets/tarkov_data.db"
+          if (-not (Test-Path $exePath) -or -not (Test-Path $databasePath)) {
+            throw "Public release required files are missing."
+          }
+          $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exePath)).FileVersion
+          $iconCount = @(Get-ChildItem "public-extracted/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue).Count
+          $pdbCount = @(Get-ChildItem public-extracted -Recurse -Filter *.pdb -File -ErrorAction SilentlyContinue).Count
+          if (-not $version.StartsWith("$env:RELEASE_VERSION.") -or $iconCount -lt 100 -or $pdbCount -ne 0) {
+            throw "Public package validation failed: version=$version icons=$iconCount pdb=$pdbCount"
+          }
+
+          @'
+          import sqlite3
+          database = r"public-extracted/Assets/tarkov_data.db"
+          connection = sqlite3.connect(database)
+          integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+          foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+          counts = {
+              "items": connection.execute("SELECT COUNT(*) FROM Items").fetchone()[0],
+              "quests": connection.execute("SELECT COUNT(*) FROM Quests").fetchone()[0],
+              "hideout": connection.execute("SELECT COUNT(*) FROM HideoutStations").fetchone()[0],
+              "ammo": connection.execute("SELECT COUNT(*) FROM Ammo").fetchone()[0],
+          }
+          connection.close()
+          if integrity != "ok" or foreign_keys:
+              raise SystemExit(f"database validation failed: integrity={integrity}, foreign_keys={len(foreign_keys)}")
+          print(counts)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) {
+            throw "Public release SQLite validation failed."
+          }
+          Write-Host "PUBLIC_RELEASE_VERIFIED sha256=$actual version=$version icons=$iconCount"
+
+      - name: Remove verified one-time workflow
+        if: steps.verify.outcome == 'success'
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
           git rm .github/workflows/release-v1.9.1.yml
-          git commit -m "Remove v1.9.1 release workflow"
+          git commit -m "Remove verified v1.9.1 release workflow"
           git push origin HEAD:main
