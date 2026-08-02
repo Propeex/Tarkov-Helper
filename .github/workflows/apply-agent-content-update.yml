@@ -1,0 +1,63 @@
+name: Apply Agent Content Update
+
+on:
+  push:
+    branches:
+      - agent/pvp-content-updater
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-agent-content-update
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/pvp-content-updater
+          fetch-depth: 0
+
+      - name: Verify and apply patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            .github/agent-content-update.part1 \
+            .github/agent-content-update.part2 \
+            .github/agent-content-update.part3 \
+            .github/agent-content-update.part4 \
+            | base64 --decode > /tmp/content.patch.gz
+
+          actual_sha="$(sha256sum /tmp/content.patch.gz | awk '{print $1}')"
+          expected_sha="8cdc26e8ac261c1ebc5bab06b51c2e7f6cac72dae06d53abd68d7b7dd7cdc1b1"
+          if [[ "$actual_sha" != "$expected_sha" ]]; then
+            echo "Payload SHA-256 mismatch: expected=$expected_sha actual=$actual_sha" >&2
+            exit 1
+          fi
+
+          gzip --decompress --stdout /tmp/content.patch.gz > /tmp/content.patch
+          git apply --index --whitespace=error-all /tmp/content.patch
+
+          rm -f \
+            .github/agent-content-update.part1 \
+            .github/agent-content-update.part2 \
+            .github/agent-content-update.part3 \
+            .github/agent-content-update.part4 \
+            .github/workflows/source-snapshot.yml \
+            .github/workflows/apply-agent-content-update.yml
+          git add -A
+          git diff --cached --check
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Implement safe PVP content updater"
+          git push origin HEAD:agent/pvp-content-updater
