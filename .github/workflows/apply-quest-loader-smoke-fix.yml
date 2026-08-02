@@ -23,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected_sha="8bcc2827e6d2ad4604356a405a98b05eda295091c86df95f6555137749fd9356"
+          expected_sha="21296f93bd4f4640a1da5e81b08d15c7f041c6ad6b1bd6ce7f68b421982fcb49"
           actual_sha="$(sha256sum .github/quest-loader-smoke.patch | awk '{print $1}')"
           if [[ "$actual_sha" != "$expected_sha" ]]; then
             echo "Patch SHA-256 mismatch: expected=$expected_sha actual=$actual_sha" >&2
