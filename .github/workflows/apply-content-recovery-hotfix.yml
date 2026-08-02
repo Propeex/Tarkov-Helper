@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - hotfix/content-recovery-1.9.1
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
