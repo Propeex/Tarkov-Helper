@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.Http;
 using System.Net;
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
