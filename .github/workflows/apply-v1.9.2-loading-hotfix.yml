@@ -1,0 +1,217 @@
+name: Apply v1.9.2 loading hotfix
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hotfix branch
+        uses: actions/checkout@v4
+        with:
+          ref: hotfix/startup-loading-1.9.2
+          fetch-depth: 0
+
+      - name: Apply exact hotfix edits
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one target, found {count}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_once(
+              'TarkovHelper/Services/ContentStorageService.cs',
+              '''            var manifest = CreateManifestFromContentAsync(
+                      currentDatabase,
+                      currentIcons,
+                      source: "bundled-release",
+                      CancellationToken.None)
+                  .GetAwaiter()
+                  .GetResult();
+              SaveManifestAsync(currentManifest, manifest).GetAwaiter().GetResult();''',
+              '''            // Content storage is first touched from the WPF dispatcher thread.
+              // Running an async SQLite operation and synchronously waiting for it here
+              // deadlocks when the continuation attempts to resume on that dispatcher.
+              // Build the initial manifest on a worker thread, then write it synchronously.
+              var manifest = Task.Run(() => CreateManifestFromContentAsync(
+                      currentDatabase,
+                      currentIcons,
+                      source: "bundled-release",
+                      CancellationToken.None))
+                  .GetAwaiter()
+                  .GetResult();
+              File.WriteAllText(
+                  currentManifest,
+                  JsonSerializer.Serialize(manifest, _jsonOptions));''')
+
+          replace_once(
+              'TarkovHelper/MainWindow.xaml.cs',
+              '''        _isLoading = false;
+      }
+      #region Font Settings''',
+              '''        _isLoading = false;
+          WriteStartupReadyMarker();
+      }
+
+      private static void WriteStartupReadyMarker()
+      {
+          var markerPath = Environment.GetEnvironmentVariable("TARKOV_STARTUP_READY_FILE");
+          if (string.IsNullOrWhiteSpace(markerPath))
+              return;
+
+          try
+          {
+              var directory = Path.GetDirectoryName(markerPath);
+              if (!string.IsNullOrWhiteSpace(directory))
+                  Directory.CreateDirectory(directory);
+              File.WriteAllText(markerPath, DateTimeOffset.UtcNow.ToString("O"));
+          }
+          catch
+          {
+              // The marker exists only for automated startup validation.
+          }
+      }
+
+      #region Font Settings''')
+
+          startup = Path('.github/workflows/startup-smoke.yml')
+          text = startup.read_text(encoding='utf-8')
+          old = '''          $crashLog = Join-Path $workDir "crash_log.txt"
+
+          Remove-Item $crashLog -Force -ErrorAction SilentlyContinue
+          $process = Start-Process `
+              -FilePath $exePath `
+              -WorkingDirectory $workDir `
+              -PassThru
+
+          try {
+              $deadline = (Get-Date).AddSeconds(20)
+              do {
+                  Start-Sleep -Milliseconds 500
+                  $process.Refresh()
+                  if ($process.HasExited) {
+                      if (Test-Path $crashLog) {
+                          Write-Host "--- crash_log.txt ---"
+                          Get-Content $crashLog
+                      }
+                      throw "Application exited during startup with code $($process.ExitCode)."
+                  }
+              } while ((Get-Date) -lt $deadline)
+
+              Write-Host "Application remained alive for the startup validation window. PID=$($process.Id)"
+          }
+          finally {'''
+          new = '''          $crashLog = Join-Path $workDir "crash_log.txt"
+          $readyMarker = Join-Path $workDir "startup-ready.txt"
+          $contentRoot = Join-Path $workDir "startup-smoke-content"
+
+          Remove-Item $crashLog -Force -ErrorAction SilentlyContinue
+          Remove-Item $readyMarker -Force -ErrorAction SilentlyContinue
+          Remove-Item $contentRoot -Recurse -Force -ErrorAction SilentlyContinue
+          $env:TARKOV_STARTUP_READY_FILE = $readyMarker
+          $env:TARKOV_CONTENT_ROOT = $contentRoot
+
+          $process = Start-Process `
+              -FilePath $exePath `
+              -WorkingDirectory $workDir `
+              -PassThru
+
+          try {
+              $deadline = (Get-Date).AddSeconds(90)
+              do {
+                  Start-Sleep -Milliseconds 500
+                  $process.Refresh()
+                  if ($process.HasExited) {
+                      if (Test-Path $crashLog) {
+                          Write-Host "--- crash_log.txt ---"
+                          Get-Content $crashLog
+                      }
+                      throw "Application exited during startup with code $($process.ExitCode)."
+                  }
+
+                  if (Test-Path $readyMarker) {
+                      Write-Host "Application completed first-run loading. PID=$($process.Id)"
+                      break
+                  }
+              } while ((Get-Date) -lt $deadline)
+
+              if (-not (Test-Path $readyMarker)) {
+                  throw "Application remained alive but did not finish first-run loading within 90 seconds."
+              }
+          }
+          finally {'''
+          if text.count(old) != 1:
+              raise SystemExit(f'startup-smoke target count was {text.count(old)}, expected 1')
+          startup.write_text(text.replace(old, new), encoding='utf-8')
+
+          project = Path('TarkovHelper/TarkovHelper.csproj')
+          text = project.read_text(encoding='utf-8')
+          for old, new in [
+              ('<Version>1.9.1</Version>', '<Version>1.9.2</Version>'),
+              ('<AssemblyVersion>1.9.1.0</AssemblyVersion>', '<AssemblyVersion>1.9.2.0</AssemblyVersion>'),
+              ('<FileVersion>1.9.1.0</FileVersion>', '<FileVersion>1.9.2.0</FileVersion>'),
+          ]:
+              if text.count(old) != 1:
+                  raise SystemExit(f'project version target {old!r} was not unique')
+              text = text.replace(old, new)
+          project.write_text(text, encoding='utf-8')
+
+          update_xml = Path('update.xml')
+          text = update_xml.read_text(encoding='utf-8')
+          if text.count('<version>1.9.1</version>') != 1:
+              raise SystemExit('update.xml version target was not unique')
+          text = text.replace('<version>1.9.1</version>', '<version>1.9.2</version>')
+          text = text.replace(
+              '<!-- v1.9.1 interrupted content-set recovery hotfix -->',
+              '<!-- v1.9.2 startup loading deadlock hotfix -->')
+          update_xml.write_text(text, encoding='utf-8')
+
+          for path, old in [
+              ('TarkovHelper/Services/ItemIconUpdateService.cs', 'TarkovHelper/1.9.1 content-updater'),
+              ('TarkovHelper/Services/DatabaseUpdateService.cs', 'TarkovHelper/1.8.5 content-database-builder'),
+          ]:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: user-agent target was not unique')
+              replacement = old.replace('1.9.1', '1.9.2').replace('1.8.5', '1.9.2')
+              p.write_text(text.replace(old, replacement), encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/apply-v1.9.2-loading-hotfix.yml
+          git diff --check
+
+      - name: Commit hotfix branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix first-run loading deadlock for v1.9.2"
+          git push origin HEAD:hotfix/startup-loading-1.9.2
+
+      - name: Remove one-time workflow from main
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B main origin/main
+          git rm .github/workflows/apply-v1.9.2-loading-hotfix.yml
+          git commit -m "Remove v1.9.2 hotfix application workflow"
+          git push origin HEAD:main
