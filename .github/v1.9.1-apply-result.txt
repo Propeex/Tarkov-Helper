@@ -1,5 +1,5 @@
-check_code=128
-patch_sha256=9fafe307db58531e93fb2164cd7b8bc8ef8cd2ec98b960c0dd5e5c6942d1a397
-check_output=error: corrupt patch at /tmp/v1.9.1-content-recovery.patch:77
-branch_result=failure
-branch_head=6aa3a72f975b1162010b43138de56a3b07d9569e
+check_code=0
+patch_sha256=b94873cbe5ec6a5aead982e64a45e348dd36783861b13ac6440ce8897b421228
+check_output=
+branch_result=success
+branch_head=8426c07fc9141606c34c453da72e0ff09180bdcd
