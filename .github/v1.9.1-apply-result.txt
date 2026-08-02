@@ -1,5 +1,0 @@
-check_code=0
-patch_sha256=b94873cbe5ec6a5aead982e64a45e348dd36783861b13ac6440ce8897b421228
-check_output=
-branch_result=success
-branch_head=8426c07fc9141606c34c453da72e0ff09180bdcd
