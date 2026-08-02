@@ -1,9 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using TarkovHelper.Models;
 using TarkovHelper.Pages.Map;
-using TarkovHelper.Services;
 
 namespace TarkovHelper;
 
@@ -36,18 +34,6 @@ public partial class MainWindow
         if (window._isLoading || !window.IsInitialized || window.PageContent == null)
             return;
 
-        if (ReferenceEquals(radioButton, window.RadioPvp) ||
-            ReferenceEquals(radioButton, window.RadioPve))
-        {
-            var requestedProfile = ReferenceEquals(radioButton, window.RadioPve)
-                ? ProfileType.Pve
-                : ProfileType.Pvp;
-
-            if (ProfileService.Instance.CurrentProfile != requestedProfile)
-                window._mapTrackerPage?.ReleaseForPermanentPageReplacement();
-
-            return;
-        }
 
         if (!radioButton.Name.StartsWith("Tab", StringComparison.Ordinal) ||
             ReferenceEquals(radioButton, window.TabMap) ||

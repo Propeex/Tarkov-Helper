@@ -33,7 +33,7 @@ namespace TarkovHelper.Services
             _httpClient = new HttpClient();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "TarkovHelper/1.0");
             _imageCachePath = Path.Combine(AppEnv.CachePath, "Images");
-            _localIconsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "icons");
+            _localIconsPath = ContentStorageService.Instance.IconsPath;
             Directory.CreateDirectory(_imageCachePath);
         }
 
@@ -53,7 +53,7 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Get an item icon from local Assets/icons folder by item ID
+        /// Get an item icon from the active downloaded-content icon folder by item ID
         /// </summary>
         public BitmapImage? GetLocalItemIcon(string? itemId)
         {
@@ -72,7 +72,7 @@ namespace TarkovHelper.Services
                 }
             }
 
-            // Load from local Assets/icons folder
+            // Load from the active LocalAppData content folder
             var localPath = Path.Combine(_localIconsPath, $"{itemId}.png");
             if (!File.Exists(localPath))
             {
@@ -92,7 +92,7 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Get an item icon from local Assets/icons folder by item ID (async wrapper)
+        /// Get an item icon from the active downloaded-content icon folder by item ID (async wrapper)
         /// </summary>
         public Task<BitmapImage?> GetItemIconAsync(string? itemId)
         {

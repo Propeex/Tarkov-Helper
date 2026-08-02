@@ -43,7 +43,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        _isLoading = true; // InitializeComponent 중 발생하는 ProfileRadio_Checked 이벤트를 차단하기 위해 미리 true로 설정합니다.
+        _isLoading = true; // XAML 초기화 중 발생하는 선택 이벤트를 차단합니다.
         InitializeComponent();
         _loc.LanguageChanged += OnLanguageChanged;
         _settingsService.PlayerLevelChanged += OnPlayerLevelChanged;
@@ -53,28 +53,11 @@ public partial class MainWindow : Window
         _settingsService.HasUnheardEditionChanged += OnEditionChanged;
         _settingsService.PrestigeLevelChanged += OnPrestigeLevelChanged;
         _settingsService.FontFamilyNameChanged += OnFontFamilyNameChanged;
-        ProfileService.Instance.ProfileChanged += OnProfileChanged;
 
         // Apply dark title bar
         SourceInitialized += (s, e) => EnableDarkTitleBar();
     }
 
-    private void OnProfileChanged(object? sender, ProfileType e)
-    {
-        // 데이터 -> UI 동기화
-        _isLoading = true; // 이벤트 루프 방지
-        try
-        {
-            if (e == ProfileType.Pve)
-                RadioPve.IsChecked = true;
-            else
-                RadioPvp.IsChecked = true;
-        }
-        finally
-        {
-            _isLoading = false;
-        }
-    }
 
     private void EnableDarkTitleBar()
     {
@@ -128,10 +111,7 @@ public partial class MainWindow : Window
         UpdatePrestigeLevelUI();
         UpdateAllLocalizedText();
 
-        // 3. 현재 프로필 로드 및 데이터 무결성 검증 (내부적으로 데이터 로드 대기 수행)
-        var currentProfile = ProfileService.Instance.CurrentProfile;
-        OnProfileChanged(this, currentProfile);
-
+        // 3. PVP 데이터 무결성 검증 및 화면 초기화
         // RefreshCurrentProfileDataAsync 호출로 모든 페이지 객체 생성 및 데이터 로드 실천
         await RefreshCurrentProfileDataAsync();
 
@@ -141,8 +121,6 @@ public partial class MainWindow : Window
         StartDatabaseUpdateService();
         AutoStartLogMonitoring();
 
-        RadioPvp.Checked += ProfileRadio_Checked;
-        RadioPve.Checked += ProfileRadio_Checked;
 
         _isLoading = false;
     }
@@ -691,21 +669,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// 프로필 라디오 버튼 변경 핸들러
-    /// </summary>
-    private async void ProfileRadio_Checked(object sender, RoutedEventArgs e)
-    {
-        if (_isLoading) return;
-
-        var newProfile = sender == RadioPve ? ProfileType.Pve : ProfileType.Pvp;
-        
-        if (ProfileService.Instance.CurrentProfile != newProfile)
-        {
-            ProfileService.Instance.CurrentProfile = newProfile;
-            await RefreshCurrentProfileDataAsync();
-        }
-    }
 
     /// <summary>
     /// 현재 프로필 데이터를 기반으로 모든 서비스 및 UI 새로고침
@@ -1305,8 +1268,18 @@ public partial class MainWindow : Window
         // Update quest sync section
         UpdateQuestSyncUI();
 
-        // Update cache size display
+        // Update cache/content size and recovery state
         UpdateCacheSizeDisplay();
+        BtnRestoreContent.IsEnabled = DatabaseUpdateService.Instance.CanRestorePreviousContent;
+        var contentManifest = ContentStorageService.Instance.LoadCurrentManifest();
+        if (!DatabaseUpdateService.Instance.IsUpdating && contentManifest != null)
+        {
+            TxtApiUpdateStatus.Text =
+                $"현재 PVP 콘텐츠: {contentManifest.UpdatedAt.ToLocalTime():yyyy-MM-dd HH:mm} · " +
+                $"아이템 {contentManifest.ItemCount:N0} · 퀘스트 {contentManifest.QuestCount:N0} · " +
+                $"아이콘 {contentManifest.RequiredIconCount - contentManifest.MissingIconCount:N0}/{contentManifest.RequiredIconCount:N0}";
+            TxtApiUpdateStatus.Foreground = (Brush)FindResource("TextSecondaryBrush");
+        }
 
         // Update font size display
         UpdateFontSizeDisplay();
@@ -1815,20 +1788,11 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Calculate total data size (JSON files)
+    /// Calculate mutable downloaded content size (database, icons, manifest).
     /// </summary>
     private long CalculateDataSize()
     {
-        long totalSize = 0;
-
-        // Data directory (JSON files)
-        var dataPath = AppEnv.DataPath;
-        if (Directory.Exists(dataPath))
-        {
-            totalSize += GetDirectorySize(dataPath);
-        }
-
-        return totalSize;
+        return ContentStorageService.Instance.GetDownloadedContentSize();
     }
 
     /// <summary>
@@ -1876,17 +1840,18 @@ public partial class MainWindow : Window
         var cacheSize = CalculateCacheSize();
         var dataSize = CalculateDataSize();
         var totalSize = cacheSize + dataSize;
-        TxtCacheSize.Text = $"{FormatBytes(totalSize)} (Cache: {FormatBytes(cacheSize)}, Data: {FormatBytes(dataSize)})";
+        TxtCacheSize.Text = $"{FormatBytes(totalSize)} (이미지 캐시 {FormatBytes(cacheSize)}, 다운로드 콘텐츠 {FormatBytes(dataSize)})";
     }
 
     /// <summary>
-    /// Clear cache button click handler
+    /// Clear disposable wiki/image cache. Downloaded item icons are content and
+    /// are intentionally not removed by this operation.
     /// </summary>
     private void BtnClearCache_Click(object sender, RoutedEventArgs e)
     {
         var result = MessageBox.Show(
-            "캐시를 삭제하시겠습니까?\n(Wiki 페이지, 이미지 등이 삭제됩니다)",
-            "캐시 삭제",
+            "위키 이미지 캐시를 삭제하시겠습니까?\n다운로드한 게임 데이터와 아이템 이미지는 유지됩니다.",
+            "이미지 캐시 삭제",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
 
@@ -1895,18 +1860,14 @@ public partial class MainWindow : Window
         try
         {
             BtnClearCache.IsEnabled = false;
-            BtnClearAllData.IsEnabled = false;
-
             var cachePath = AppEnv.CachePath;
+            ImageCacheService.Instance.ClearMemoryCache();
             if (Directory.Exists(cachePath))
-            {
                 Directory.Delete(cachePath, true);
-            }
 
             UpdateCacheSizeDisplay();
-
             MessageBox.Show(
-                "캐시가 삭제되었습니다.\n데이터를 다시 가져오려면 '새로고침' 버튼을 누르세요.",
+                "이미지 캐시가 삭제되었습니다. 필요한 위키 이미지는 다시 열 때 자동으로 내려받습니다.",
                 "삭제 완료",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -1914,7 +1875,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             MessageBox.Show(
-                $"캐시 삭제 중 오류 발생: {ex.Message}",
+                $"이미지 캐시 삭제 중 오류 발생: {ex.Message}",
                 "오류",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -1922,7 +1883,6 @@ public partial class MainWindow : Window
         finally
         {
             BtnClearCache.IsEnabled = true;
-            BtnClearAllData.IsEnabled = true;
         }
     }
 
@@ -1932,57 +1892,46 @@ public partial class MainWindow : Window
     private async void BtnClearAllData_Click(object sender, RoutedEventArgs e)
     {
         var result = MessageBox.Show(
-            "모든 데이터를 삭제하시겠습니까?\n(캐시, 퀘스트 데이터, 아이템 데이터 등이 삭제됩니다)\n\n⚠️ 퀘스트 진행 상태는 유지됩니다.",
-            "데이터 초기화",
+            "API로 내려받은 PVP 데이터와 아이템 이미지를 삭제하고\n현재 릴리스에 포함된 기본 콘텐츠로 복원하시겠습니까?\n\n사용자 진행도와 설정은 유지됩니다.",
+            "다운로드 콘텐츠 초기화",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
-
         if (result != MessageBoxResult.Yes) return;
 
-        try
+        HideSettingsOverlay();
+        var reset = await DatabaseUpdateService.Instance.ResetDownloadedContentAsync();
+        UpdateCacheSizeDisplay();
+        MessageBox.Show(
+            reset.Message,
+            reset.Success ? "복원 완료" : "복원 실패",
+            MessageBoxButton.OK,
+            reset.Success ? MessageBoxImage.Information : MessageBoxImage.Error);
+    }
+
+    private async void BtnRestoreContent_Click(object sender, RoutedEventArgs e)
+    {
+        if (!DatabaseUpdateService.Instance.CanRestorePreviousContent)
         {
-            BtnClearCache.IsEnabled = false;
-            BtnClearAllData.IsEnabled = false;
-
-            // Clear cache
-            var cachePath = AppEnv.CachePath;
-            if (Directory.Exists(cachePath))
-            {
-                Directory.Delete(cachePath, true);
-            }
-
-            // Clear data files (user data is now in Config/user_data.db, safe to delete all)
-            var dataPath = AppEnv.DataPath;
-            if (Directory.Exists(dataPath))
-            {
-                Directory.Delete(dataPath, true);
-            }
-
-            UpdateCacheSizeDisplay();
-
-            // Hide settings overlay
-            HideSettingsOverlay();
-
-            // Show confirmation
-            MessageBox.Show(
-                "캐시가 삭제되었습니다.",
-                "완료",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            MessageBox.Show("복구할 이전 콘텐츠가 없습니다.", "이전 콘텐츠 복구",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
         }
-        catch (Exception ex)
-        {
-            MessageBox.Show(
-                $"데이터 삭제 중 오류 발생: {ex.Message}",
-                "오류",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-        }
-        finally
-        {
-            BtnClearCache.IsEnabled = true;
-            BtnClearAllData.IsEnabled = true;
-        }
+
+        var confirmation = MessageBox.Show(
+            "직전 업데이트 또는 초기화 이전의 데이터와 아이템 이미지로 복구하시겠습니까?\n사용자 진행도와 설정은 유지됩니다.",
+            "이전 콘텐츠 복구",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes) return;
+
+        HideSettingsOverlay();
+        var restored = await DatabaseUpdateService.Instance.RestorePreviousContentAsync();
+        UpdateCacheSizeDisplay();
+        MessageBox.Show(
+            restored.Message,
+            restored.Success ? "복구 완료" : "복구 실패",
+            MessageBoxButton.OK,
+            restored.Success ? MessageBoxImage.Information : MessageBoxImage.Error);
     }
 
     /// <summary>
@@ -1990,49 +1939,24 @@ public partial class MainWindow : Window
     /// </summary>
     private async void BtnUpdateApiData_Click(object sender, RoutedEventArgs e)
     {
+        BtnUpdateApiData.IsEnabled = false;
+        TxtApiUpdateStatus.Text = "PVP 데이터와 아이템 이미지 업데이트를 준비하는 중...";
+        TxtApiUpdateStatus.Foreground = (Brush)FindResource("TextSecondaryBrush");
+
         try
         {
-            BtnUpdateApiData.IsEnabled = false;
-            TxtApiUpdateStatus.Text = _loc.ApiUpdateCheck;
-            TxtApiUpdateStatus.Foreground = (Brush)FindResource("TextSecondaryBrush");
-
             var result = await DatabaseUpdateService.Instance.CheckAndUpdateAsync();
-
-            if (result.Success)
-            {
-                if (result.WasUpdated)
-                {
-                    TxtApiUpdateStatus.Text = _loc.ApiUpdateSuccess;
-                    TxtApiUpdateStatus.Foreground = (Brush)FindResource("SuccessBrush");
-
-                    // Refresh current page to show new data
-                    if (_questListPage != null && _questListPage.IsVisible)
-                    {
-                        await LoadAndShowQuestListAsync();
-                    }
-                    else if (_itemsPage != null && _itemsPage.IsVisible)
-                    {
-                        // ItemsPage doesn't have a public refresh, but reload should work
-                        _itemsPage = new Pages.ItemsPage();
-                        PageContent.Content = _itemsPage;
-                    }
-                }
-                else
-                {
-                    TxtApiUpdateStatus.Text = _loc.ApiUpToDate;
-                    TxtApiUpdateStatus.Foreground = (Brush)FindResource("TextSecondaryBrush");
-                }
-            }
-            else
-            {
-                TxtApiUpdateStatus.Text = string.Format(_loc.ApiUpdateFail, result.Message);
-                TxtApiUpdateStatus.Foreground = (Brush)FindResource("ErrorBrush");
-            }
+            TxtApiUpdateStatus.Text = result.Message;
+            TxtApiUpdateStatus.Foreground = result.Success
+                ? (Brush)FindResource("SuccessBrush")
+                : (Brush)FindResource("ErrorBrush");
+            UpdateCacheSizeDisplay();
+            BtnRestoreContent.IsEnabled = DatabaseUpdateService.Instance.CanRestorePreviousContent;
         }
         catch (Exception ex)
         {
-            _log.Error($"Manual API update failed: {ex.Message}");
-            TxtApiUpdateStatus.Text = string.Format(_loc.ApiUpdateFail, ex.Message);
+            _log.Error("Manual PVP content update failed", ex);
+            TxtApiUpdateStatus.Text = $"업데이트 실패: {ex.Message}";
             TxtApiUpdateStatus.Foreground = (Brush)FindResource("ErrorBrush");
         }
         finally
