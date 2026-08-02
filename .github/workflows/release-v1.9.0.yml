@@ -1,0 +1,202 @@
+name: Release v1.9.0
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-v1.9.0
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'Propeex/Tarkov-Helper'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v1.9.0
+      RELEASE_VERSION: 1.9.0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check existing release
+        id: guard
+        shell: pwsh
+        run: |
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "$env:RELEASE_TAG already exists; build and publishing will be skipped."
+          }
+          else {
+            "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+
+      - name: Setup .NET
+        if: steps.guard.outputs.exists != 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Rebuild live PVP database
+        if: steps.guard.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet run `
+            --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj `
+            --configuration Release `
+            -- `
+            --external *> release-database.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content release-database.log
+            exit $LASTEXITCODE
+          }
+
+          $databasePath = "TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db"
+          if (-not (Test-Path $databasePath)) {
+            throw "The externally rebuilt database is missing."
+          }
+          if ((Get-Item $databasePath).Length -lt 1MB) {
+            throw "The externally rebuilt database is unexpectedly small."
+          }
+          Copy-Item $databasePath "TarkovHelper/Assets/tarkov_data.db" -Force
+
+      - name: Download and convert required item icons
+        if: steps.guard.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item "TarkovHelper/Assets/Icons" -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path "TarkovHelper/Assets/Icons" -Force | Out-Null
+
+          dotnet run `
+            --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj `
+            --configuration Release `
+            -- `
+            --database "TarkovHelper/Assets/tarkov_data.db" `
+            --output "TarkovHelper/Assets/Icons" `
+            --concurrency 8 *> release-icons.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content release-icons.log
+            exit $LASTEXITCODE
+          }
+
+          $iconCount = @(Get-ChildItem "TarkovHelper/Assets/Icons" -Filter *.png -File).Count
+          if ($iconCount -lt 100) {
+            throw "Too few item icons were generated: $iconCount."
+          }
+          Write-Host "Generated item icons: $iconCount"
+
+      - name: Publish and validate Windows package
+        if: steps.guard.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet publish TarkovHelper/TarkovHelper.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained false `
+            --output publish `
+            -p:DebugType=None `
+            -p:DebugSymbols=false
+
+          $exePath = "publish/TarkovHelper_JH.exe"
+          $databasePath = "publish/Assets/tarkov_data.db"
+          foreach ($requiredFile in @($exePath, $databasePath)) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Required release file is missing: $requiredFile"
+            }
+          }
+
+          $fileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exePath)).FileVersion
+          if (-not $fileVersion.StartsWith("$env:RELEASE_VERSION.")) {
+            throw "Published executable version mismatch: $fileVersion"
+          }
+
+          $publishedIcons = @(Get-ChildItem "publish/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue)
+          if ($publishedIcons.Count -lt 100) {
+            throw "Published item icons are missing: $($publishedIcons.Count)."
+          }
+          if ((Get-Item $databasePath).Length -lt 1MB) {
+            throw "The published database is unexpectedly small."
+          }
+          $pdbFiles = @(Get-ChildItem publish -Recurse -Filter *.pdb -File -ErrorAction SilentlyContinue)
+          if ($pdbFiles.Count -ne 0) {
+            throw "Published package contains $($pdbFiles.Count) PDB file(s)."
+          }
+
+          $process = Start-Process `
+            -FilePath (Resolve-Path $exePath) `
+            -WorkingDirectory (Resolve-Path publish) `
+            -PassThru
+          Start-Sleep -Seconds 20
+          if ($process.HasExited) {
+            throw "Published executable exited during the 20-second startup smoke test with code $($process.ExitCode)."
+          }
+          Stop-Process -Id $process.Id -Force
+
+          Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
+          $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
+          Write-Host "Release ZIP SHA-256: $hash"
+
+      - name: Create GitHub release
+        if: steps.guard.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          @'
+          ## 주요 변경
+
+          - tarkov.dev PVP 데이터와 필요한 아이템 이미지를 프로그램에서 직접 갱신
+          - 현재·스테이징·이전 콘텐츠를 분리하여 실패 시 기존 데이터 보존
+          - 이전 콘텐츠 복구 및 다운로드 콘텐츠 초기화 기능 추가
+          - PVE 선택 UI와 런타임 경로 제거, 명확한 PVE 로그 동기화 차단
+          - 층 감지 실패 시 일반 지도와 미니맵 모두 지상층 표시
+          - 신규 데이터 유형 경고와 DB·아이콘 무결성 검사 강화
+
+          ## 안전성
+
+          - 사용자 진행도 DB는 콘텐츠 갱신·초기화 대상에서 제외됩니다.
+          - 갱신 실패 시 현재 사용 중인 콘텐츠는 유지됩니다.
+          - 릴리스 패키지는 실제 tarkov.dev PVP 데이터와 검증된 아이템 아이콘을 포함합니다.
+          '@ | Set-Content release-notes.md -Encoding utf8
+
+          git ls-remote --exit-code --tags origin "refs/tags/$env:RELEASE_TAG" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            git tag -a $env:RELEASE_TAG -m "Release $env:RELEASE_TAG"
+            git push origin $env:RELEASE_TAG
+          }
+
+          gh release create $env:RELEASE_TAG `
+            TarkovHelper_JH.zip `
+            TarkovHelper_JH.zip.sha256 `
+            --repo $env:GITHUB_REPOSITORY `
+            --title "$env:RELEASE_TAG · PVP 독립 콘텐츠 업데이트" `
+            --notes-file release-notes.md `
+            --verify-tag
+
+      - name: Remove one-time release workflow
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/release-v1.9.0.yml
+          git commit -m "Remove v1.9.0 release workflow"
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Release completed, but the one-time workflow could not remove itself."
+            exit 0
+          }
