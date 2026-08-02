@@ -24,125 +24,128 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
 
           service = Path('TarkovHelper/Services/ContentStorageService.cs')
           text = service.read_text(encoding='utf-8')
-          old = '''        Directory.CreateDirectory(CurrentPath);
-          if (!File.Exists(currentDatabase))
-              File.Copy(BundledDatabasePath, currentDatabase, overwrite: false);
-          '''
-          new = '''        if (!File.Exists(currentDatabase))
-              RecoverCurrentFromPreviousOrBundled();
-
-          Directory.CreateDirectory(CurrentPath);
-          if (!File.Exists(currentDatabase))
-              File.Copy(BundledDatabasePath, currentDatabase, overwrite: false);
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'ContentStorageService target count was {text.count(old)}, expected 1')
-          service.write_text(text.replace(old, new), encoding='utf-8')
+          pattern = re.compile(
+              r'(?m)^(?P<i>\s*)Directory\.CreateDirectory\(CurrentPath\);\n'
+              r'(?P=i)if \(!File\.Exists\(currentDatabase\)\)\n'
+              r'(?P=i)    File\.Copy\(BundledDatabasePath, currentDatabase, overwrite: false\);$')
+          replacement = (
+              r'\g<i>if (!File.Exists(currentDatabase))\n'
+              r'\g<i>    RecoverCurrentFromPreviousOrBundled();\n\n'
+              r'\g<i>Directory.CreateDirectory(CurrentPath);\n'
+              r'\g<i>if (!File.Exists(currentDatabase))\n'
+              r'\g<i>    File.Copy(BundledDatabasePath, currentDatabase, overwrite: false);')
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'ContentStorageService target count was {count}, expected 1')
+          service.write_text(text, encoding='utf-8')
 
           smoke = Path('TarkovHelper.DatabaseSmoke/ContentStorageRegressionSmoke.cs')
           text = smoke.read_text(encoding='utf-8')
-          old = '''        {
-              throw new InvalidDataException("Rejected staging content modified the active database.");
-          }
-      }
-  }
-          '''
-          new = '''        {
-              throw new InvalidDataException("Rejected staging content modified the active database.");
-          }
+          call_anchor = (
+              '        if (!string.Equals(\n'
+              '                ContentStorageService.ComputeSha256(storage.DatabasePath),\n'
+              '                rebuiltHash,\n'
+              '                StringComparison.Ordinal))\n'
+              '        {\n'
+              '            throw new InvalidDataException("Rejected staging content modified the active database.");\n'
+              '        }\n')
+          if text.count(call_anchor) != 1:
+              raise SystemExit(f'ContentStorageRegressionSmoke anchor count was {text.count(call_anchor)}, expected 1')
+          text = text.replace(call_anchor, call_anchor + '\n        VerifyInterruptedCommitRecovery(storage, rebuiltHash);\n', 1)
 
-          VerifyInterruptedCommitRecovery(storage, rebuiltHash);
-      }
+          class_close = '    }\n}\n'
+          if not text.endswith(class_close):
+              raise SystemExit('ContentStorageRegressionSmoke class ending was not recognized')
+          method = '''
 
-      private static void VerifyInterruptedCommitRecovery(
-          ContentStorageService storage,
-          string expectedDatabaseHash)
-      {
-          Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-          if (Directory.Exists(storage.PreviousPath))
-              Directory.Delete(storage.PreviousPath, recursive: true);
-          if (Directory.Exists(storage.StagingPath))
-              Directory.Delete(storage.StagingPath, recursive: true);
+    private static void VerifyInterruptedCommitRecovery(
+        ContentStorageService storage,
+        string expectedDatabaseHash)
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        if (Directory.Exists(storage.PreviousPath))
+            Directory.Delete(storage.PreviousPath, recursive: true);
+        if (Directory.Exists(storage.StagingPath))
+            Directory.Delete(storage.StagingPath, recursive: true);
 
-          Directory.Move(storage.CurrentPath, storage.PreviousPath);
-          Directory.CreateDirectory(storage.StagingPath);
-          File.WriteAllText(
-              Path.Combine(storage.StagingPath, "interrupted-commit.marker"),
-              "staging must not become active implicitly");
+        Directory.Move(storage.CurrentPath, storage.PreviousPath);
+        Directory.CreateDirectory(storage.StagingPath);
+        File.WriteAllText(
+            Path.Combine(storage.StagingPath, "interrupted-commit.marker"),
+            "staging must not become active implicitly");
 
-          var ensureCurrentSeeded = typeof(ContentStorageService).GetMethod(
-              "EnsureCurrentSeeded",
-              System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-              ?? throw new InvalidDataException("Could not locate EnsureCurrentSeeded for recovery smoke.");
-          var cleanupInterruptedStaging = typeof(ContentStorageService).GetMethod(
-              "CleanupInterruptedStaging",
-              System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-              ?? throw new InvalidDataException("Could not locate CleanupInterruptedStaging for recovery smoke.");
+        var ensureCurrentSeeded = typeof(ContentStorageService).GetMethod(
+            "EnsureCurrentSeeded",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidDataException("Could not locate EnsureCurrentSeeded for recovery smoke.");
+        var cleanupInterruptedStaging = typeof(ContentStorageService).GetMethod(
+            "CleanupInterruptedStaging",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidDataException("Could not locate CleanupInterruptedStaging for recovery smoke.");
 
-          try
-          {
-              ensureCurrentSeeded.Invoke(storage, null);
-              cleanupInterruptedStaging.Invoke(storage, null);
-          }
-          catch (System.Reflection.TargetInvocationException exception)
-          {
-              throw new InvalidDataException(
-                  "Interrupted content commit recovery threw an exception.",
-                  exception.InnerException ?? exception);
-          }
+        try
+        {
+            ensureCurrentSeeded.Invoke(storage, null);
+            cleanupInterruptedStaging.Invoke(storage, null);
+        }
+        catch (System.Reflection.TargetInvocationException exception)
+        {
+            throw new InvalidDataException(
+                "Interrupted content commit recovery threw an exception.",
+                exception.InnerException ?? exception);
+        }
 
-          if (!File.Exists(storage.DatabasePath))
-              throw new InvalidDataException("Interrupted commit recovery did not restore the active database.");
-          if (Directory.Exists(storage.PreviousPath))
-              throw new InvalidDataException("Interrupted commit recovery did not consume the previous content set.");
-          if (Directory.Exists(storage.StagingPath))
-              throw new InvalidDataException("Interrupted commit recovery did not discard the incomplete staging set.");
+        if (!File.Exists(storage.DatabasePath))
+            throw new InvalidDataException("Interrupted commit recovery did not restore the active database.");
+        if (Directory.Exists(storage.PreviousPath))
+            throw new InvalidDataException("Interrupted commit recovery did not consume the previous content set.");
+        if (Directory.Exists(storage.StagingPath))
+            throw new InvalidDataException("Interrupted commit recovery did not discard the incomplete staging set.");
 
-          var recoveredHash = ContentStorageService.ComputeSha256(storage.DatabasePath);
-          if (!string.Equals(recoveredHash, expectedDatabaseHash, StringComparison.Ordinal))
-          {
-              throw new InvalidDataException(
-                  "Interrupted commit recovery used bundled data instead of the validated previous set.");
-          }
-      }
-  }
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'ContentStorageRegressionSmoke target count was {text.count(old)}, expected 1')
-          smoke.write_text(text.replace(old, new), encoding='utf-8')
+        var recoveredHash = ContentStorageService.ComputeSha256(storage.DatabasePath);
+        if (!string.Equals(recoveredHash, expectedDatabaseHash, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Interrupted commit recovery used bundled data instead of the validated previous set.");
+        }
+    }
+'''
+          text = text[:-len(class_close)] + '    }' + method + '}\n'
+          smoke.write_text(text, encoding='utf-8')
 
           project = Path('TarkovHelper/TarkovHelper.csproj')
           text = project.read_text(encoding='utf-8')
-          for old, new in [
+          replacements = [
               ('<Version>1.9.0</Version>', '<Version>1.9.1</Version>'),
               ('<AssemblyVersion>1.9.0.0</AssemblyVersion>', '<AssemblyVersion>1.9.1.0</AssemblyVersion>'),
               ('<FileVersion>1.9.0.0</FileVersion>', '<FileVersion>1.9.1.0</FileVersion>'),
-          ]:
+          ]
+          for old, new in replacements:
               if text.count(old) != 1:
                   raise SystemExit(f'Project version target {old!r} count was {text.count(old)}, expected 1')
-              text = text.replace(old, new)
+              text = text.replace(old, new, 1)
           project.write_text(text, encoding='utf-8')
 
           update_xml = Path('update.xml')
           text = update_xml.read_text(encoding='utf-8')
-          if text.count('<!-- v1.9.0 PVP content updater -->') != 1:
-              raise SystemExit('update.xml comment target was not unique')
-          text = text.replace(
-              '<!-- v1.9.0 PVP content updater -->',
-              '<!-- v1.9.1 interrupted content recovery hotfix -->')
-          if text.count('<version>1.9.0</version>') != 1:
-              raise SystemExit('update.xml version target was not unique')
-          update_xml.write_text(text.replace('<version>1.9.0</version>', '<version>1.9.1</version>'), encoding='utf-8')
+          old_comment = '<!-- v1.9.0 PVP content updater -->'
+          if text.count(old_comment) != 1 or text.count('<version>1.9.0</version>') != 1:
+              raise SystemExit('update.xml v1.9.0 targets were not unique')
+          text = text.replace(old_comment, '<!-- v1.9.1 interrupted content recovery hotfix -->', 1)
+          text = text.replace('<version>1.9.0</version>', '<version>1.9.1</version>', 1)
+          update_xml.write_text(text, encoding='utf-8')
 
           icon_service = Path('TarkovHelper/Services/ItemIconUpdateService.cs')
           text = icon_service.read_text(encoding='utf-8')
-          if text.count('TarkovHelper/1.8.5 content-updater') != 1:
-              raise SystemExit('ItemIconUpdateService user-agent target was not unique')
+          old_agent = 'TarkovHelper/1.8.5 content-updater'
+          if text.count(old_agent) != 1:
+              raise SystemExit(f'ItemIconUpdateService user-agent target count was {text.count(old_agent)}, expected 1')
           icon_service.write_text(
-              text.replace('TarkovHelper/1.8.5 content-updater', 'TarkovHelper/1.9.1 content-updater'),
+              text.replace(old_agent, 'TarkovHelper/1.9.1 content-updater', 1),
               encoding='utf-8')
           PY
 
