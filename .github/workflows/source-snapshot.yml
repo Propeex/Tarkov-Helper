@@ -1,9 +1,7 @@
 name: Source Snapshot
 
 on:
-  push:
-    branches:
-      - agent/pvp-content-updater
+  pull_request:
 
 permissions:
   contents: read
