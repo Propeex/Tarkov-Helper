@@ -65,4 +65,10 @@
     <PackageReference Include="SkiaSharp" Version="4.150.1" />
     <PackageReference Include="Westermo.GraphX.Controls" Version="3.0.1" />
   </ItemGroup>
+  <Target Name="RemovePublishDebugSymbols" AfterTargets="Publish">
+    <ItemGroup>
+      <PublishDebugSymbols Include="$(PublishDir)**\*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(PublishDebugSymbols)" />
+  </Target>
 </Project>
