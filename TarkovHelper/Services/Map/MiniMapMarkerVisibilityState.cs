@@ -70,9 +70,8 @@ public readonly record struct MiniMapMarkerVisibilityState(
     }
 
     /// <summary>
-    /// Unknown floor detection must not be treated as the main floor. Some maps
-    /// contain floor-tagged markers without detection ranges, so an unknown floor
-    /// keeps every marker fully visible until a reliable floor is available.
+    /// Compares a marker floor with the already-resolved selected floor. The
+    /// automatic floor selector resolves unknown detection to the ground floor.
     /// </summary>
     public static bool IsCurrentFloor(string? markerFloorId, string? detectedFloorId)
     {

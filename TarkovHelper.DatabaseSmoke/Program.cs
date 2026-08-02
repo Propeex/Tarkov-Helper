@@ -8,7 +8,13 @@ using TarkovHelper.Services.Settings;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
+var contentSmokeRoot = Path.Combine(AppContext.BaseDirectory, "ContentSmoke");
+if (Directory.Exists(contentSmokeRoot))
+    Directory.Delete(contentSmokeRoot, recursive: true);
+Environment.SetEnvironmentVariable("TARKOV_CONTENT_ROOT", contentSmokeRoot);
+
 ItemFulfillmentRegressionSmoke.Run();
+PvpOnlyRegressionSmoke.Run();
 
 if (ProfileService.Instance.CurrentProfile != ProfileType.Pvp)
     throw new InvalidOperationException("The application profile is not locked to PVP.");
@@ -61,6 +67,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException("The static JSON API path was not exercised.");
     if (fixtureHandler.GraphQlRequestCount != 0)
         throw new InvalidDataException("The deterministic static JSON test unexpectedly used GraphQL fallback.");
+
+    await ContentStorageRegressionSmoke.RunAsync(databasePath);
 
     var mapQuestLoaderSucceeded = await QuestObjectiveDbService.Instance.LoadObjectivesAsync();
     var loadedMapQuestObjectives = QuestObjectiveDbService.Instance.AllObjectives.Count;
@@ -623,8 +631,8 @@ static void RunOverlayMiniMapControlsSmoke()
         new MapFloorConfig { LayerId = "basement", Order = -1 },
         new MapFloorConfig { LayerId = "main", Order = 0, IsDefault = true }
     };
-    if (MiniMapFloorSelection.SelectAutomatic(floors, null) != null ||
-        MiniMapFloorSelection.SelectAutomatic(floors, "unknown") != null ||
+    if (MiniMapFloorSelection.SelectAutomatic(floors, null) != "main" ||
+        MiniMapFloorSelection.SelectAutomatic(floors, "unknown") != "main" ||
         MiniMapFloorSelection.SelectAutomatic(floors, "level3") != "level3" ||
         MiniMapFloorSelection.SelectInitial(floors, null) != "main" ||
         MiniMapFloorSelection.SelectInitial(floors, "level3") != "level3" ||
@@ -634,12 +642,10 @@ static void RunOverlayMiniMapControlsSmoke()
         MiniMapFloorSelection.Move(floors, "basement", -1) != "basement")
         throw new InvalidDataException("Minimap floor ordering or navigation is incorrect.");
 
-    if (!MiniMapMarkerVisibilityState.IsCurrentFloor("basement", null) ||
-        !MiniMapMarkerVisibilityState.IsCurrentFloor("level3", null) ||
-        !MiniMapMarkerVisibilityState.IsCurrentFloor(null, "main") ||
+    if (!MiniMapMarkerVisibilityState.IsCurrentFloor(null, "main") ||
         MiniMapMarkerVisibilityState.IsCurrentFloor("basement", "main") ||
         !MiniMapMarkerVisibilityState.IsCurrentFloor("basement", "basement"))
-        throw new InvalidDataException("Unknown minimap floor detection was forced to main.");
+        throw new InvalidDataException("Minimap floor marker filtering is incorrect.");
 
     const string svg =
         "<svg xmlns=\"http://www.w3.org/2000/svg\">" +
@@ -982,6 +988,15 @@ static async Task<int> RunExternalApiSmokeAsync()
             $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, permanentSources={specificSourceRows}, " +
             $"traderRows={sourceSummary.TraderRows}, craftRows={sourceSummary.CraftRows}, raidOnly={sourceSummary.RaidOnlyRows}, " +
             $"A Helping Hand level={helpingHandLevel}, prerequisiteLinks={helpingHandPrerequisites}.");
+
+        // The application updater writes to its isolated mutable-content path.
+        // Existing release workflows intentionally publish the verified database
+        // from the smoke output Assets folder, so copy the validated result back
+        // only after every live-data assertion has succeeded.
+        await connection.CloseAsync();
+        SqliteConnection.ClearAllPools();
+        var releaseDatabasePath = Path.Combine(AppContext.BaseDirectory, "Assets", "tarkov_data.db");
+        File.Copy(service.DatabasePath, releaseDatabasePath, overwrite: true);
         return 0;
     }
     finally

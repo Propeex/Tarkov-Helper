@@ -1,7 +1,8 @@
 namespace TarkovHelper.Models;
 
 /// <summary>
-/// Represents the player's profile type (PVP or PVE)
+/// Stored profile discriminator. The application executes PVP only; PVE is
+/// retained as a legacy database value so old user data remains readable.
 /// </summary>
 public enum ProfileType
 {

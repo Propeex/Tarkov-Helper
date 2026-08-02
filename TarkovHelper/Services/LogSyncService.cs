@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using TarkovHelper.Models;
 using TarkovHelper.Services.Logging;
@@ -40,6 +41,10 @@ namespace TarkovHelper.Services
         private bool _isWatching;
         private long _lastApplicationLogPosition;
         private string? _currentMapKey;
+        private static readonly Regex SessionModeRegex = new(
+            @"Session mode:\s*(Pve|Pvp|Regular)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase,
+            TimeSpan.FromSeconds(1));
 
         /// <summary>
         /// Event fired when a quest event is detected from logs
@@ -519,6 +524,12 @@ namespace TarkovHelper.Services
         {
             try
             {
+                if (!ShouldProcessPvpQuestLog(filePath))
+                {
+                    DebugLog($"Ignored PVE quest log: {filePath}");
+                    return;
+                }
+
                 // Read the last portion of the file to get recent events
                 var events = await ParseLogFileAsync(filePath, tailOnly: true);
 
@@ -563,6 +574,13 @@ namespace TarkovHelper.Services
             {
                 try
                 {
+                    if (!ShouldProcessPvpQuestLog(file))
+                    {
+                        processed++;
+                        progress?.Report($"{processed}/{logFiles.Count}개 파일 분석 중 (PVE 로그 제외)");
+                        continue;
+                    }
+
                     var events = await ParseLogFileAsync(file);
                     allEvents.AddRange(events);
 
@@ -579,6 +597,78 @@ namespace TarkovHelper.Services
             allEvents = allEvents.OrderBy(e => e.Timestamp).ToList();
 
             return allEvents;
+        }
+
+        /// <summary>
+        /// PVE profiles are unsupported. Quest push logs are accepted only when the
+        /// sibling session application log is PVP/Regular or when the mode cannot be
+        /// determined (legacy behavior). A positively identified PVE session is
+        /// always ignored so it cannot mutate PVP progress.
+        /// </summary>
+        internal static bool ShouldProcessPvpQuestLog(string questLogPath)
+        {
+            try
+            {
+                var directory = Path.GetDirectoryName(questLogPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    var applicationLogs = Directory
+                        .EnumerateFiles(directory, "application*.log", SearchOption.TopDirectoryOnly)
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .ToList();
+                    foreach (var applicationLog in applicationLogs)
+                    {
+                        var mode = ReadSessionMode(applicationLog);
+                        if (mode == GameMode.PVE)
+                            return false;
+                        if (mode == GameMode.PVP)
+                            return true;
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                _log.Warning($"Failed to determine quest log game mode: {exception.Message}");
+            }
+
+            // Keep PVP log synchronization compatible with older/incomplete logs.
+            return true;
+        }
+
+        private static GameMode ReadSessionMode(string applicationLogPath)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    applicationLogPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                for (var lineNumber = 0; lineNumber < 10000 && !reader.EndOfStream; lineNumber++)
+                {
+                    var line = reader.ReadLine();
+                    if (line == null)
+                        break;
+
+                    var match = SessionModeRegex.Match(line);
+                    if (!match.Success)
+                        continue;
+
+                    return match.Groups[1].Value.ToLowerInvariant() switch
+                    {
+                        "pve" => GameMode.PVE,
+                        "pvp" or "regular" => GameMode.PVP,
+                        _ => GameMode.Unknown
+                    };
+                }
+            }
+            catch
+            {
+                // Unknown mode preserves legacy PVP synchronization behavior.
+            }
+
+            return GameMode.Unknown;
         }
 
         /// <summary>

@@ -33,22 +33,34 @@ public static class MiniMapFloorSelection
     }
 
     /// <summary>
-    /// 자동 감지 결과가 실제 설정된 층일 때만 그 층을 선택합니다.
-    /// 감지 실패 또는 DB에 없는 층이면 null을 유지하여 모든 층을 표시합니다.
+    /// 자동 감지 결과가 실제 설정된 층이면 해당 층을 선택합니다.
+    /// 감지 실패 또는 DB에 없는 층이면 지상층(main), 기본층, 첫 번째 층 순서로 대체합니다.
     /// </summary>
     public static string? SelectAutomatic(
         IEnumerable<MapFloorConfig>? floors,
         string? detectedFloorId)
     {
-        if (string.IsNullOrWhiteSpace(detectedFloorId))
+        var ordered = Order(floors);
+        if (ordered.Count == 0)
             return null;
 
-        return Order(floors)
-            .FirstOrDefault(floor => string.Equals(
+        if (!string.IsNullOrWhiteSpace(detectedFloorId))
+        {
+            var detected = ordered.FirstOrDefault(floor => string.Equals(
                 floor.LayerId,
                 detectedFloorId,
-                StringComparison.OrdinalIgnoreCase))
-            ?.LayerId;
+                StringComparison.OrdinalIgnoreCase));
+            if (detected != null)
+                return detected.LayerId;
+        }
+
+        return (ordered.FirstOrDefault(floor => string.Equals(
+                    floor.LayerId,
+                    "main",
+                    StringComparison.OrdinalIgnoreCase))
+                ?? ordered.FirstOrDefault(floor => floor.IsDefault)
+                ?? ordered[0])
+            .LayerId;
     }
 
     /// <summary>

@@ -468,21 +468,22 @@ public class SettingsService
     }
 
     /// <summary>
-    /// Last selected profile type (PVP or PVE)
+    /// Legacy profile setting retained for user_data.db compatibility.
+    /// The application is PVP-only and always normalizes this value to PVP.
     /// </summary>
     public ProfileType LastProfileType
     {
         get
         {
             if (!_settingsLoaded) LoadSettings();
-            return _lastProfileType ?? ProfileType.Pvp;
+            return ProfileType.Pvp;
         }
         set
         {
-            if (_lastProfileType != value)
+            if (_lastProfileType != ProfileType.Pvp)
             {
-                _lastProfileType = value;
-                SaveSetting(KeyLastProfileType, value.ToString(), ProfileType.Pvp);
+                _lastProfileType = ProfileType.Pvp;
+                SaveSetting(KeyLastProfileType, ProfileType.Pvp.ToString(), ProfileType.Pvp);
             }
         }
     }
@@ -844,9 +845,10 @@ public class SettingsService
             // First check if JSON migration is needed
             MigrateFromJsonIfNeeded();
 
-            // Load from DB
-            if (Enum.TryParse<ProfileType>(_userDataDb.GetSetting(KeyLastProfileType, ProfileType.Pvp), out var profileType))
-                _lastProfileType = profileType;
+            // PVE profiles are no longer supported. Keep the legacy key normalized
+            // so old installations cannot re-enter an unsupported execution path.
+            _lastProfileType = ProfileType.Pvp;
+            SaveSetting(KeyLastProfileType, ProfileType.Pvp.ToString(), ProfileType.Pvp);
 
             _logFolderPath = _userDataDb.GetSetting(KeyLogFolderPath);
             if (string.IsNullOrEmpty(_logFolderPath)) _logFolderPath = null;

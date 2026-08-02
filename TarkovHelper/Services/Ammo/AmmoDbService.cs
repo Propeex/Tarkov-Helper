@@ -68,7 +68,7 @@ public sealed class AmmoDbService
             while (await reader.ReadAsync())
             {
                 var localItemId = reader.GetString(1);
-                var iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "Icons", localItemId + ".png");
+                var iconFile = Path.Combine(DatabaseUpdateService.Instance.IconsPath, localItemId + ".png");
                 loaded.Add(new AmmoItem
                 {
                     ItemId = reader.GetString(0),

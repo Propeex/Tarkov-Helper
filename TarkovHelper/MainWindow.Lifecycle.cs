@@ -30,10 +30,7 @@ public partial class MainWindow
         _settingsService.HasUnheardEditionChanged -= OnEditionChanged;
         _settingsService.PrestigeLevelChanged -= OnPrestigeLevelChanged;
         _settingsService.FontFamilyNameChanged -= OnFontFamilyNameChanged;
-        ProfileService.Instance.ProfileChanged -= OnProfileChanged;
 
-        RadioPvp.Checked -= ProfileRadio_Checked;
-        RadioPve.Checked -= ProfileRadio_Checked;
 
         base.OnClosed(e);
     }
