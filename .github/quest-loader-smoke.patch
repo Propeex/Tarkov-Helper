@@ -1,0 +1,19 @@
+diff --git a/TarkovHelper.DatabaseSmoke/Program.cs b/TarkovHelper.DatabaseSmoke/Program.cs
+--- a/TarkovHelper.DatabaseSmoke/Program.cs
++++ b/TarkovHelper.DatabaseSmoke/Program.cs
+@@ -83,6 +83,15 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
+     // (for example Battery Change). Reproduce that condition after the builder
+     // succeeds and verify that the application DB loader keeps both quests.
+     await ForceDuplicateQuestNamesAsync(databasePath);
++    var activeDatabasePath = DatabaseUpdateService.Instance.DatabasePath;
++    if (!string.Equals(
++            Path.GetFullPath(activeDatabasePath),
++            Path.GetFullPath(databasePath),
++            StringComparison.OrdinalIgnoreCase))
++    {
++        await ForceDuplicateQuestNamesAsync(activeDatabasePath);
++    }
++
+     var questLoaderSucceeded = await QuestDbService.Instance.LoadQuestsAsync();
+     var loadedQuests = QuestDbService.Instance.AllQuests.ToList();
+     var uniqueQuestKeys = loadedQuests
