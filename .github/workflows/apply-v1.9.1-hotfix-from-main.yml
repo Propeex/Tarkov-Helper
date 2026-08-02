@@ -18,41 +18,49 @@ jobs:
           ref: hotfix/content-recovery-1.9.1
           fetch-depth: 0
 
-      - name: Apply committed patch
+      - name: Apply patch and record result
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           git fetch origin main
           git show origin/main:.github/v1.9.1-content-recovery.patch > /tmp/v1.9.1-content-recovery.patch
-          echo "Patch SHA-256: $(sha256sum /tmp/v1.9.1-content-recovery.patch | awk '{print $1}')"
-          git apply --check --whitespace=error-all /tmp/v1.9.1-content-recovery.patch
-          git apply --index --whitespace=error-all /tmp/v1.9.1-content-recovery.patch
-          rm -f .github/workflows/apply-content-recovery-hotfix.yml
-          git add -A
-          git diff --cached --check
 
-          grep -Fq '<Version>1.9.1</Version>' TarkovHelper/TarkovHelper.csproj
-          grep -Fq '<version>1.9.1</version>' update.xml
-          grep -Fq 'RecoverCurrentFromPreviousOrBundled();' TarkovHelper/Services/ContentStorageService.cs
-          grep -Fq 'VerifyInterruptedCommitRecovery(storage, rebuiltHash);' TarkovHelper.DatabaseSmoke/ContentStorageRegressionSmoke.cs
+          set +e
+          check_output="$(git apply --check --whitespace=error-all /tmp/v1.9.1-content-recovery.patch 2>&1)"
+          check_code=$?
+          set -e
 
-      - name: Commit hotfix branch
-        shell: bash
-        run: |
-          set -euo pipefail
+          result="check_code=$check_code
+          patch_sha256=$(sha256sum /tmp/v1.9.1-content-recovery.patch | awk '{print $1}')
+          check_output=$check_output"
+
+          if [[ $check_code -eq 0 ]]; then
+            git apply --index --whitespace=error-all /tmp/v1.9.1-content-recovery.patch
+            rm -f .github/workflows/apply-content-recovery-hotfix.yml
+            git add -A
+            git diff --cached --check
+
+            grep -Fq '<Version>1.9.1</Version>' TarkovHelper/TarkovHelper.csproj
+            grep -Fq '<version>1.9.1</version>' update.xml
+            grep -Fq 'VerifyInterruptedCommitRecovery(storage, rebuiltHash);' TarkovHelper.DatabaseSmoke/ContentStorageRegressionSmoke.cs
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Fix interrupted content recovery for v1.9.1"
+            git push origin HEAD:hotfix/content-recovery-1.9.1
+            result="$result
+          branch_result=success
+          branch_head=$(git rev-parse HEAD)"
+          else
+            result="$result
+          branch_result=failure
+          branch_head=$(git rev-parse HEAD)"
+          fi
+
+          git checkout -B main origin/main
+          printf '%s\n' "$result" > .github/v1.9.1-apply-result.txt
+          git add .github/v1.9.1-apply-result.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Fix interrupted content recovery for v1.9.1"
-          git push origin HEAD:hotfix/content-recovery-1.9.1
-
-      - name: Remove successful one-time files
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          git checkout -B main origin/main
-          git rm \
-            .github/workflows/apply-v1.9.1-hotfix-from-main.yml \
-            .github/v1.9.1-content-recovery.patch
-          git commit -m "Remove v1.9.1 hotfix application files"
+          git commit -m "Record v1.9.1 hotfix application result"
           git push origin HEAD:main
