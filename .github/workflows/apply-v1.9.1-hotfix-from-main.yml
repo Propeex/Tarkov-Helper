@@ -18,139 +18,23 @@ jobs:
           ref: hotfix/content-recovery-1.9.1
           fetch-depth: 0
 
-      - name: Apply exact hotfix edits
+      - name: Apply committed patch
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          service = Path('TarkovHelper/Services/ContentStorageService.cs')
-          text = service.read_text(encoding='utf-8')
-          pattern = re.compile(
-              r'(?m)^(?P<i>\s*)Directory\.CreateDirectory\(CurrentPath\);\n'
-              r'(?P=i)if \(!File\.Exists\(currentDatabase\)\)\n'
-              r'(?P=i)    File\.Copy\(BundledDatabasePath, currentDatabase, overwrite: false\);$')
-          replacement = (
-              r'\g<i>if (!File.Exists(currentDatabase))\n'
-              r'\g<i>    RecoverCurrentFromPreviousOrBundled();\n\n'
-              r'\g<i>Directory.CreateDirectory(CurrentPath);\n'
-              r'\g<i>if (!File.Exists(currentDatabase))\n'
-              r'\g<i>    File.Copy(BundledDatabasePath, currentDatabase, overwrite: false);')
-          text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit(f'ContentStorageService target count was {count}, expected 1')
-          service.write_text(text, encoding='utf-8')
-
-          smoke = Path('TarkovHelper.DatabaseSmoke/ContentStorageRegressionSmoke.cs')
-          text = smoke.read_text(encoding='utf-8')
-          call_anchor = (
-              '        if (!string.Equals(\n'
-              '                ContentStorageService.ComputeSha256(storage.DatabasePath),\n'
-              '                rebuiltHash,\n'
-              '                StringComparison.Ordinal))\n'
-              '        {\n'
-              '            throw new InvalidDataException("Rejected staging content modified the active database.");\n'
-              '        }\n')
-          if text.count(call_anchor) != 1:
-              raise SystemExit(f'ContentStorageRegressionSmoke anchor count was {text.count(call_anchor)}, expected 1')
-          text = text.replace(call_anchor, call_anchor + '\n        VerifyInterruptedCommitRecovery(storage, rebuiltHash);\n', 1)
-
-          class_close = '    }\n}\n'
-          if not text.endswith(class_close):
-              raise SystemExit('ContentStorageRegressionSmoke class ending was not recognized')
-          method = '''
-
-    private static void VerifyInterruptedCommitRecovery(
-        ContentStorageService storage,
-        string expectedDatabaseHash)
-    {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (Directory.Exists(storage.PreviousPath))
-            Directory.Delete(storage.PreviousPath, recursive: true);
-        if (Directory.Exists(storage.StagingPath))
-            Directory.Delete(storage.StagingPath, recursive: true);
-
-        Directory.Move(storage.CurrentPath, storage.PreviousPath);
-        Directory.CreateDirectory(storage.StagingPath);
-        File.WriteAllText(
-            Path.Combine(storage.StagingPath, "interrupted-commit.marker"),
-            "staging must not become active implicitly");
-
-        var ensureCurrentSeeded = typeof(ContentStorageService).GetMethod(
-            "EnsureCurrentSeeded",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?? throw new InvalidDataException("Could not locate EnsureCurrentSeeded for recovery smoke.");
-        var cleanupInterruptedStaging = typeof(ContentStorageService).GetMethod(
-            "CleanupInterruptedStaging",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?? throw new InvalidDataException("Could not locate CleanupInterruptedStaging for recovery smoke.");
-
-        try
-        {
-            ensureCurrentSeeded.Invoke(storage, null);
-            cleanupInterruptedStaging.Invoke(storage, null);
-        }
-        catch (System.Reflection.TargetInvocationException exception)
-        {
-            throw new InvalidDataException(
-                "Interrupted content commit recovery threw an exception.",
-                exception.InnerException ?? exception);
-        }
-
-        if (!File.Exists(storage.DatabasePath))
-            throw new InvalidDataException("Interrupted commit recovery did not restore the active database.");
-        if (Directory.Exists(storage.PreviousPath))
-            throw new InvalidDataException("Interrupted commit recovery did not consume the previous content set.");
-        if (Directory.Exists(storage.StagingPath))
-            throw new InvalidDataException("Interrupted commit recovery did not discard the incomplete staging set.");
-
-        var recoveredHash = ContentStorageService.ComputeSha256(storage.DatabasePath);
-        if (!string.Equals(recoveredHash, expectedDatabaseHash, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException(
-                "Interrupted commit recovery used bundled data instead of the validated previous set.");
-        }
-    }
-'''
-          text = text[:-len(class_close)] + '    }' + method + '}\n'
-          smoke.write_text(text, encoding='utf-8')
-
-          project = Path('TarkovHelper/TarkovHelper.csproj')
-          text = project.read_text(encoding='utf-8')
-          replacements = [
-              ('<Version>1.9.0</Version>', '<Version>1.9.1</Version>'),
-              ('<AssemblyVersion>1.9.0.0</AssemblyVersion>', '<AssemblyVersion>1.9.1.0</AssemblyVersion>'),
-              ('<FileVersion>1.9.0.0</FileVersion>', '<FileVersion>1.9.1.0</FileVersion>'),
-          ]
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f'Project version target {old!r} count was {text.count(old)}, expected 1')
-              text = text.replace(old, new, 1)
-          project.write_text(text, encoding='utf-8')
-
-          update_xml = Path('update.xml')
-          text = update_xml.read_text(encoding='utf-8')
-          old_comment = '<!-- v1.9.0 PVP content updater -->'
-          if text.count(old_comment) != 1 or text.count('<version>1.9.0</version>') != 1:
-              raise SystemExit('update.xml v1.9.0 targets were not unique')
-          text = text.replace(old_comment, '<!-- v1.9.1 interrupted content recovery hotfix -->', 1)
-          text = text.replace('<version>1.9.0</version>', '<version>1.9.1</version>', 1)
-          update_xml.write_text(text, encoding='utf-8')
-
-          icon_service = Path('TarkovHelper/Services/ItemIconUpdateService.cs')
-          text = icon_service.read_text(encoding='utf-8')
-          old_agent = 'TarkovHelper/1.8.5 content-updater'
-          if text.count(old_agent) != 1:
-              raise SystemExit(f'ItemIconUpdateService user-agent target count was {text.count(old_agent)}, expected 1')
-          icon_service.write_text(
-              text.replace(old_agent, 'TarkovHelper/1.9.1 content-updater', 1),
-              encoding='utf-8')
-          PY
-
+          git fetch origin main
+          git show origin/main:.github/v1.9.1-content-recovery.patch > /tmp/v1.9.1-content-recovery.patch
+          echo "Patch SHA-256: $(sha256sum /tmp/v1.9.1-content-recovery.patch | awk '{print $1}')"
+          git apply --check --whitespace=error-all /tmp/v1.9.1-content-recovery.patch
+          git apply --index --whitespace=error-all /tmp/v1.9.1-content-recovery.patch
           rm -f .github/workflows/apply-content-recovery-hotfix.yml
-          git diff --check
+          git add -A
+          git diff --cached --check
+
+          grep -Fq '<Version>1.9.1</Version>' TarkovHelper/TarkovHelper.csproj
+          grep -Fq '<version>1.9.1</version>' update.xml
+          grep -Fq 'RecoverCurrentFromPreviousOrBundled();' TarkovHelper/Services/ContentStorageService.cs
+          grep -Fq 'VerifyInterruptedCommitRecovery(storage, rebuiltHash);' TarkovHelper.DatabaseSmoke/ContentStorageRegressionSmoke.cs
 
       - name: Commit hotfix branch
         shell: bash
@@ -158,16 +42,17 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
           git commit -m "Fix interrupted content recovery for v1.9.1"
           git push origin HEAD:hotfix/content-recovery-1.9.1
 
-      - name: Remove one-time main workflow
+      - name: Remove successful one-time files
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin main
           git checkout -B main origin/main
-          git rm .github/workflows/apply-v1.9.1-hotfix-from-main.yml
-          git commit -m "Remove v1.9.1 hotfix application workflow"
+          git rm \
+            .github/workflows/apply-v1.9.1-hotfix-from-main.yml \
+            .github/v1.9.1-content-recovery.patch
+          git commit -m "Remove v1.9.1 hotfix application files"
           git push origin HEAD:main
