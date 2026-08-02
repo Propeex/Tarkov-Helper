@@ -1,0 +1,24 @@
+name: Source Snapshot
+
+on:
+  push:
+    branches:
+      - agent/pvp-content-updater
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Upload source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot
+          path: .
+          include-hidden-files: true
+          if-no-files-found: error
