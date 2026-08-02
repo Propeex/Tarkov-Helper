@@ -23,6 +23,8 @@ internal static class PvpOnlyRegressionSmoke
             if (!LogSyncService.ShouldProcessPvpQuestLog(questLog))
                 throw new InvalidDataException("A PVP quest log was rejected.");
 
+            // Old log layouts may not expose a mode marker. Preserve that legacy
+            // compatibility while rejecting any log that is positively PVE.
             File.Delete(applicationLog);
             if (!LogSyncService.ShouldProcessPvpQuestLog(questLog))
                 throw new InvalidDataException("A legacy quest log with unknown mode was rejected.");
