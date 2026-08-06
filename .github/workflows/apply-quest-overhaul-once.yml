@@ -1,11 +1,11 @@
 name: Apply quest overhaul once
 
 on:
-  push:
+  pull_request_target:
     branches:
       - main
-    paths:
-      - .github/workflows/apply-quest-overhaul-once.yml
+    types:
+      - reopened
 
 permissions:
   contents: write
@@ -16,6 +16,7 @@ env:
 
 jobs:
   apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/quest-data-overhaul'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
