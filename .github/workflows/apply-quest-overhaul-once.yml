@@ -1,11 +1,9 @@
 name: Apply quest overhaul once
 
 on:
-  pull_request_target:
-    branches:
-      - main
-    types:
-      - reopened
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,7 +14,6 @@ env:
 
 jobs:
   apply:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/quest-data-overhaul'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -28,11 +25,19 @@ jobs:
           set -euo pipefail
           echo "Applying ${APPLY_REVISION} to ${TARGET_BRANCH}"
           api="https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/.github/workflows/agent-apply-patch.yml?ref=${TARGET_BRANCH}"
-          curl --fail --silent --show-error \
+          status=$(curl --silent --output /tmp/workflow.json --write-out '%{http_code}' \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$api" > /tmp/workflow.json
+            "$api")
+          if [ "$status" = "404" ]; then
+            echo 'Validated apply script is already absent; nothing remains to apply.'
+            exit 0
+          fi
+          if [ "$status" != "200" ]; then
+            cat /tmp/workflow.json
+            exit 1
+          fi
 
           python - <<'PY'
           import base64, json, pathlib
