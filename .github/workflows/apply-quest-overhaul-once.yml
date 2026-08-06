@@ -12,6 +12,7 @@ permissions:
 
 env:
   TARGET_BRANCH: agent/quest-data-overhaul
+  APPLY_REVISION: v3
 
 jobs:
   apply:
@@ -24,6 +25,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          echo "Applying ${APPLY_REVISION} to ${TARGET_BRANCH}"
           api="https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/.github/workflows/agent-apply-patch.yml?ref=${TARGET_BRANCH}"
           curl --fail --silent --show-error \
             -H "Authorization: Bearer ${GH_TOKEN}" \
