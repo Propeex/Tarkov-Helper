@@ -118,9 +118,30 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     }
     if (QuestDbService.Instance.GetQuestById("fixture-quest-first") == null ||
         QuestDbService.Instance.GetQuestById("fixture-quest-second") == null ||
-        QuestDbService.Instance.GetQuestById("fixture-quest-third") == null)
+        QuestDbService.Instance.GetQuestById("fixture-quest-third") == null ||
+        QuestDbService.Instance.GetQuestById("fixture-quest-overlay-added") == null)
     {
-        throw new InvalidDataException("Quest ID lookup lost one of the fixture quests.");
+        throw new InvalidDataException("Quest ID lookup lost one of the effective fixture quests.");
+    }
+    if (QuestDbService.Instance.GetQuestById("fixture-quest-disabled") != null)
+        throw new InvalidDataException("Overlay-disabled quest leaked into the application quest catalog.");
+
+    var correctedFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-first")!;
+    var prestigeFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-third")!;
+    var addedPrestigeQuest = QuestDbService.Instance.GetQuestById("fixture-quest-overlay-added")!;
+    if (!string.Equals(correctedFixtureQuest.Name, "Corrected First Fixture Quest", StringComparison.Ordinal) ||
+        !string.Equals(correctedFixtureQuest.NameKo, "보정된 첫 번째 퀘스트", StringComparison.Ordinal))
+    {
+        throw new InvalidDataException(
+            $"Quest locale overlay was not applied: en={correctedFixtureQuest.Name}, ko={correctedFixtureQuest.NameKo}.");
+    }
+    if (correctedFixtureQuest.RequiredLevel != 3 ||
+        prestigeFixtureQuest.RequiredPrestigeLevel != 2 ||
+        addedPrestigeQuest.RequiredPrestigeLevel != 5)
+    {
+        throw new InvalidDataException(
+            $"Quest overlay/prestige mapping failed: level={correctedFixtureQuest.RequiredLevel}, " +
+            $"prestige={prestigeFixtureQuest.RequiredPrestigeLevel}, added={addedPrestigeQuest.RequiredPrestigeLevel}.");
     }
 
     var groupedFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-second");
@@ -305,7 +326,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         WHERE r.IsAlternativeGroup = 0 AND (r.ItemId IS NULL OR i.Id IS NULL);
         """);
 
-    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 3 || result.HideoutStationCount != 1)
+    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 4 || result.HideoutStationCount != 1)
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
     if (koreanItems < 4 || koreanQuests < 2)
         throw new InvalidDataException("Korean localized names were not written correctly.");

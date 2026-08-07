@@ -67,6 +67,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
             CleanupFile(tempPath);
             throw;
         }
+        catch (QuestCatalogOverlayException overlayException)
+        {
+            CleanupFile(tempPath);
+            throw new InvalidOperationException(
+                "현재 퀘스트 목록 보정 데이터를 검증하지 못해 DB 업데이트를 중단했습니다.",
+                overlayException);
+        }
         catch (Exception staticException) when (!staticDataReady)
         {
             CleanupFile(tempPath);
@@ -150,8 +157,16 @@ internal sealed partial class TarkovDataDatabaseBuilder
             "regular/tasks",
             "퀘스트",
             32,
-            52,
+            48,
             cancellationToken);
+
+        Report("API", "현재 퀘스트 목록 보정 데이터를 받는 중", 48, 0, null);
+        var (questOverlay, _) = await DownloadQuestCatalogOverlayAsync(cancellationToken);
+        var questOverlayInfo = ApplyQuestCatalogOverlay(
+            taskDocuments.English,
+            taskDocuments.Korean,
+            questOverlay);
+
         var tasksEn = ParseTasks(taskDocuments.English, itemLookupEn, tradersEn, mapsEn);
         var tasksKo = ParseTasks(taskDocuments.Korean, itemLookupKo, tradersKo, mapsKo);
 
@@ -180,7 +195,11 @@ internal sealed partial class TarkovDataDatabaseBuilder
             throw new InvalidDataException("tarkov.dev 정적 JSON API 데이터가 비어 있습니다.");
 
         return MergeApiData(itemsEn, itemsKo, tasksEn, tasksKo, hideoutEn, hideoutKo)
-            with { Transport = "static-json" };
+            with
+            {
+                Source = $"tarkov.dev + tarkov-data-overlay {questOverlayInfo.Version}",
+                Transport = "static-json+overlay"
+            };
     }
 
     private static void ResolveStaticTraderPurchases(
@@ -756,7 +775,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
     {
         var data = RequiredObject(root, "data", "퀘스트");
         var taskObjects = RequiredObject(data, "tasks", "퀘스트");
-        var prestigeLookup = data["prestige"] as JsonObject;
+        var prestigeLookup = data["prestige"];
         var result = new List<ApiTask>(taskObjects.Count);
 
         foreach (var (key, node) in taskObjects)
@@ -1056,7 +1075,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
     private static ApiPrestige? ResolvePrestige(
         JsonNode? node,
-        JsonObject? prestigeLookup)
+        JsonNode? prestigeLookup)
     {
         var directLevel = NodeInt(node);
         if (directLevel.HasValue)
@@ -1067,7 +1086,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
         var id = NodeString(node);
         if (!string.IsNullOrWhiteSpace(id) &&
-            prestigeLookup?[id] is JsonObject lookupObject)
+            ResolvePrestigeObject(prestigeLookup, id) is JsonObject lookupObject)
         {
             return new ApiPrestige
             {
