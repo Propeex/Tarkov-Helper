@@ -1114,13 +1114,24 @@ static async Task<int> RunExternalApiSmokeAsync()
               AND BulletMassGrams > 0
               AND BallisticCoefficient >= 0;
             """);
-        var helpingHandLevel = await ScalarAsync(connection, "SELECT COALESCE(MAX(MinLevel), -1) FROM Quests WHERE Name = 'A Helping Hand';");
-        var helpingHandPrerequisites = await ScalarAsync(connection, """
+        var questMinLevelSourceMismatches = await ScalarAsync(connection, """
             SELECT COUNT(*)
-            FROM QuestRequirements r
-            JOIN Quests source ON source.Id = r.QuestId
-            JOIN Quests required ON required.Id = r.RequiredQuestId
-            WHERE source.Name = 'A Helping Hand' AND required.Name = 'Saving the Mole';
+            FROM Quests q
+            WHERE json_valid(q.SourceJson) = 1
+              AND COALESCE(q.MinLevel, 0) !=
+                  COALESCE(CAST(json_extract(q.SourceJson, '$.minPlayerLevel') AS INTEGER), 0);
+            """);
+        var questPrerequisiteCountMismatches = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM Quests q
+            WHERE json_valid(q.SourceJson) = 1
+              AND COALESCE(json_array_length(json_extract(q.SourceJson, '$.taskRequirements')), 0) !=
+                  (SELECT COUNT(*) FROM QuestRequirements r WHERE r.QuestId = q.Id);
+            """);
+        var invalidPrerequisiteSourceJsonRows = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequirements
+            WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;
             """);
         if (ammoRows < 150 || linkedAmmoRows != ammoRows || koreanAmmoRows < 150 || caliberRows < 20 ||
             sourceSummary.TotalRows != ammoRows || specificSourceRows < 50)
@@ -1146,19 +1157,23 @@ static async Task<int> RunExternalApiSmokeAsync()
                 $"metadata={contentMetadataRows}, invalidSourceJson={invalidSourceJsonRows}, " +
                 $"trackedQuestItems={trackedQuestItemRows}, expandedAmmo={expandedAmmoRows}.");
         }
-        if (helpingHandLevel != 20 || helpingHandPrerequisites != 1)
+        if (questMinLevelSourceMismatches != 0 ||
+            questPrerequisiteCountMismatches != 0 ||
+            invalidPrerequisiteSourceJsonRows != 0)
         {
             throw new InvalidDataException(
-                $"A Helping Hand start conditions were lost during API refresh: " +
-                $"level={helpingHandLevel}, prerequisites={helpingHandPrerequisites}.");
+                $"Live quest start-condition mapping diverged from current API source data: " +
+                $"minLevels={questMinLevelSourceMismatches}, " +
+                $"prerequisiteCounts={questPrerequisiteCountMismatches}, " +
+                $"prerequisiteSourceJson={invalidPrerequisiteSourceJsonRows}.");
         }
 
         Console.WriteLine(
             $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, permanentSources={specificSourceRows}, " +
             $"traderRows={sourceSummary.TraderRows}, craftRows={sourceSummary.CraftRows}, raidOnly={sourceSummary.RaidOnlyRows}, " +
             $"questTraderRequirements={questTraderRequirementRows}, trackedQuestItems={trackedQuestItemRows}, " +
-            $"expandedAmmo={expandedAmmoRows}, A Helping Hand level={helpingHandLevel}, " +
-            $"prerequisiteLinks={helpingHandPrerequisites}.");
+            $"expandedAmmo={expandedAmmoRows}, prerequisiteMinLevelMismatches={questMinLevelSourceMismatches}, " +
+            $"prerequisiteCountMismatches={questPrerequisiteCountMismatches}.");
 
         // The application updater writes to its isolated mutable-content path.
         // Existing release workflows intentionally publish the verified database

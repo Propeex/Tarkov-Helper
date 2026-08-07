@@ -359,7 +359,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
         foreach (var row in rows)
         {
             var keyParts = keyColumns
-                .Select(column => ReadString(row, column))
+                .Select(column => ReadString(row, column) ?? string.Empty)
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .ToArray();
             if (keyParts.Length == 0)
