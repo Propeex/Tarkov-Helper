@@ -31,6 +31,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     var databasePath = Path.Combine(AppContext.BaseDirectory, "Assets", "tarkov_data.db");
 
     await RunOutageHandlingSmokeAsync(databasePath);
+    await RunQuestCatalogFailClosedSmokeAsync(databasePath);
 
     // The deterministic fixture intentionally contains only two quests. Remove
     // legacy alternative-quest rows from the copied production DB so this test
@@ -118,9 +119,29 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     }
     if (QuestDbService.Instance.GetQuestById("fixture-quest-first") == null ||
         QuestDbService.Instance.GetQuestById("fixture-quest-second") == null ||
-        QuestDbService.Instance.GetQuestById("fixture-quest-third") == null)
+        QuestDbService.Instance.GetQuestById("fixture-quest-third") == null ||
+        QuestDbService.Instance.GetQuestById("fixture-quest-overlay-added") == null)
     {
-        throw new InvalidDataException("Quest ID lookup lost one of the fixture quests.");
+        throw new InvalidDataException("Quest ID lookup lost one of the effective fixture quests.");
+    }
+    if (QuestDbService.Instance.GetQuestById("fixture-quest-disabled") != null)
+        throw new InvalidDataException("Overlay-disabled quest leaked into the application quest catalog.");
+
+    var correctedFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-first")!;
+    var prestigeFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-third")!;
+    var addedPrestigeQuest = QuestDbService.Instance.GetQuestById("fixture-quest-overlay-added")!;
+    if (!string.Equals(correctedFixtureQuest.NameKo, "보정된 첫 번째 퀘스트", StringComparison.Ordinal))
+    {
+        throw new InvalidDataException(
+            $"Quest Korean locale overlay was not applied: ko={correctedFixtureQuest.NameKo}.");
+    }
+    if (correctedFixtureQuest.RequiredLevel != 3 ||
+        prestigeFixtureQuest.RequiredPrestigeLevel != 2 ||
+        addedPrestigeQuest.RequiredPrestigeLevel != 5)
+    {
+        throw new InvalidDataException(
+            $"Quest overlay/prestige mapping failed: level={correctedFixtureQuest.RequiredLevel}, " +
+            $"prestige={prestigeFixtureQuest.RequiredPrestigeLevel}, added={addedPrestigeQuest.RequiredPrestigeLevel}.");
     }
 
     var groupedFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-second");
@@ -305,7 +326,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         WHERE r.IsAlternativeGroup = 0 AND (r.ItemId IS NULL OR i.Id IS NULL);
         """);
 
-    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 3 || result.HideoutStationCount != 1)
+    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 4 || result.HideoutStationCount != 1)
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
     if (koreanItems < 4 || koreanQuests < 2)
         throw new InvalidDataException("Korean localized names were not written correctly.");
@@ -375,7 +396,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     RunApplicationBehaviorSmoke();
 
     Console.WriteLine(
-        $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
+        $"Deterministic database smoke passed: profile=PVP, transport=static-json+overlay, " +
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, ammo={result.AmmoCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"acquisitionRows={acquisitionRequirementRows}, pairedBolts={pairedBoltRequirementRows}, " +
@@ -391,6 +412,77 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}, " +
         $"missingPrerequisites={missingPrerequisiteLinks}, invalidConcreteItems={invalidConcreteRequirementLinks}");
     return 0;
+}
+
+
+static async Task RunQuestCatalogFailClosedSmokeAsync(string seedDatabasePath)
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "TarkovHelperQuestCatalogFailClosed",
+        Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        await RunScenarioAsync(
+            "post-overlay-static-failure",
+            new FixtureTarkovApiHandler(failHideoutAfterOverlay: true));
+        await RunScenarioAsync(
+            "invalid-overlay",
+            new FixtureTarkovApiHandler(invalidQuestOverlay: true));
+    }
+    finally
+    {
+        try
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+        catch
+        {
+            // Best-effort cleanup only; validation already completed.
+        }
+    }
+
+    async Task RunScenarioAsync(string name, FixtureTarkovApiHandler fixtureHandler)
+    {
+        var scenarioPath = Path.Combine(root, name + ".db");
+        File.Copy(seedDatabasePath, scenarioPath, overwrite: true);
+        var before = await File.ReadAllBytesAsync(scenarioPath);
+
+        using var httpClient = new HttpClient(fixtureHandler)
+        {
+            Timeout = TimeSpan.FromMinutes(2)
+        };
+        var builder = new TarkovDataDatabaseBuilder(
+            httpClient,
+            progress => Console.WriteLine($"[fail-closed:{name}] {progress.Message}"),
+            enrichAmmoSources: false);
+
+        Exception? failure = null;
+        try
+        {
+            await builder.BuildPreferredAsync(scenarioPath);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or InvalidDataException)
+        {
+            failure = exception;
+        }
+
+        if (failure == null)
+            throw new InvalidDataException($"Fail-closed scenario unexpectedly succeeded: {name}.");
+        if (fixtureHandler.GraphQlRequestCount != 0)
+        {
+            throw new InvalidDataException(
+                $"Fail-closed scenario leaked into GraphQL fallback: {name}, " +
+                $"requests={fixtureHandler.GraphQlRequestCount}.");
+        }
+
+        var after = await File.ReadAllBytesAsync(scenarioPath);
+        if (!before.AsSpan().SequenceEqual(after))
+            throw new InvalidDataException($"Fail-closed scenario replaced the existing database: {name}.");
+    }
 }
 
 static async Task RunPersistenceWriteQueueSmokeAsync()
@@ -607,13 +699,13 @@ static async Task RunOutageHandlingSmokeAsync(string databasePath)
     stopwatch.Stop();
 
     if (failureMessage == null ||
-        !failureMessage.Contains("정적 JSON API와 GraphQL API가 모두 응답하지 않았습니다", StringComparison.Ordinal))
+        !failureMessage.Contains("GraphQL 예비 경로는 사용하지 않습니다", StringComparison.Ordinal))
     {
         throw new InvalidDataException(
-            $"Outage fixture did not return the expected combined API error: {failureMessage ?? "no error"}");
+            $"Outage fixture did not return the expected fail-closed API error: {failureMessage ?? "no error"}");
     }
 
-    if (outageHandler.StaticRequestCount != 1 || outageHandler.GraphQlRequestCount != 1)
+    if (outageHandler.StaticRequestCount != 1 || outageHandler.GraphQlRequestCount != 0)
     {
         throw new InvalidDataException(
             $"Outage handling retried unavailable endpoints: static={outageHandler.StaticRequestCount}, " +
@@ -1133,6 +1225,26 @@ static async Task<int> RunExternalApiSmokeAsync()
             FROM QuestRequirements
             WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;
             """);
+        var questCatalogOverlayMetadataRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM ContentBuildMetadata
+            WHERE Id = 'current'
+              AND Source LIKE 'tarkov.dev + tarkov-data-overlay %'
+              AND Transport = 'static-json+overlay';
+            """);
+        var staleNeuanfangRows = await ScalarAsync(connection,
+            "SELECT COUNT(*) FROM Quests WHERE Name = 'Neuanfang' OR NameEN = 'Neuanfang';");
+        var newBeginningRows = await ScalarAsync(connection,
+            "SELECT COUNT(*) FROM Quests WHERE Name = 'New Beginning';");
+        var newBeginningPrestigeRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM Quests
+            WHERE Name = 'New Beginning'
+              AND RequiredPrestigeLevel IN (1, 2, 3, 4, 5);
+            """);
+        var addedNewBeginningRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM Quests
+            WHERE (BsgId = 'new_beginning_prestige_5' AND RequiredPrestigeLevel = 4)
+               OR (BsgId = 'new_beginning_prestige_6' AND RequiredPrestigeLevel = 5);
+            """);
         if (ammoRows < 150 || linkedAmmoRows != ammoRows || koreanAmmoRows < 150 || caliberRows < 20 ||
             sourceSummary.TotalRows != ammoRows || specificSourceRows < 50)
         {
@@ -1167,13 +1279,22 @@ static async Task<int> RunExternalApiSmokeAsync()
                 $"prerequisiteCounts={questPrerequisiteCountMismatches}, " +
                 $"prerequisiteSourceJson={invalidPrerequisiteSourceJsonRows}.");
         }
+        if (questCatalogOverlayMetadataRows != 1 || staleNeuanfangRows != 0 ||
+            newBeginningRows != 6 || newBeginningPrestigeRows != 5 || addedNewBeginningRows != 2)
+        {
+            throw new InvalidDataException(
+                $"Live quest catalog corrections are incomplete: overlay={questCatalogOverlayMetadataRows}, " +
+                $"neuanfang={staleNeuanfangRows}, newBeginning={newBeginningRows}, " +
+                $"prestigeMapped={newBeginningPrestigeRows}, added={addedNewBeginningRows}.");
+        }
 
         Console.WriteLine(
             $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, permanentSources={specificSourceRows}, " +
             $"traderRows={sourceSummary.TraderRows}, craftRows={sourceSummary.CraftRows}, raidOnly={sourceSummary.RaidOnlyRows}, " +
             $"questTraderRequirements={questTraderRequirementRows}, trackedQuestItems={trackedQuestItemRows}, " +
             $"expandedAmmo={expandedAmmoRows}, prerequisiteMinLevelMismatches={questMinLevelSourceMismatches}, " +
-            $"prerequisiteCountMismatches={questPrerequisiteCountMismatches}.");
+            $"prerequisiteCountMismatches={questPrerequisiteCountMismatches}, " +
+            $"newBeginning={newBeginningRows}, overlayMetadata={questCatalogOverlayMetadataRows}.");
 
         // The application updater writes to its isolated mutable-content path.
         // Existing release workflows intentionally publish the verified database

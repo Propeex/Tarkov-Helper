@@ -4,6 +4,16 @@ using System.Text.Json;
 
 internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
 {
+    private readonly bool _failHideoutAfterOverlay;
+    private readonly bool _invalidQuestOverlay;
+
+    public FixtureTarkovApiHandler(
+        bool failHideoutAfterOverlay = false,
+        bool invalidQuestOverlay = false)
+    {
+        _failHideoutAfterOverlay = failHideoutAfterOverlay;
+        _invalidQuestOverlay = invalidQuestOverlay;
+    }
     public int StaticRequestCount { get; private set; }
     public int GraphQlRequestCount { get; private set; }
 
@@ -46,9 +56,17 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
         return JsonResponse(HttpStatusCode.OK, new { data });
     }
 
-    private static HttpResponseMessage HandleStaticJsonRequest(string path)
+    private HttpResponseMessage HandleStaticJsonRequest(string path)
     {
         var normalized = path.Trim('/');
+
+        if (_failHideoutAfterOverlay &&
+            string.Equals(normalized, "regular/hideout", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse(
+                HttpStatusCode.BadRequest,
+                new { error = "Injected post-overlay hideout failure" });
+        }
 
         return normalized switch
         {
@@ -67,6 +85,13 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
             "regular/tasks" => JsonResponse(HttpStatusCode.OK, CreateStaticTasks()),
             "regular/tasks_en" => TranslationResponse(EnglishTranslations()),
             "regular/tasks_ko" => TranslationResponse(KoreanTranslations()),
+
+            "tarkovtracker-org/tarkov-data-overlay/main/dist/overlay.json" =>
+                JsonResponse(
+                    HttpStatusCode.OK,
+                    _invalidQuestOverlay
+                        ? CreateInvalidQuestCatalogOverlay()
+                        : CreateQuestCatalogOverlay()),
 
             "regular/hideout" => JsonResponse(HttpStatusCode.OK, CreateStaticHideout()),
             "regular/hideout_en" => TranslationResponse(EnglishTranslations()),
@@ -266,14 +291,112 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                         kappaRequired = false,
                         trader = "fixture-trader",
                         map = (string?)null,
+                        requiredPrestige = "fixture-prestige-1",
+                        taskRequirements = Array.Empty<object>(),
+                        objectives = Array.Empty<object>()
+                    },
+                    ["fixture-quest-disabled"] = new
+                    {
+                        id = "fixture-quest-disabled",
+                        name = "Disabled Fixture Quest",
+                        normalizedName = "disabled-fixture-quest",
+                        minPlayerLevel = 1,
+                        factionName = "Any",
+                        kappaRequired = false,
+                        trader = "fixture-trader",
+                        map = (string?)null,
                         requiredPrestige = (string?)null,
                         taskRequirements = Array.Empty<object>(),
                         objectives = Array.Empty<object>()
                     }
                 },
-                prestige = new Dictionary<string, object>()
+                prestige = new object[]
+                {
+                    new
+                    {
+                        id = "fixture-prestige-1",
+                        prestigeLevel = 1
+                    }
+                }
             },
             translations = Array.Empty<string>()
+        };
+    }
+
+    private static object CreateInvalidQuestCatalogOverlay()
+    {
+        return new Dictionary<string, object>
+        {
+            ["$meta"] = new
+            {
+                version = "fixture-invalid"
+            }
+        };
+    }
+
+    private static object CreateQuestCatalogOverlay()
+    {
+        var locales = new Dictionary<string, object>
+        {
+            ["en"] = new
+            {
+                tasks = new Dictionary<string, object>
+                {
+                    ["fixture-quest-first"] = new { name = "Corrected First Fixture Quest" }
+                }
+            },
+            ["ko"] = new
+            {
+                tasks = new Dictionary<string, object>
+                {
+                    ["fixture-quest-first"] = new { name = "보정된 첫 번째 퀘스트" }
+                }
+            }
+        };
+
+        return new Dictionary<string, object>
+        {
+            ["$meta"] = new
+            {
+                version = "fixture-1",
+                generated = "2026-08-07T00:00:00Z",
+                sha256 = "fixture"
+            },
+            ["tasks"] = new Dictionary<string, object>
+            {
+                ["fixture-quest-first"] = new { minPlayerLevel = 3 },
+                ["fixture-quest-disabled"] = new { disabled = true }
+            },
+            ["tasksAdd"] = new Dictionary<string, object>
+            {
+                ["fixture-quest-overlay-added"] = new
+                {
+                    id = "fixture-quest-overlay-added",
+                    name = "Overlay Added Quest",
+                    normalizedName = "overlay-added-quest",
+                    wikiLink = "https://example.invalid/overlay-added",
+                    minPlayerLevel = 5,
+                    factionName = (string?)null,
+                    kappaRequired = false,
+                    trader = "fixture-trader",
+                    map = (string?)null,
+                    requiredPrestige = new { prestigeLevel = 5 },
+                    taskRequirements = Array.Empty<object>(),
+                    objectives = Array.Empty<object>()
+                }
+            },
+            ["prestige"] = new Dictionary<string, object>
+            {
+                ["fixture-prestige-1"] = new { prestigeLevel = 2 }
+            },
+            ["locales"] = locales,
+            ["modes"] = new Dictionary<string, object>
+            {
+                ["regular"] = new
+                {
+                    tasks = new Dictionary<string, object>()
+                }
+            }
         };
     }
 

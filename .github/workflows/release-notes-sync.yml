@@ -1,0 +1,73 @@
+name: Sync Release Notes
+
+on:
+  workflow_run:
+    workflows:
+      - Publish Release
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  sync-release-notes:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          [xml]$project = Get-Content "TarkovHelper/TarkovHelper.csproj"
+          $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Project version could not be read."
+          }
+
+          $firstLine = Get-Content "RELEASE_NOTES.md" -TotalCount 1
+          if ($firstLine -notmatch '^<!-- version: ([0-9]+\.[0-9]+\.[0-9]+) -->$') {
+            throw "RELEASE_NOTES.md does not contain a valid version marker."
+          }
+          $notesVersion = $Matches[1]
+
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "notes_version=$notesVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Skip stale release notes
+        if: steps.version.outputs.version != steps.version.outputs.notes_version
+        shell: pwsh
+        run: |
+          Write-Host "Release notes are for v${{ steps.version.outputs.notes_version }}; current project is v${{ steps.version.outputs.version }}. Skipping."
+
+      - name: Apply matching release notes
+        if: steps.version.outputs.version == steps.version.outputs.notes_version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "v${{ steps.version.outputs.version }}"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release $tag does not exist after Publish Release completed."
+          }
+
+          gh release edit $tag `
+            --repo $env:GITHUB_REPOSITORY `
+            --notes-file RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to synchronize release notes for $tag."
+          }
+
+          $body = gh release view $tag --repo $env:GITHUB_REPOSITORY --json body --jq .body
+          if ($LASTEXITCODE -ne 0 -or $body -notmatch "v${{ steps.version.outputs.version }} 수정") {
+            throw "Published release notes were not synchronized correctly."
+          }
