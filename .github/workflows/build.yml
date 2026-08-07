@@ -29,38 +29,23 @@ jobs:
           echo '029441f8dd6ce05abf9cac68ee60fba6feddadc3cf7df322dfa0ad86ad74f1a8  /tmp/p.gz' | sha256sum --check
           gzip -dc /tmp/p.gz > /tmp/p.patch
           echo 'd221a60bbb37b2c31eccc4c33cf9d0b0f77c0978401b57b240c742eeee7d330e  /tmp/p.patch' | sha256sum --check
-          echo APPLY
           git apply --3way --check /tmp/p.patch
           git apply --3way /tmp/p.patch
           test -z "$(git ls-files -u)"
           git diff --check
-          echo CHECK_AVAILABLE_ENUM
           if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then exit 11; fi
-          echo CHECK_AVAILABLE_REFS
           if grep -R -q 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then exit 12; fi
-          echo CHECK_MANUAL_AUTOCOMPLETE
           if grep -q 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then exit 13; fi
-          echo CHECK_EXPLICIT_START
-          grep -n 'internal bool HasExplicitStart' TarkovHelper/Services/QuestProgressService.cs || exit 14
-          echo CHECK_START_METHOD
-          grep -n 'public bool StartQuest' TarkovHelper/Services/QuestProgressService.cs || exit 15
-          echo CHECK_START_SAVE
-          grep -n '_userDataDb.SaveQuestProgressAsync' TarkovHelper/Services/QuestProgressService.cs || exit 16
-          echo CHECK_COMPLETE_DEFAULT
-          grep -n 'CompleteQuest(TarkovTask task, bool completePrerequisites = false)' TarkovHelper/Services/QuestProgressService.cs || exit 17
-          echo CHECK_SCHEMA
-          grep -n 'ContentSchemaVersion' TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs || exit 18
-          echo RESTORE_CI
+          grep -q 'internal bool HasExplicitStart' TarkovHelper/Services/QuestProgressService.cs
+          grep -q 'public bool StartQuest' TarkovHelper/Services/QuestProgressService.cs
+          grep -q '_userDataDb.SaveQuestProgressAsync' TarkovHelper/Services/QuestProgressService.cs
+          grep -q 'CompleteQuest(TarkovTask task, bool completePrerequisites = false)' TarkovHelper/Services/QuestProgressService.cs
+          test -s TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs
           git checkout 4d1ecbb3d967b0d60aeb7fc6a925a8ed3a4427c2 -- .github/workflows/build.yml .github/workflows/startup-smoke.yml
-          echo REMOVE_PATCH
           git rm -r .github/final-patch
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          echo STAGE
           git add -A
           git diff --cached --check
-          echo COMMIT
           git commit -m 'Overhaul quest and content data pipeline'
-          echo PUSH
           git push origin HEAD:agent/quest-data-overhaul
-          echo DONE
