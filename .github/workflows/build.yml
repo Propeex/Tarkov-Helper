@@ -39,7 +39,6 @@ jobs:
           EOF
           sed -i 's/^          //' /tmp/v2-sha256sums
           sha256sum --check /tmp/v2-sha256sums
-
           cat .github/final-patch/v2-* > /tmp/final-overhaul.patch.gz.b64
           echo '76d10a38ed1d3344da3b414790405d5ad85545457d7e2851e36381b7016bde6f  /tmp/final-overhaul.patch.gz.b64' | sha256sum --check
           base64 --decode /tmp/final-overhaul.patch.gz.b64 > /tmp/final-overhaul.patch.gz
@@ -47,22 +46,14 @@ jobs:
           gzip --decompress --stdout /tmp/final-overhaul.patch.gz > /tmp/final-overhaul.patch
           echo 'd221a60bbb37b2c31eccc4c33cf9d0b0f77c0978401b57b240c742eeee7d330e  /tmp/final-overhaul.patch' | sha256sum --check
 
-          git apply --check /tmp/final-overhaul.patch
-          git apply /tmp/final-overhaul.patch
+          git apply --3way --check --verbose /tmp/final-overhaul.patch
+          git apply --3way --verbose /tmp/final-overhaul.patch
+          test -z "$(git ls-files -u)" || { echo 'Three-way conflicts detected.' >&2; exit 1; }
           git diff --check
 
-          if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then
-            echo 'Forbidden Available quest state exists.' >&2
-            exit 1
-          fi
-          if grep -R -q 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then
-            echo 'Forbidden QuestStatus.Available reference exists.' >&2
-            exit 1
-          fi
-          if grep -q 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then
-            echo 'Manual in-progress input still auto-completes prerequisites.' >&2
-            exit 1
-          fi
+          if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then exit 1; fi
+          if grep -R -q 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then exit 1; fi
+          if grep -q 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then exit 1; fi
           grep -q 'QuestStatusPersistence' TarkovHelper/Services/QuestProgressService.cs
           grep -q 'ContentSchemaVersion' TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs
 
