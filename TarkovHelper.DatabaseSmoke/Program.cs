@@ -699,13 +699,13 @@ static async Task RunOutageHandlingSmokeAsync(string databasePath)
     stopwatch.Stop();
 
     if (failureMessage == null ||
-        !failureMessage.Contains("정적 JSON API와 GraphQL API가 모두 응답하지 않았습니다", StringComparison.Ordinal))
+        !failureMessage.Contains("GraphQL 예비 경로는 사용하지 않습니다", StringComparison.Ordinal))
     {
         throw new InvalidDataException(
-            $"Outage fixture did not return the expected combined API error: {failureMessage ?? "no error"}");
+            $"Outage fixture did not return the expected fail-closed API error: {failureMessage ?? "no error"}");
     }
 
-    if (outageHandler.StaticRequestCount != 1 || outageHandler.GraphQlRequestCount != 1)
+    if (outageHandler.StaticRequestCount != 1 || outageHandler.GraphQlRequestCount != 0)
     {
         throw new InvalidDataException(
             $"Outage handling retried unavailable endpoints: static={outageHandler.StaticRequestCount}, " +

@@ -104,6 +104,10 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (modes["regular"] is not JsonObject regularMode)
             throw new InvalidDataException("퀘스트 보정 데이터에 modes.regular 객체가 없습니다.");
 
+        var prestigeCorrectionCount = ValidateObjectPatchMap(prestige, "prestige");
+        var taskCorrectionCount = ValidateObjectPatchMap(tasks, "tasks");
+        var taskAdditionCorrectionCount = ValidateObjectPatchMap(tasksAdd, "tasksAdd");
+
         var modeCorrectionCount = 0;
         foreach (var (modeName, modeNode) in modes)
         {
@@ -126,11 +130,16 @@ internal sealed partial class TarkovDataDatabaseBuilder
             }
 
             if (localeObject["tasks"] is JsonObject localeTasks)
-                localeCorrectionCount += localeTasks.Count;
+            {
+                localeCorrectionCount += ValidateObjectPatchMap(
+                    localeTasks,
+                    $"locales.{localeName}.tasks");
+            }
         }
 
-        var totalCorrections = prestige.Count + tasks.Count + tasksAdd.Count +
-                               modeCorrectionCount + localeCorrectionCount;
+        var totalCorrections = prestigeCorrectionCount + taskCorrectionCount +
+                               taskAdditionCorrectionCount + modeCorrectionCount +
+                               localeCorrectionCount;
         if (totalCorrections <= 0)
         {
             throw new InvalidDataException(
@@ -166,10 +175,24 @@ internal sealed partial class TarkovDataDatabaseBuilder
             throw new InvalidDataException($"퀘스트 보정 데이터의 {label}.tasksAdd 형식이 잘못되었습니다.");
 
         if (container["tasks"] is JsonObject tasks)
-            correctionCount += tasks.Count;
+            correctionCount += ValidateObjectPatchMap(tasks, $"{label}.tasks");
         if (container["tasksAdd"] is JsonObject tasksAdd)
-            correctionCount += tasksAdd.Count;
+            correctionCount += ValidateObjectPatchMap(tasksAdd, $"{label}.tasksAdd");
         return correctionCount;
+    }
+
+    private static int ValidateObjectPatchMap(JsonObject map, string label)
+    {
+        foreach (var (id, node) in map)
+        {
+            if (node is not JsonObject)
+            {
+                throw new InvalidDataException(
+                    $"퀘스트 보정 데이터의 {label}.{id} 항목이 JSON 객체가 아닙니다.");
+            }
+        }
+
+        return map.Count;
     }
 
     private static QuestCatalogOverlayInfo ApplyQuestCatalogOverlay(
