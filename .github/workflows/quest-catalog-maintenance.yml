@@ -1,0 +1,46 @@
+name: Quest Catalog Maintenance
+
+on:
+  pull_request:
+    types: [reopened]
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 34 && github.head_ref == 'agent/quest-catalog-sync-fix'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Normalize deterministic overlay fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('TarkovHelper.DatabaseSmoke/FixtureTarkovApiHandler.cs')
+          text = p.read_text(encoding='utf-8')
+          needle = '''                    normalizedName = "overlay-added-quest",
+                    wikiLink = "https://example.invalid/overlay-added",
+                    minPlayerLevel = 5,
+                    factionName = "Any",
+                    kappaRequired = false,'''
+          replacement = '''                    normalizedName = "overlay-added-quest",
+                    wikiLink = "https://example.invalid/overlay-added",
+                    minPlayerLevel = 5,
+                    factionName = (string?)null,
+                    kappaRequired = false,'''
+          if text.count(needle) != 1:
+              raise SystemExit('overlay-added fixture marker mismatch')
+          p.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TarkovHelper.DatabaseSmoke/FixtureTarkovApiHandler.cs
+          git diff --cached --check
+          git commit -m "Align quest overlay fixture with live task shape"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
