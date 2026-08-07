@@ -48,6 +48,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         await cleanupCommand.ExecuteNonQueryAsync();
     }
 
+    await SeedPrerequisiteGroupFixtureAsync(databasePath);
+
     var fixtureHandler = new FixtureTarkovApiHandler();
     using var httpClient = new HttpClient(
         new TarkovJsonObjectiveIdProtectionHandler(
@@ -115,9 +117,22 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
             $"unique={uniqueQuestKeys}, disambiguated={disambiguatedQuestKeys}.");
     }
     if (QuestDbService.Instance.GetQuestById("fixture-quest-first") == null ||
-        QuestDbService.Instance.GetQuestById("fixture-quest-second") == null)
+        QuestDbService.Instance.GetQuestById("fixture-quest-second") == null ||
+        QuestDbService.Instance.GetQuestById("fixture-quest-third") == null)
     {
-        throw new InvalidDataException("Quest ID lookup lost one of the duplicate-name quests.");
+        throw new InvalidDataException("Quest ID lookup lost one of the fixture quests.");
+    }
+
+    var groupedFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-second");
+    var groupedFixtureRequirements = groupedFixtureQuest?.TaskRequirements?
+        .Where(requirement => requirement.GroupId == 77)
+        .Select(requirement => requirement.TaskId)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    if (groupedFixtureRequirements is not { Count: 2 } ||
+        !groupedFixtureRequirements.Contains("fixture-quest-first") ||
+        !groupedFixtureRequirements.Contains("fixture-quest-third"))
+    {
+        throw new InvalidDataException("Verified prerequisite OR group was not preserved by QuestDbService.");
     }
 
     var connectionString = new SqliteConnectionStringBuilder
@@ -211,6 +226,15 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
               OR json_array_length(AlternativeItemNames) != json_array_length(AlternativeItemIds)
           );
         """);
+    var preservedPrerequisiteGroupRows = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequirements r
+        JOIN Quests q ON q.Id = r.QuestId
+        JOIN Quests required ON required.Id = r.RequiredQuestId
+        WHERE q.BsgId = 'fixture-quest-second'
+          AND required.BsgId IN ('fixture-quest-first', 'fixture-quest-third')
+          AND r.GroupId = 77;
+        """);
     var duplicateDisplayNames = await ScalarAsync(connection, """
         SELECT COUNT(*)
         FROM (
@@ -303,6 +327,11 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Neutral quests still contain a faction restriction: {restrictedNeutralQuests}.");
     if (sellItemRequirements != 0)
         throw new InvalidDataException($"Sell catalogues leaked into quest item requirements: {sellItemRequirements}.");
+    if (preservedPrerequisiteGroupRows != 2)
+    {
+        throw new InvalidDataException(
+            $"Verified prerequisite OR group was not preserved during rebuild: rows={preservedPrerequisiteGroupRows}.");
+    }
     if (dogtagAlternativeRows != 1 || validDogtagAlternativeGroups != 1 ||
         unresolvedAlternativeItems != 0 || malformedAlternativeGroups != 0)
     {
@@ -466,6 +495,65 @@ static async Task RunUserProgressResetSmokeAsync()
             $"objectives={counts.Objectives}, hideout={counts.Hideout}, " +
             $"inventory={counts.Inventory}.");
     }
+}
+
+static async Task SeedPrerequisiteGroupFixtureAsync(string databasePath)
+{
+    await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath,
+        Mode = SqliteOpenMode.ReadWrite,
+        Pooling = false
+    }.ConnectionString);
+    await connection.OpenAsync();
+    await using var transaction = await connection.BeginTransactionAsync();
+
+    foreach (var questId in new[]
+             {
+                 "fixture-quest-first",
+                 "fixture-quest-second",
+                 "fixture-quest-third"
+             })
+    {
+        await using var questCommand = connection.CreateCommand();
+        questCommand.Transaction = (SqliteTransaction)transaction;
+        questCommand.CommandText = """
+            INSERT OR REPLACE INTO Quests
+                (Id, BsgId, Name, NameEN, NormalizedName, Trader, Location,
+                 MinLevel, MinLevelApproved, KappaRequired, IsApproved)
+            VALUES
+                ($id, $id, $name, $name, $normalized, 'Trader', 'any',
+                 1, 1, 0, 1);
+            """;
+        questCommand.Parameters.AddWithValue("$id", questId);
+        questCommand.Parameters.AddWithValue("$name", questId);
+        questCommand.Parameters.AddWithValue("$normalized", questId);
+        await questCommand.ExecuteNonQueryAsync();
+    }
+
+    await using (var deleteCommand = connection.CreateCommand())
+    {
+        deleteCommand.Transaction = (SqliteTransaction)transaction;
+        deleteCommand.CommandText = "DELETE FROM QuestRequirements WHERE QuestId = 'fixture-quest-second';";
+        await deleteCommand.ExecuteNonQueryAsync();
+    }
+
+    foreach (var requiredId in new[] { "fixture-quest-first", "fixture-quest-third" })
+    {
+        await using var requirementCommand = connection.CreateCommand();
+        requirementCommand.Transaction = (SqliteTransaction)transaction;
+        requirementCommand.CommandText = """
+            INSERT INTO QuestRequirements
+                (Id, QuestId, RequiredQuestId, RequirementType, GroupId, IsApproved)
+            VALUES
+                ($id, 'fixture-quest-second', $requiredId, 'Complete', 77, 1);
+            """;
+        requirementCommand.Parameters.AddWithValue("$id", $"fixture-group-{requiredId}");
+        requirementCommand.Parameters.AddWithValue("$requiredId", requiredId);
+        await requirementCommand.ExecuteNonQueryAsync();
+    }
+
+    await transaction.CommitAsync();
 }
 
 static async Task ForceDuplicateQuestNamesAsync(string databasePath)

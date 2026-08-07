@@ -240,14 +240,34 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                         trader = "fixture-trader",
                         map = "fixture-map",
                         requiredPrestige = (string?)null,
-                        taskRequirements = new[]
+                        taskRequirements = new object[]
                         {
                             new
                             {
                                 task = "fixture-quest-first",
                                 status = new[] { "complete" }
+                            },
+                            new
+                            {
+                                task = "fixture-quest-third",
+                                status = new[] { "complete" }
                             }
                         },
+                        objectives = Array.Empty<object>()
+                    },
+                    ["fixture-quest-third"] = new
+                    {
+                        id = "fixture-quest-third",
+                        name = "fixture-quest-third Name",
+                        normalizedName = "third-fixture-quest",
+                        wikiLink = "https://example.invalid/quest-third",
+                        minPlayerLevel = 1,
+                        factionName = "Any",
+                        kappaRequired = false,
+                        trader = "fixture-trader",
+                        map = (string?)null,
+                        requiredPrestige = (string?)null,
+                        taskRequirements = Array.Empty<object>(),
                         objectives = Array.Empty<object>()
                     }
                 },
@@ -311,6 +331,7 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
             ["fixture-map Name"] = "Fixture Map",
             ["fixture-quest-first Name"] = "First Fixture Quest",
             ["fixture-quest-second Name"] = "Second Fixture Quest",
+            ["fixture-quest-third Name"] = "Third Fixture Quest",
             ["fixture-objective-bolts Description"] = "Obtain bolts",
             ["fixture-station-workbench Name"] = "Workbench"
         };
@@ -331,6 +352,7 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
             ["fixture-map Name"] = "테스트 지도",
             ["fixture-quest-first Name"] = "첫 번째 퀘스트",
             ["fixture-quest-second Name"] = "두 번째 퀘스트",
+            ["fixture-quest-third Name"] = "세 번째 퀘스트",
             ["fixture-objective-bolts Description"] = "볼트를 획득하십시오",
             ["fixture-station-workbench Name"] = "작업대"
         };
@@ -447,14 +469,34 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                 trader = new { id = "fixture-trader", name = korean ? "상인" : "Trader", normalizedName = "trader" },
                 map = (object?)null,
                 requiredPrestige = (object?)null,
-                taskRequirements = new[]
+                taskRequirements = new object[]
                 {
                     new
                     {
                         task = new { id = "fixture-quest-first" },
                         status = new[] { "complete" }
+                    },
+                    new
+                    {
+                        task = new { id = "fixture-quest-third" },
+                        status = new[] { "complete" }
                     }
                 },
+                objectives = Array.Empty<object>()
+            },
+            new
+            {
+                id = "fixture-quest-third",
+                name = korean ? "세 번째 퀘스트" : "Third Fixture Quest",
+                normalizedName = "third-fixture-quest",
+                wikiLink = "https://example.invalid/quest-third",
+                minPlayerLevel = 1,
+                factionName = "Any",
+                kappaRequired = false,
+                trader = new { id = "fixture-trader", name = korean ? "상인" : "Trader", normalizedName = "trader" },
+                map = (object?)null,
+                requiredPrestige = (object?)null,
+                taskRequirements = Array.Empty<object>(),
                 objectives = Array.Empty<object>()
             }
         ];

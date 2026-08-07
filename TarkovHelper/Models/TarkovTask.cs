@@ -215,8 +215,9 @@ namespace TarkovHelper.Models
 
         /// <summary>
         /// OR group ID for prerequisite requirements.
-        /// GroupId = 0: AND condition (must be completed)
-        /// GroupId > 0: OR condition (any one in the same group must be satisfied)
+        /// GroupId = 0: independent AND condition.
+        /// GroupId > 0: requirements sharing the same positive ID form one OR group;
+        /// a positive ID used by only one requirement is still mandatory.
         /// </summary>
         [JsonPropertyName("groupId")]
         public int GroupId { get; set; }

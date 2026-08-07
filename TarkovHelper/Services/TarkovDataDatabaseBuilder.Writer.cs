@@ -61,6 +61,14 @@ internal sealed partial class TarkovDataDatabaseBuilder
         var questOldByBsg = IndexRows(snapshots["Quests"].Rows, "BsgId", "Id");
         var stationOldById = IndexRows(snapshots["HideoutStations"].Rows, "Id");
         var objectiveOldById = IndexRows(snapshots["QuestObjectives"].Rows, "Id");
+        var questRequirementOldByPair = snapshots["QuestRequirements"].Rows
+            .Where(row => !string.IsNullOrWhiteSpace(ReadString(row, "QuestId")) &&
+                          !string.IsNullOrWhiteSpace(ReadString(row, "RequiredQuestId")))
+            .GroupBy(row => BuildCompositeKey(
+                    ReadString(row, "QuestId")!,
+                    ReadString(row, "RequiredQuestId")!),
+                StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
         var itemRows = new List<RowData>(data.Items.Count);
         var itemIdByApiId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -232,7 +240,23 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 Set(row, "StatusesJson", JsonSerializer.Serialize(statuses));
                 Set(row, "Notes", requirement.Notes);
                 Set(row, "SourceJson", requirement.SourceJson ?? JsonSerializer.Serialize(requirement));
-                Set(row, "GroupId", 0);
+
+                // The current API payload does not expose prerequisite OR-group metadata.
+                // Preserve the verified group only for an exact quest/required-quest pair
+                // that still exists in the latest API response. Removed relationships are
+                // never copied back, and new relationships default to an independent AND
+                // condition (GroupId = 0).
+                var groupId = 0;
+                if (questRequirementOldByPair.TryGetValue(
+                        BuildCompositeKey(questId, requiredQuestId),
+                        out var oldRequirement) &&
+                    TryGetValue(oldRequirement, "GroupId", out var oldGroupValue) &&
+                    oldGroupValue is not null and not DBNull)
+                {
+                    groupId = Convert.ToInt32(oldGroupValue, CultureInfo.InvariantCulture);
+                }
+
+                Set(row, "GroupId", groupId);
                 Set(row, "SortOrder", index);
                 Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                 questRequirementRows.Add(row);
@@ -542,6 +566,10 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 }
             }
         }
+
+        ValidatePreservedQuestRequirementGroups(
+            snapshots["QuestRequirements"].Rows,
+            questRequirementRows);
 
         var metadataRows = new List<RowData>();
         var metadataRow = new RowData();
@@ -905,6 +933,70 @@ internal sealed partial class TarkovDataDatabaseBuilder
         }
 
         return hasPermanent ? !hasRaid : hasRaid && tokens.Length == 1;
+    }
+
+    private static void ValidatePreservedQuestRequirementGroups(
+        IReadOnlyList<RowData> oldRows,
+        IReadOnlyList<RowData> newRows)
+    {
+        var newByPair = newRows
+            .Where(row => !string.IsNullOrWhiteSpace(ReadString(row, "QuestId")) &&
+                          !string.IsNullOrWhiteSpace(ReadString(row, "RequiredQuestId")))
+            .ToDictionary(
+                row => BuildCompositeKey(
+                    ReadString(row, "QuestId")!,
+                    ReadString(row, "RequiredQuestId")!),
+                row => row,
+                StringComparer.OrdinalIgnoreCase);
+
+        var oldAlternativeGroups = oldRows
+            .Where(row => ReadInt32(row, "GroupId") > 0)
+            .GroupBy(row => BuildCompositeKey(
+                    ReadString(row, "QuestId") ?? string.Empty,
+                    ReadInt32(row, "GroupId").ToString(CultureInfo.InvariantCulture)),
+                StringComparer.OrdinalIgnoreCase)
+            .Where(group => group
+                .Select(row => ReadString(row, "RequiredQuestId"))
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count() > 1);
+
+        foreach (var oldGroup in oldAlternativeGroups)
+        {
+            var projectedRows = oldGroup
+                .Select(row => BuildCompositeKey(
+                    ReadString(row, "QuestId") ?? string.Empty,
+                    ReadString(row, "RequiredQuestId") ?? string.Empty))
+                .Where(newByPair.ContainsKey)
+                .Select(key => newByPair[key])
+                .ToList();
+
+            // A group with zero or one surviving API relationship no longer has
+            // OR semantics to preserve. It remains a single mandatory condition.
+            if (projectedRows.Count < 2)
+                continue;
+
+            var projectedGroupIds = projectedRows
+                .Select(row => ReadInt32(row, "GroupId"))
+                .Distinct()
+                .ToList();
+            if (projectedGroupIds.Count != 1 || projectedGroupIds[0] <= 0)
+            {
+                throw new InvalidDataException(
+                    $"Verified alternative prerequisite group was lost while rebuilding: {oldGroup.Key}.");
+            }
+        }
+    }
+
+    private static int ReadInt32(RowData? row, string columnName)
+    {
+        if (row == null || !TryGetValue(row, columnName, out var value) ||
+            value is null or DBNull)
+        {
+            return 0;
+        }
+
+        return Convert.ToInt32(value, CultureInfo.InvariantCulture);
     }
 
     private sealed record AcquisitionSourceEntry(string Name, int Level);
