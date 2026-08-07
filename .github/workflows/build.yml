@@ -46,16 +46,24 @@ jobs:
           gzip --decompress --stdout /tmp/final-overhaul.patch.gz > /tmp/final-overhaul.patch
           echo 'd221a60bbb37b2c31eccc4c33cf9d0b0f77c0978401b57b240c742eeee7d330e  /tmp/final-overhaul.patch' | sha256sum --check
 
+          echo 'CHECK: three-way applicability'
           git apply --3way --check --verbose /tmp/final-overhaul.patch
           git apply --3way --verbose /tmp/final-overhaul.patch
-          test -z "$(git ls-files -u)" || { echo 'Three-way conflicts detected.' >&2; exit 1; }
-          git diff --check
-
-          if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then exit 1; fi
-          if grep -R -q 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then exit 1; fi
-          if grep -q 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then exit 1; fi
-          grep -q 'QuestStatusPersistence' TarkovHelper/Services/QuestProgressService.cs
-          grep -q 'ContentSchemaVersion' TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs
+          echo 'CHECK: unresolved conflicts'
+          test -z "$(git ls-files -u)" || { git ls-files -u; exit 1; }
+          echo 'CHECK: whitespace'
+          if ! git diff --check; then git diff --check || true; exit 1; fi
+          echo 'CHECK: forbidden Available enum'
+          if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then echo 'Available enum found'; exit 1; fi
+          echo 'CHECK: forbidden QuestStatus.Available refs'
+          if grep -R -n 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then echo 'QuestStatus.Available found'; exit 1; fi
+          echo 'CHECK: manual prerequisite auto-completion'
+          if grep -n 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then echo 'Prerequisite auto-completion found'; exit 1; fi
+          echo 'CHECK: start-state persistence model'
+          grep -n 'QuestStatusPersistence' TarkovHelper/Services/QuestProgressService.cs || { echo 'QuestStatusPersistence missing'; exit 1; }
+          echo 'CHECK: content schema marker'
+          grep -n 'ContentSchemaVersion' TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs || { echo 'ContentSchemaVersion missing'; exit 1; }
+          echo 'CHECKS PASSED'
 
           git checkout 4d1ecbb3d967b0d60aeb7fc6a925a8ed3a4427c2 -- .github/workflows/build.yml .github/workflows/startup-smoke.yml
           git rm -r .github/final-patch
