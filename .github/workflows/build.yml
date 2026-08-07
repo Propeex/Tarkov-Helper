@@ -1,4 +1,4 @@
-name: Inspect Verified Quest Overhaul
+name: Inspect Quest Start Persistence
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Apply verified patch and inspect quest persistence
+      - name: Inspect explicit-start implementation
         shell: bash
         run: |
           set -euo pipefail
@@ -21,17 +21,19 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git fetch --no-tags origin +refs/heads/agent/quest-data-overhaul:refs/remotes/origin/agent/quest-data-overhaul
           git checkout -B agent/quest-data-overhaul refs/remotes/origin/agent/quest-data-overhaul
-          cat .github/final-patch/v2-* > /tmp/final-overhaul.patch.gz.b64
-          echo '76d10a38ed1d3344da3b414790405d5ad85545457d7e2851e36381b7016bde6f  /tmp/final-overhaul.patch.gz.b64' | sha256sum --check
-          base64 --decode /tmp/final-overhaul.patch.gz.b64 > /tmp/final-overhaul.patch.gz
-          echo '029441f8dd6ce05abf9cac68ee60fba6feddadc3cf7df322dfa0ad86ad74f1a8  /tmp/final-overhaul.patch.gz' | sha256sum --check
-          gzip --decompress --stdout /tmp/final-overhaul.patch.gz > /tmp/final-overhaul.patch
-          echo 'd221a60bbb37b2c31eccc4c33cf9d0b0f77c0978401b57b240c742eeee7d330e  /tmp/final-overhaul.patch' | sha256sum --check
-          git apply --3way --check /tmp/final-overhaul.patch
-          git apply --3way /tmp/final-overhaul.patch
+          cat .github/final-patch/v2-* > /tmp/p.gz.b64
+          echo '76d10a38ed1d3344da3b414790405d5ad85545457d7e2851e36381b7016bde6f  /tmp/p.gz.b64' | sha256sum --check
+          base64 --decode /tmp/p.gz.b64 > /tmp/p.gz
+          echo '029441f8dd6ce05abf9cac68ee60fba6feddadc3cf7df322dfa0ad86ad74f1a8  /tmp/p.gz' | sha256sum --check
+          gzip -dc /tmp/p.gz > /tmp/p.patch
+          echo 'd221a60bbb37b2c31eccc4c33cf9d0b0f77c0978401b57b240c742eeee7d330e  /tmp/p.patch' | sha256sum --check
+          git apply --3way --check /tmp/p.patch
+          git apply --3way /tmp/p.patch
           test -z "$(git ls-files -u)"
           git diff --check
-          echo '--- QuestProgressService diff ---'
-          git diff -- TarkovHelper/Services/QuestProgressService.cs
-          echo '--- Quest persistence symbols ---'
-          grep -R -n -E 'StartQuest|StartedQuest|Explicit|Accepted|active requirement|started' TarkovHelper/Services/QuestProgressService.cs TarkovHelper/Services/UserDataDbService.cs TarkovHelper/Models/QuestStatusPersistence.cs || true
+          echo '--- explicit start core ---'
+          sed -n '530,660p' TarkovHelper/Services/QuestProgressService.cs
+          echo '--- explicit start load/save ---'
+          sed -n '880,950p' TarkovHelper/Services/QuestProgressService.cs
+          echo '--- progress model fields ---'
+          grep -R -n -E 'Started|ExplicitStart' TarkovHelper/Models TarkovHelper/Services/QuestProgressService.cs | head -100 || true
