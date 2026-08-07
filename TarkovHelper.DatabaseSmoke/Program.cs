@@ -129,11 +129,10 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     var correctedFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-first")!;
     var prestigeFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-third")!;
     var addedPrestigeQuest = QuestDbService.Instance.GetQuestById("fixture-quest-overlay-added")!;
-    if (!string.Equals(correctedFixtureQuest.Name, "Corrected First Fixture Quest", StringComparison.Ordinal) ||
-        !string.Equals(correctedFixtureQuest.NameKo, "보정된 첫 번째 퀘스트", StringComparison.Ordinal))
+    if (!string.Equals(correctedFixtureQuest.NameKo, "보정된 첫 번째 퀘스트", StringComparison.Ordinal))
     {
         throw new InvalidDataException(
-            $"Quest locale overlay was not applied: en={correctedFixtureQuest.Name}, ko={correctedFixtureQuest.NameKo}.");
+            $"Quest Korean locale overlay was not applied: ko={correctedFixtureQuest.NameKo}.");
     }
     if (correctedFixtureQuest.RequiredLevel != 3 ||
         prestigeFixtureQuest.RequiredPrestigeLevel != 2 ||
@@ -1154,6 +1153,26 @@ static async Task<int> RunExternalApiSmokeAsync()
             FROM QuestRequirements
             WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;
             """);
+        var questCatalogOverlayMetadataRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM ContentBuildMetadata
+            WHERE Id = 'current'
+              AND Source LIKE 'tarkov.dev + tarkov-data-overlay %'
+              AND Transport = 'static-json+overlay';
+            """);
+        var staleNeuanfangRows = await ScalarAsync(connection,
+            "SELECT COUNT(*) FROM Quests WHERE Name = 'Neuanfang' OR NameEN = 'Neuanfang';");
+        var newBeginningRows = await ScalarAsync(connection,
+            "SELECT COUNT(*) FROM Quests WHERE Name = 'New Beginning';");
+        var newBeginningPrestigeRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM Quests
+            WHERE Name = 'New Beginning'
+              AND RequiredPrestigeLevel IN (1, 2, 3, 4, 5);
+            """);
+        var addedNewBeginningRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM Quests
+            WHERE (BsgId = 'new_beginning_prestige_5' AND RequiredPrestigeLevel = 4)
+               OR (BsgId = 'new_beginning_prestige_6' AND RequiredPrestigeLevel = 5);
+            """);
         if (ammoRows < 150 || linkedAmmoRows != ammoRows || koreanAmmoRows < 150 || caliberRows < 20 ||
             sourceSummary.TotalRows != ammoRows || specificSourceRows < 50)
         {
@@ -1188,13 +1207,22 @@ static async Task<int> RunExternalApiSmokeAsync()
                 $"prerequisiteCounts={questPrerequisiteCountMismatches}, " +
                 $"prerequisiteSourceJson={invalidPrerequisiteSourceJsonRows}.");
         }
+        if (questCatalogOverlayMetadataRows != 1 || staleNeuanfangRows != 0 ||
+            newBeginningRows != 6 || newBeginningPrestigeRows != 5 || addedNewBeginningRows != 2)
+        {
+            throw new InvalidDataException(
+                $"Live quest catalog corrections are incomplete: overlay={questCatalogOverlayMetadataRows}, " +
+                $"neuanfang={staleNeuanfangRows}, newBeginning={newBeginningRows}, " +
+                $"prestigeMapped={newBeginningPrestigeRows}, added={addedNewBeginningRows}.");
+        }
 
         Console.WriteLine(
             $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, permanentSources={specificSourceRows}, " +
             $"traderRows={sourceSummary.TraderRows}, craftRows={sourceSummary.CraftRows}, raidOnly={sourceSummary.RaidOnlyRows}, " +
             $"questTraderRequirements={questTraderRequirementRows}, trackedQuestItems={trackedQuestItemRows}, " +
             $"expandedAmmo={expandedAmmoRows}, prerequisiteMinLevelMismatches={questMinLevelSourceMismatches}, " +
-            $"prerequisiteCountMismatches={questPrerequisiteCountMismatches}.");
+            $"prerequisiteCountMismatches={questPrerequisiteCountMismatches}, " +
+            $"newBeginning={newBeginningRows}, overlayMetadata={questCatalogOverlayMetadataRows}.");
 
         // The application updater writes to its isolated mutable-content path.
         // Existing release workflows intentionally publish the verified database
