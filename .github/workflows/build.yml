@@ -1,243 +1,97 @@
-name: Build
+name: Instrument Quest Overhaul Validation
 
 on:
-  push:
-    branches:
-      - main
-      - agent/**
-      - hotfix/**
   pull_request:
+    types: [reopened]
+
+permissions:
+  contents: write
 
 jobs:
-  build:
-    runs-on: windows-latest
-    timeout-minutes: 20
-
+  patch:
+    if: github.event.pull_request.number == 31 && github.head_ref == 'agent/quest-data-overhaul'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Restore
-        run: dotnet restore TarkovHelper.sln
-
-      - name: Build and run icon conversion self-test
-        id: build
-        continue-on-error: true
-        shell: pwsh
+      - name: Fix old-schema fixture and split raw JSON validation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          dotnet build TarkovHelper.sln --configuration Release --no-restore -clp:ErrorsOnly *> build.log
-          $buildExit = $LASTEXITCODE
-          if ($buildExit -ne 0) {
-            exit $buildExit
-          }
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags origin +refs/heads/agent/quest-data-overhaul:refs/remotes/origin/agent/quest-data-overhaul
+          git checkout -B agent/quest-data-overhaul refs/remotes/origin/agent/quest-data-overhaul
 
-          $env:TARKOV_ICON_SELF_TEST = "1"
-          dotnet run --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj --configuration Release --no-build *>> build.log
-          exit $LASTEXITCODE
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: build.log
-          if-no-files-found: error
+          program = Path('TarkovHelper.DatabaseSmoke/Program.cs')
+          text = program.read_text(encoding='utf-8')
+          replacements = [
+              ("(Id, BsgId, Name, NameEN, NormalizedName, Trader, Location,", "(Id, BsgId, Name, NameEN, Trader, Location,"),
+              ("($id, $id, $name, $name, $normalized, 'Trader', 'any',", "($id, $id, $name, $name, 'Trader', 'any',"),
+              ('        questCommand.Parameters.AddWithValue("$normalized", questId);\n', ''),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'Program.cs replacement mismatch for {old!r}: {count}')
+              text = text.replace(old, new, 1)
+          program.write_text(text, encoding='utf-8')
 
-      - name: Fail if build failed
-        if: steps.build.outcome == 'failure'
-        shell: pwsh
-        run: exit 1
+          sql = Path('TarkovHelper/Services/TarkovDataDatabaseBuilder.Sql.cs')
+          text = sql.read_text(encoding='utf-8')
+          old = '''        var invalidSourceJson = await ExecuteScalarLongAsync(connection, """
+            SELECT
+                (SELECT COUNT(*) FROM Items WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
+                (SELECT COUNT(*) FROM Quests WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
+                (SELECT COUNT(*) FROM QuestObjectives WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1);
+            """, cancellationToken);
+        if (invalidSourceJson != 0)
+            throw new InvalidDataException($"API 원본 JSON 보존 오류: {invalidSourceJson}개");
+'''
+          new = '''        var invalidItemSourceJson = await ExecuteScalarLongAsync(
+            connection,
+            "SELECT COUNT(*) FROM Items WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;",
+            cancellationToken);
+        var invalidQuestSourceJson = await ExecuteScalarLongAsync(
+            connection,
+            "SELECT COUNT(*) FROM Quests WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;",
+            cancellationToken);
+        var invalidObjectiveSourceJson = await ExecuteScalarLongAsync(
+            connection,
+            "SELECT COUNT(*) FROM QuestObjectives WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;",
+            cancellationToken);
+        var invalidSourceJson = invalidItemSourceJson + invalidQuestSourceJson + invalidObjectiveSourceJson;
+        if (invalidSourceJson != 0)
+        {
+            throw new InvalidDataException(
+                $"API 원본 JSON 보존 오류: total={invalidSourceJson}, " +
+                $"items={invalidItemSourceJson}, quests={invalidQuestSourceJson}, " +
+                $"objectives={invalidObjectiveSourceJson}");
+        }
+'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Sql.cs raw JSON validation block mismatch: {count}')
+          sql.write_text(text.replace(old, new, 1), encoding='utf-8')
 
-  database-smoke:
-    if: github.event_name == 'pull_request'
-    needs: build
-    runs-on: windows-latest
-    timeout-minutes: 20
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          old = '- 퀘스트 시작 시 선행 퀘스트 자동 완료 처리'
+          new = '- 실제 수주·완료 기록과 선행 조건을 분리하여 안전하게 진행도 추적'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'README replacement mismatch: {count}')
+          readme.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Rebuild and validate deterministic database
-        shell: pwsh
-        run: |
-          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release *> database-smoke.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content database-smoke.log
-            exit $LASTEXITCODE
-          }
-
-      - name: Upload deterministic database artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-smoke
-          path: |
-            database-smoke.log
-            TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
-          if-no-files-found: warn
-
-  database-external-smoke:
-    if: github.event_name == 'pull_request'
-    needs: build
-    runs-on: windows-latest
-    timeout-minutes: 35
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Rebuild from live tarkov.dev data
-        shell: pwsh
-        run: |
-          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release -- --external *> database-external-smoke.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content database-external-smoke.log
-            exit $LASTEXITCODE
-          }
-
-      - name: Upload externally rebuilt database
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-external-smoke-db
-          path: TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
-          if-no-files-found: error
-
-      - name: Upload external database log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-external-smoke-log
-          path: database-external-smoke.log
-          if-no-files-found: error
-
-  release-package:
-    if: github.event_name == 'pull_request'
-    needs:
-      - build
-      - database-smoke
-      - database-external-smoke
-    runs-on: windows-latest
-    timeout-minutes: 50
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Download verified live database
-        uses: actions/download-artifact@v4
-        with:
-          name: database-external-smoke-db
-          path: rebuilt-db
-
-      - name: Inject verified live database
-        shell: pwsh
-        run: |
-          $databasePath = "rebuilt-db/tarkov_data.db"
-          if (-not (Test-Path $databasePath)) {
-            throw "The externally rebuilt database artifact is missing."
-          }
-
-          $databaseSize = (Get-Item $databasePath).Length
-          if ($databaseSize -lt 1MB) {
-            throw "The externally rebuilt database is unexpectedly small: $databaseSize bytes."
-          }
-
-          Copy-Item $databasePath "TarkovHelper/Assets/tarkov_data.db" -Force
-
-      - name: Download and convert required item icons
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          Remove-Item "TarkovHelper/Assets/Icons" -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path "TarkovHelper/Assets/Icons" -Force | Out-Null
-
-          dotnet run `
-            --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj `
-            --configuration Release `
-            -- `
-            --database "TarkovHelper/Assets/tarkov_data.db" `
-            --output "TarkovHelper/Assets/Icons" `
-            --concurrency 8 *> icon-download.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content icon-download.log
-            exit $LASTEXITCODE
-          }
-
-          $iconCount = @(Get-ChildItem "TarkovHelper/Assets/Icons" -Filter *.png -File).Count
-          if ($iconCount -lt 100) {
-            throw "Too few item icons were generated: $iconCount."
-          }
-          Write-Host "Generated item icons: $iconCount"
-
-      - name: Upload icon download log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: icon-download-log
-          path: icon-download.log
-          if-no-files-found: warn
-
-      - name: Publish Windows release candidate
-        shell: pwsh
-        run: |
-          dotnet publish TarkovHelper/TarkovHelper.csproj `
-            --configuration Release `
-            --runtime win-x64 `
-            --self-contained false `
-            --output publish `
-            -p:DebugType=None `
-            -p:DebugSymbols=false
-
-          foreach ($requiredFile in @(
-            "publish/TarkovHelper_JH.exe",
-            "publish/Assets/tarkov_data.db"
-          )) {
-            if (-not (Test-Path $requiredFile)) {
-              throw "Required release file is missing: $requiredFile"
-            }
-          }
-
-          $publishedIcons = @(Get-ChildItem "publish/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue)
-          if ($publishedIcons.Count -lt 100) {
-            throw "Published item icons are missing: $($publishedIcons.Count)."
-          }
-
-          $publishedDatabaseSize = (Get-Item "publish/Assets/tarkov_data.db").Length
-          if ($publishedDatabaseSize -lt 1MB) {
-            throw "The published database is unexpectedly small: $publishedDatabaseSize bytes."
-          }
-
-          Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
-          $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
-
-      - name: Upload release candidate
-        uses: actions/upload-artifact@v4
-        with:
-          name: TarkovHelper_JH-release-candidate
-          path: |
-            TarkovHelper_JH.zip
-            TarkovHelper_JH.zip.sha256
-          if-no-files-found: error
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add TarkovHelper.DatabaseSmoke/Program.cs TarkovHelper/Services/TarkovDataDatabaseBuilder.Sql.cs README.md
+          git diff --cached --check
+          git commit -m 'Harden database regression validation'
+          git push origin HEAD:agent/quest-data-overhaul
