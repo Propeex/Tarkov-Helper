@@ -1,9 +1,11 @@
 name: Verify Published Release
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - Publish Release
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -18,10 +20,14 @@ jobs:
   verify-published-release:
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      TARGET_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
     steps:
-      - name: Checkout
+      - name: Checkout release source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -53,7 +59,7 @@ jobs:
           $expectedTitle = "타르코프헬퍼_JH v$version"
 
           $release = $null
-          for ($attempt = 1; $attempt -le 30; $attempt++) {
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
             $json = gh release view $tag --repo $env:GITHUB_REPOSITORY --json name,isDraft,isPrerelease,url,assets 2>$null
             if ($LASTEXITCODE -eq 0) {
               $candidate = $json | ConvertFrom-Json
@@ -68,14 +74,14 @@ jobs:
               }
             }
 
-            if ($attempt -lt 30) {
-              Write-Host "Release $tag is not fully published yet; retrying ($attempt/30)."
-              Start-Sleep -Seconds 10
+            if ($attempt -lt 6) {
+              Write-Host "Release $tag is not fully visible yet; retrying ($attempt/6)."
+              Start-Sleep -Seconds 5
             }
           }
 
           if ($null -eq $release) {
-            throw "Release $tag or its required assets were not available after the verification window."
+            throw "Release $tag or its required assets are missing after Publish Release completed."
           }
 
           New-Item -ItemType Directory -Path release-verification -Force | Out-Null
@@ -180,7 +186,7 @@ jobs:
             throw "Published release content verification failed."
           }
 
-          Write-Host "Published release verified: tag=$tag sha256=$actualHash url=$($release.url)"
+          Write-Host "Published release verified: tag=$tag sha256=$actualHash url=$($release.url) target=$env:TARGET_SHA"
 
       - name: Publish verification commit status
         if: always()
@@ -199,10 +205,14 @@ jobs:
             $description = "Published release verification failed"
           }
 
+          if ([string]::IsNullOrWhiteSpace($env:TARGET_SHA)) {
+            throw "Release source commit SHA is unavailable."
+          }
+
           $targetUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
           gh api `
             --method POST `
-            "repos/$env:GITHUB_REPOSITORY/statuses/$env:GITHUB_SHA" `
+            "repos/$env:GITHUB_REPOSITORY/statuses/$env:TARGET_SHA" `
             -f state=$state `
             -f context="release/published-assets" `
             -f description="$description" `
