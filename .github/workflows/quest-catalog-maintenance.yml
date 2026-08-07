@@ -24,19 +24,19 @@ jobs:
           from pathlib import Path
           p = Path('TarkovHelper.DatabaseSmoke/FixtureTarkovApiHandler.cs')
           text = p.read_text(encoding='utf-8')
-          needle = '''                    normalizedName = "overlay-added-quest",
-                    wikiLink = "https://example.invalid/overlay-added",
-                    minPlayerLevel = 5,
-                    factionName = "Any",
-                    kappaRequired = false,'''
-          replacement = '''                    normalizedName = "overlay-added-quest",
-                    wikiLink = "https://example.invalid/overlay-added",
-                    minPlayerLevel = 5,
-                    factionName = (string?)null,
-                    kappaRequired = false,'''
-          if text.count(needle) != 1:
-              raise SystemExit('overlay-added fixture marker mismatch')
-          p.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
+          task_marker = '["fixture-quest-overlay-added"] = new'
+          start = text.find(task_marker)
+          if start < 0:
+              raise SystemExit('overlay-added task marker missing')
+          end = text.find('["prestige"]', start)
+          if end < 0:
+              raise SystemExit('overlay-added block end marker missing')
+          block = text[start:end]
+          needle = 'factionName = "Any",'
+          if block.count(needle) != 1:
+              raise SystemExit(f'overlay-added faction marker count={block.count(needle)}')
+          block = block.replace(needle, 'factionName = (string?)null,', 1)
+          p.write_text(text[:start] + block + text[end:], encoding='utf-8')
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
