@@ -137,6 +137,24 @@ namespace TarkovHelper.Models
         [JsonPropertyName("requiredPrestigeLevel")]
         public int? RequiredPrestigeLevel { get; set; }
 
+        [JsonPropertyName("lightkeeperRequired")]
+        public bool LightkeeperRequired { get; set; }
+
+        [JsonPropertyName("restartable")]
+        public bool Restartable { get; set; }
+
+        [JsonPropertyName("gameModes")]
+        public List<string> GameModes { get; set; } = new();
+
+        [JsonPropertyName("availableDelaySecondsMin")]
+        public int? AvailableDelaySecondsMin { get; set; }
+
+        [JsonPropertyName("availableDelaySecondsMax")]
+        public int? AvailableDelaySecondsMax { get; set; }
+
+        [JsonPropertyName("traderRequirements")]
+        public List<QuestTraderRequirement> TraderRequirements { get; set; } = new();
+
         /// <summary>
         /// Required DSP decode count for this quest (for Make Amends quest branches)
         /// </summary>
@@ -202,6 +220,19 @@ namespace TarkovHelper.Models
         /// </summary>
         [JsonPropertyName("groupId")]
         public int GroupId { get; set; }
+
+        [JsonPropertyName("notes")]
+        public string? Notes { get; set; }
+    }
+
+    public class QuestTraderRequirement
+    {
+        public string TraderId { get; set; } = string.Empty;
+        public string TraderName { get; set; } = string.Empty;
+        public string? TraderNameKo { get; set; }
+        public string RequirementType { get; set; } = string.Empty;
+        public string CompareMethod { get; set; } = string.Empty;
+        public double RequiredValue { get; set; }
     }
 
     /// <summary>
@@ -294,5 +325,23 @@ namespace TarkovHelper.Models
 
         [JsonPropertyName("alternativeItemNames")]
         public List<string> AlternativeItemNames { get; set; } = new();
+
+        [JsonPropertyName("objectiveId")]
+        public string? ObjectiveId { get; set; }
+
+        [JsonPropertyName("objectiveType")]
+        public string? ObjectiveType { get; set; }
+
+        [JsonPropertyName("consumesItem")]
+        public bool ConsumesItem { get; set; } = true;
+
+        [JsonPropertyName("trackingKind")]
+        public string TrackingKind { get; set; } = "consumable";
+
+        [JsonPropertyName("minDurability")]
+        public double? MinDurability { get; set; }
+
+        [JsonPropertyName("maxDurability")]
+        public double? MaxDurability { get; set; }
     }
 }

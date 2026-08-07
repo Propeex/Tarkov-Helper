@@ -475,7 +475,7 @@ namespace TarkovHelper.Pages
                     NextLevelTradersList.ItemsSource = nextLevel.TraderRequirements.Select(t =>
                         new RequirementViewModel
                         {
-                            DisplayText = $"- {GetLocalizedTraderName(t)} Lv.{t.Level}"
+                            DisplayText = FormatTraderRequirement(t)
                         }).ToList();
                 }
                 else
@@ -596,6 +596,17 @@ namespace TarkovHelper.Pages
         private string GetLocalizedItemName(HideoutItemRequirement item)
         {
             return item.ItemNameKo ?? item.ItemName;
+        }
+
+        private string FormatTraderRequirement(HideoutTraderRequirement requirement)
+        {
+            var name = GetLocalizedTraderName(requirement);
+            var comparator = string.IsNullOrWhiteSpace(requirement.CompareMethod) ? ">=" : requirement.CompareMethod;
+            if (string.Equals(requirement.RequirementType, "reputation", StringComparison.OrdinalIgnoreCase))
+                return $"- {name} 평판 {comparator} {requirement.RequiredValue:0.##}";
+
+            var level = requirement.RequiredValue > 0 ? requirement.RequiredValue : requirement.Level;
+            return $"- {name} 우호도 {comparator} {level:0}";
         }
 
         private string GetLocalizedTraderName(HideoutTraderRequirement trader)

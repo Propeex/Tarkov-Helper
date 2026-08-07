@@ -19,6 +19,18 @@ public sealed class AmmoItem
     public double FragmentationChance { get; init; }
     public double LightBleedModifier { get; init; }
     public double HeavyBleedModifier { get; init; }
+    public double InitialSpeed { get; init; }
+    public double RicochetChance { get; init; }
+    public double PenetrationChance { get; init; }
+    public double BulletMassGrams { get; init; }
+    public double BallisticCoefficient { get; init; }
+    public double DurabilityBurnFactor { get; init; }
+    public double HeatFactor { get; init; }
+    public double MisfireChance { get; init; }
+    public double FailureToFeedChance { get; init; }
+    public bool Tracer { get; init; }
+    public string? TracerColor { get; init; }
+    public string? AmmoType { get; init; }
     public string AcquisitionSource { get; init; } = "raid-found";
 
     public string DamageText => ProjectileCount > 1 ? $"{Damage} × {ProjectileCount}" : Damage.ToString();
@@ -27,6 +39,12 @@ public sealed class AmmoItem
     public string RecoilText => FormatSignedPercent(RecoilModifier);
     public string FragmentationText => $"{FragmentationChance * 100:0.#}%";
     public string BleedText => $"{LightBleedModifier * 100:0.#}% / {HeavyBleedModifier * 100:0.#}%";
+    public string InitialSpeedText => $"{InitialSpeed:0.#} m/s";
+    public string RicochetText => $"{RicochetChance * 100:0.#}%";
+    public string PenetrationChanceText => $"{PenetrationChance * 100:0.#}%";
+    public string BulletMassText => BulletMassGrams > 0 ? $"{BulletMassGrams:0.##} g" : "-";
+    public string ReliabilityText => $"불발 {MisfireChance * 100:0.###}% · 급탄 {FailureToFeedChance * 100:0.###}%";
+    public string TracerText => Tracer ? $"예 ({TracerColor ?? "색상 미상"})" : "아니요";
 
     public IReadOnlyList<AmmoArmorClassResult> ArmorClasses => Enumerable.Range(1, 6)
         .Select(armorClass => AmmoArmorClassResult.Create(armorClass, PenetrationPower, ArmorDamage))

@@ -13,19 +13,24 @@ internal sealed class ContentDatabaseSummary
 {
     private static readonly HashSet<string> KnownObjectiveTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "HandOver", "Custom", "Collect", "Kill", "Visit", "Stash", "Mark", "Survive", "Task", "Build"
+        "HandOver", "Custom", "Collect", "Kill", "Visit", "Stash", "Mark", "Survive", "Task", "Build",
+        "buildWeapon", "dialogue", "experience", "extract", "findItem", "findQuestItem", "giveItem",
+        "giveQuestItem", "globalVariable", "mark", "plantItem", "plantQuestItem", "sellItem", "shoot",
+        "skill", "taskStatus", "traderLevel", "traderStanding", "useItem", "visit"
     };
 
     private static readonly string[] ItemSignatureColumns =
     {
         "Id", "Name", "NameEN", "NameKO", "ShortNameEN", "ShortNameKO",
-        "NormalizedName", "WikiPageLink", "IconUrl", "Category", "Categories"
+        "NormalizedName", "WikiPageLink", "IconUrl", "Category", "Categories", "SourceJson"
     };
 
     private static readonly string[] QuestSignatureColumns =
     {
         "Id", "Name", "NameEN", "NameKO", "Trader", "Location", "MinLevel",
-        "KappaRequired", "Faction", "NormalizedName", "RequiredPrestigeLevel", "WikiPageLink"
+        "KappaRequired", "Faction", "NormalizedName", "RequiredPrestigeLevel", "LightkeeperRequired",
+        "Restartable", "GameModesJson", "AvailableDelaySecondsMin", "AvailableDelaySecondsMax",
+        "NeededKeysJson", "OtherRequirementsJson", "StartRewardsJson", "FinishRewardsJson", "WikiPageLink"
     };
 
     public int ItemCount => ItemSignatures.Count;
@@ -88,6 +93,13 @@ internal sealed class ContentDatabaseSummary
             result.QuestSignatures,
             questColumns,
             "QuestRequiredItems",
+            "QuestId",
+            cancellationToken);
+        await AppendQuestChildSignaturesAsync(
+            connection,
+            result.QuestSignatures,
+            questColumns,
+            "QuestTraderRequirements",
             "QuestId",
             cancellationToken);
 

@@ -478,6 +478,19 @@ public sealed class UserDataDbService
         await using var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync();
 
+        // v1.8.1 briefly persisted an Available state. It is no longer a valid
+        // quest state and must not be interpreted as an actual start event.
+        await using (var cleanupCommand = connection.CreateCommand())
+        {
+            cleanupCommand.CommandText = """
+                DELETE FROM QuestProgress
+                WHERE ProfileType = @profileType
+                  AND LOWER(TRIM(Status)) = 'available';
+                """;
+            cleanupCommand.Parameters.AddWithValue("@profileType", (int)actualProfileType);
+            await cleanupCommand.ExecuteNonQueryAsync();
+        }
+
         var sql = "SELECT Id, NormalizedName, Status FROM QuestProgress WHERE ProfileType = @profileType";
         await using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@profileType", (int)actualProfileType);
@@ -489,7 +502,7 @@ public sealed class UserDataDbService
             var normalizedName = reader.IsDBNull(1) ? null : reader.GetString(1);
             var statusStr = reader.GetString(2);
 
-            if (Enum.TryParse<QuestStatus>(statusStr, out var status))
+            if (QuestStatusPersistence.TryParse(statusStr, out var status))
             {
                 // NormalizedName???¤ë¡œ ?¬ìš© (ê¸°ì¡´ ?¸í™˜??
                 var key = normalizedName ?? id;
@@ -507,6 +520,8 @@ public sealed class UserDataDbService
     {
         await InitializeAsync();
         var actualProfileType = profileType ?? ProfileService.Instance.CurrentProfile;
+        if (!Enum.IsDefined(status))
+            throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown quest status cannot be persisted.");
 
         var connectionString = GetConnectionString();
         await using var connection = new SqliteConnection(connectionString);
@@ -1026,7 +1041,7 @@ public sealed class UserDataDbService
 
                     foreach (var kvp in v1Data)
                     {
-                        if (Enum.TryParse<QuestStatus>(kvp.Value, out var status))
+                        if (QuestStatusPersistence.TryParse(kvp.Value, out var status))
                         {
                             await SaveQuestProgressAsync(kvp.Key, kvp.Key, status);
                         }

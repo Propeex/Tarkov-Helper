@@ -3,9 +3,10 @@ using TarkovHelper.Models;
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// Calculates the status exposed by the helper. Every quest whose start
-/// conditions are satisfied is treated as Active because the helper assumes
-/// all quests available in game have already been accepted.
+/// Calculates the status exposed by the helper. There is no separate
+/// acceptance-availability state: quests whose start conditions are satisfied
+/// are displayed as Active, while explicit start records are used only when an
+/// API prerequisite specifically requires an active predecessor.
 /// </summary>
 internal sealed class ActualQuestStatusEvaluator
 {
@@ -32,8 +33,11 @@ internal sealed class ActualQuestStatusEvaluator
         try
         {
             var storedStatus = _progressService.GetStatus(task);
-            if (storedStatus is QuestStatus.Done or QuestStatus.Failed)
+            if (storedStatus is QuestStatus.Done or QuestStatus.Failed ||
+                storedStatus == QuestStatus.Active && _progressService.HasExplicitStart(task))
+            {
                 return Cache(taskKey, storedStatus);
+            }
 
             if (!_progressService.IsEditionRequirementMet(task) ||
                 !_progressService.IsPrestigeLevelRequirementMet(task) ||
@@ -112,39 +116,8 @@ internal sealed class ActualQuestStatusEvaluator
             ? _progressService.GetTask(requirement.TaskNormalizedName)
             : null;
 
-        if (requiredTask == null)
-            return false;
-
-        var actualStatus = Evaluate(requiredTask);
-        var requiredStatuses = requirement.Status;
-        if (requiredStatuses == null || requiredStatuses.Count == 0)
-            return actualStatus == QuestStatus.Done;
-
-        foreach (var requiredStatus in requiredStatuses)
-        {
-            switch (requiredStatus.Trim().ToLowerInvariant())
-            {
-                case "active":
-                case "start":
-                case "accept":
-                    if (actualStatus is QuestStatus.Active or QuestStatus.Done)
-                        return true;
-                    break;
-
-                case "complete":
-                    if (actualStatus == QuestStatus.Done)
-                        return true;
-                    break;
-
-                case "failed":
-                case "fail":
-                    if (actualStatus == QuestStatus.Failed)
-                        return true;
-                    break;
-            }
-        }
-
-        return false;
+        return requiredTask != null &&
+               _progressService.IsTaskRequirementSatisfied(requiredTask, requirement.Status);
     }
 
     private static string GetTaskKey(TarkovTask task)

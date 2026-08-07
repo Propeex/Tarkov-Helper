@@ -282,7 +282,7 @@ namespace TarkovHelper.Services
                 persistedStatus = statusByName;
             }
 
-            if (persistedStatus is QuestStatus.Done or QuestStatus.Failed)
+            if (persistedStatus is QuestStatus.Active or QuestStatus.Done or QuestStatus.Failed)
                 return persistedStatus.Value;
 
             bool isTopLevel = _getStatusVisited == null;
@@ -306,8 +306,8 @@ namespace TarkovHelper.Services
                 if (!IsLevelRequirementMet(task) || !IsScavKarmaRequirementMet(task))
                     return QuestStatus.LevelLocked;
 
-                // Eligible quests are always considered accepted and in progress.
-                // Legacy Available progress rows are intentionally normalized here.
+                // No separate "available to accept" status exists. Once all
+                // conditions are met, the quest is displayed as in progress.
                 return QuestStatus.Active;
             }
             finally
@@ -485,11 +485,9 @@ namespace TarkovHelper.Services
                         : GetTask(req.TaskNormalizedName);
 
                     if (reqTask == null)
-                        continue;
+                        return false;
 
-                    var reqStatus = GetStatus(reqTask);
-                    var satisfied = IsStatusSatisfied(reqStatus, req.Status);
-                    if (!satisfied)
+                    if (!IsTaskRequirementSatisfied(reqTask, req.Status))
                         return false;
                 }
 
@@ -508,9 +506,7 @@ namespace TarkovHelper.Services
                         if (reqTask == null)
                             continue;
 
-                        var reqStatus = GetStatus(reqTask);
-                        var satisfied = IsStatusSatisfied(reqStatus, req.Status);
-                        if (satisfied)
+                        if (IsTaskRequirementSatisfied(reqTask, req.Status))
                         {
                             anyInGroupSatisfied = true;
                             break;
@@ -532,7 +528,8 @@ namespace TarkovHelper.Services
             foreach (var prevName in task.Previous)
             {
                 var prevTask = GetTask(prevName);
-                if (prevTask == null) continue;
+                if (prevTask == null)
+                    return false;
 
                 var prevStatus = GetStatus(prevTask);
                 if (prevStatus != QuestStatus.Done)
@@ -543,42 +540,36 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Check if the current quest status satisfies the required status conditions.
-        /// Handles both tarkov.dev API values ("active", "complete", "failed") and
-        /// DB/Wiki values ("Start", "Accept", "Complete", "Fail").
+        /// Evaluates a prerequisite against real persisted progress. A computed
+        /// Active display state does not prove that the quest was actually started.
         /// </summary>
-        private bool IsStatusSatisfied(QuestStatus currentStatus, List<string>? requiredStatuses)
+        internal bool IsTaskRequirementSatisfied(
+            TarkovTask requiredTask,
+            IReadOnlyCollection<string>? requiredStatuses)
         {
+            var actualStatus = GetStatus(requiredTask);
             if (requiredStatuses == null || requiredStatuses.Count == 0)
-            {
-                // Default: require 'complete'
-                return currentStatus == QuestStatus.Done;
-            }
+                return actualStatus == QuestStatus.Done;
 
-            // Check each required status
             foreach (var required in requiredStatuses)
             {
-                switch (required.ToLowerInvariant())
+                switch (required.Trim().ToLowerInvariant())
                 {
                     case "active":
-                    case "start":    // DB value: RequirementType = "Start"
-                    case "accept":   // DB value: RequirementType = "Accept"
-                        // Quest is active (started but not completed)
-                        if (currentStatus == QuestStatus.Active)
-                            return true;
-                        // Also satisfied if quest is done (was active before completion)
-                        if (currentStatus == QuestStatus.Done)
+                    case "start":
+                    case "accept":
+                        if (actualStatus == QuestStatus.Done || HasExplicitStart(requiredTask))
                             return true;
                         break;
 
                     case "complete":
-                        if (currentStatus == QuestStatus.Done)
+                        if (actualStatus == QuestStatus.Done)
                             return true;
                         break;
 
                     case "failed":
-                    case "fail":     // DB value: RequirementType = "Fail"
-                        if (currentStatus == QuestStatus.Failed)
+                    case "fail":
+                        if (actualStatus == QuestStatus.Failed)
                             return true;
                         break;
                 }
@@ -587,17 +578,68 @@ namespace TarkovHelper.Services
             return false;
         }
 
+        internal bool HasExplicitStart(TarkovTask task)
+        {
+            foreach (var key in EnumerateProgressKeys(task))
+            {
+                if (_questProgress.TryGetValue(key, out var status) &&
+                    status is QuestStatus.Active or QuestStatus.Done)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static IEnumerable<string> EnumerateProgressKeys(TarkovTask task)
+        {
+            if (task.Ids != null)
+            {
+                foreach (var id in task.Ids)
+                {
+                    if (!string.IsNullOrWhiteSpace(id))
+                        yield return id;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.NormalizedName))
+                yield return task.NormalizedName;
+        }
+
         /// <summary>
-        /// Compatibility entry point for imported log events. Eligible quests are
-        /// already Active, so no separate accepted state is persisted.
+        /// Records proof that the quest was actually started. This record is not a
+        /// separate UI state; it only makes active/start prerequisite rules exact.
         /// </summary>
-        public bool StartQuest(TarkovTask task) => GetStatus(task) == QuestStatus.Active;
+        public bool StartQuest(TarkovTask task)
+        {
+            var taskId = task.Ids?.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+            var taskKey = taskId ?? task.NormalizedName;
+            if (string.IsNullOrWhiteSpace(taskKey))
+                return false;
+
+            var currentStatus = GetStatus(task);
+            if (currentStatus is QuestStatus.Done or QuestStatus.Failed)
+                return false;
+            if (HasExplicitStart(task))
+                return true;
+
+            _questProgress[taskKey] = QuestStatus.Active;
+            _ = _persistenceQueue.Enqueue(() =>
+                _userDataDb.SaveQuestProgressAsync(
+                    taskId ?? taskKey,
+                    task.NormalizedName,
+                    QuestStatus.Active,
+                    _loadedProfile));
+            ProgressChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
 
         /// <summary>
         /// Mark quest as completed, optionally completing prerequisites
         /// Also automatically fails alternative quests (mutually exclusive quests)
         /// </summary>
-        public void CompleteQuest(TarkovTask task, bool completePrerequisites = true)
+        public void CompleteQuest(TarkovTask task, bool completePrerequisites = false)
         {
             var taskId = task.Ids?.FirstOrDefault();
             System.Diagnostics.Debug.WriteLine($"[QuestProgressService] CompleteQuest: {taskId} ({task.Name}), prerequisites: {completePrerequisites}");
@@ -870,8 +912,11 @@ namespace TarkovHelper.Services
                 switch (status)
                 {
                     case QuestStatus.Active:
-                        // Eligible quests are already Active. Imported start events
-                        // require no separate persisted acceptance state.
+                        if (!HasExplicitStart(task))
+                        {
+                            _questProgress[taskKey] = QuestStatus.Active;
+                            changedItems.Add((taskId ?? taskKey, task.NormalizedName, QuestStatus.Active));
+                        }
                         break;
 
                     case QuestStatus.Done:

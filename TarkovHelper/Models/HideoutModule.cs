@@ -222,6 +222,15 @@ namespace TarkovHelper.Models
         /// </summary>
         [JsonPropertyName("level")]
         public int Level { get; set; }
+
+        [JsonPropertyName("requirementType")]
+        public string RequirementType { get; set; } = "level";
+
+        [JsonPropertyName("compareMethod")]
+        public string CompareMethod { get; set; } = ">=";
+
+        [JsonPropertyName("requiredValue")]
+        public double RequiredValue { get; set; }
     }
 
     /// <summary>

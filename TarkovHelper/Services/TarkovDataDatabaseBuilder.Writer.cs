@@ -34,13 +34,14 @@ internal sealed partial class TarkovDataDatabaseBuilder
         await ExecuteNonQueryAsync(connection, "PRAGMA foreign_keys=OFF;", cancellationToken);
         await ExecuteNonQueryAsync(connection, "PRAGMA busy_timeout=60000;", cancellationToken);
         await EnsureAmmoTableAsync(connection, cancellationToken);
-        await EnsureQuestRequiredItemColumnsAsync(connection, cancellationToken);
+        await EnsureExtendedSchemaAsync(connection, cancellationToken);
 
         var requiredTables = new[]
         {
             "Items", "Quests", "QuestRequirements", "QuestObjectives", "QuestRequiredItems",
             "HideoutStations", "HideoutLevels", "HideoutItemRequirements",
-            "HideoutStationRequirements", "HideoutTraderRequirements", "HideoutSkillRequirements", "Ammo"
+            "HideoutStationRequirements", "HideoutTraderRequirements", "HideoutSkillRequirements", "Ammo",
+            "QuestTraderRequirements", "AmmoAcquisitionSources", "ContentBuildMetadata"
         };
 
         foreach (var table in requiredTables)
@@ -60,11 +61,6 @@ internal sealed partial class TarkovDataDatabaseBuilder
         var questOldByBsg = IndexRows(snapshots["Quests"].Rows, "BsgId", "Id");
         var stationOldById = IndexRows(snapshots["HideoutStations"].Rows, "Id");
         var objectiveOldById = IndexRows(snapshots["QuestObjectives"].Rows, "Id");
-        var requirementOld = IndexRows(snapshots["QuestRequirements"].Rows, "QuestId", "RequiredQuestId");
-        var requirementsOldByQuest = snapshots["QuestRequirements"].Rows
-            .Where(row => !string.IsNullOrWhiteSpace(ReadString(row, "QuestId")))
-            .GroupBy(row => ReadString(row, "QuestId")!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var itemRows = new List<RowData>(data.Items.Count);
         var itemIdByApiId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -92,11 +88,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
             Set(row, "IconUrl", item.IconLink);
             Set(row, "Category", item.Category?.Name ?? item.Categories.FirstOrDefault()?.Name);
             Set(row, "Categories", JsonSerializer.Serialize(item.Categories.Select(category => category.Name).Where(name => !string.IsNullOrWhiteSpace(name))));
+            Set(row, "SourceJson", item.SourceJson ?? JsonSerializer.Serialize(item));
             Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             itemRows.Add(row);
         }
 
         var ammoRows = new List<RowData>();
+        var ammoSourceRows = new List<RowData>();
         foreach (var localized in data.Items)
         {
             var item = localized.English;
@@ -117,9 +115,36 @@ internal sealed partial class TarkovDataDatabaseBuilder
             Set(row, "LightBleedModifier", ammo.LightBleedModifier ?? 0);
             Set(row, "HeavyBleedModifier", ammo.HeavyBleedModifier ?? 0);
             Set(row, "InitialSpeed", ammo.InitialSpeed ?? 0);
-            Set(row, "AcquisitionSource", ResolveAcquisitionSource(item, ammo));
+            Set(row, "RicochetChance", ammo.RicochetChance ?? 0);
+            Set(row, "PenetrationChance", ammo.PenetrationChance ?? 0);
+            Set(row, "BulletMassGrams", ammo.BulletMassGrams ?? 0);
+            Set(row, "BulletDiameterMillimeters", ammo.BulletDiameterMillimeters ?? 0);
+            Set(row, "BallisticCoefficient", ammo.BallisticCoefficient ?? 0);
+            Set(row, "DurabilityBurnFactor", ammo.DurabilityBurnFactor ?? 0);
+            Set(row, "HeatFactor", ammo.HeatFactor ?? 0);
+            Set(row, "MisfireChance", ammo.MisfireChance ?? 0);
+            Set(row, "FailureToFeedChance", ammo.FailureToFeedChance ?? 0);
+            Set(row, "Tracer", ammo.Tracer == true ? 1 : 0);
+            Set(row, "TracerColor", ammo.TracerColor);
+            Set(row, "AmmoType", ammo.AmmoType);
+            Set(row, "SourceJson", ammo.SourceJson ?? JsonSerializer.Serialize(ammo));
+            var encodedSources = ResolveAcquisitionSource(item, ammo);
+            Set(row, "AcquisitionSource", encodedSources);
             Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             ammoRows.Add(row);
+
+            var sourceIndex = 0;
+            foreach (var source in ParseAcquisitionSourceEntries(encodedSources))
+            {
+                var sourceRow = new RowData();
+                Set(sourceRow, "ItemId", item.Id);
+                Set(sourceRow, "SourceType", source.Type);
+                Set(sourceRow, "SourceName", source.Name);
+                Set(sourceRow, "RequiredLevel", source.Level);
+                Set(sourceRow, "SortOrder", sourceIndex++);
+                Set(sourceRow, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                ammoSourceRows.Add(sourceRow);
+            }
         }
 
         var questRows = new List<RowData>(data.Tasks.Count);
@@ -141,27 +166,30 @@ internal sealed partial class TarkovDataDatabaseBuilder
             Set(row, "Trader", Fallback(task.Trader?.Name, task.Trader?.NormalizedName, "Unknown"));
             Set(row, "Location", task.Map?.NormalizedName ?? "any");
 
-            var minPlayerLevel = task.MinPlayerLevel;
-            if (minPlayerLevel.GetValueOrDefault() <= 0 &&
-                TryGetValue(old, "MinLevel", out var oldMinLevelValue) &&
-                oldMinLevelValue is not null &&
-                oldMinLevelValue is not DBNull &&
-                Convert.ToInt32(oldMinLevelValue, CultureInfo.InvariantCulture) > 0)
-            {
-                minPlayerLevel = Convert.ToInt32(oldMinLevelValue, CultureInfo.InvariantCulture);
-            }
-            Set(row, "MinLevel", minPlayerLevel);
+            Set(row, "MinLevel", task.MinPlayerLevel);
             Set(row, "KappaRequired", task.KappaRequired ? 1 : 0);
             Set(row, "Faction", task.FactionName);
             Set(row, "NormalizedName", Fallback(task.NormalizedName, Normalize(task.Name), task.Id));
             Set(row, "RequiredPrestigeLevel", task.RequiredPrestige?.PrestigeLevel);
+            Set(row, "LightkeeperRequired", task.LightkeeperRequired ? 1 : 0);
+            Set(row, "Restartable", task.Restartable ? 1 : 0);
+            Set(row, "GameModesJson", JsonSerializer.Serialize(task.GameModes));
+            Set(row, "AvailableDelaySecondsMin", task.AvailableDelaySecondsMin);
+            Set(row, "AvailableDelaySecondsMax", task.AvailableDelaySecondsMax);
+            Set(row, "TaskImageLink", task.TaskImageLink);
+            Set(row, "NeededKeysJson", task.NeededKeysJson);
+            Set(row, "OtherRequirementsJson", task.OtherRequirementsJson);
+            Set(row, "StartRewardsJson", task.StartRewardsJson);
+            Set(row, "FinishRewardsJson", task.FinishRewardsJson);
+            Set(row, "FailureOutcomeJson", task.FailureOutcomeJson);
+            Set(row, "SourceJson", task.SourceJson ?? JsonSerializer.Serialize(task));
             Set(row, "WikiPageLink", task.WikiLink);
             Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             questRows.Add(row);
         }
 
-        var validQuestIds = questIdByApiId.Values.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var questRequirementRows = new List<RowData>();
+        var questTraderRequirementRows = new List<RowData>();
         var questObjectiveRows = new List<RowData>();
         var questRequiredItemRows = new List<RowData>();
 
@@ -171,45 +199,77 @@ internal sealed partial class TarkovDataDatabaseBuilder
             if (!questIdByApiId.TryGetValue(task.Id, out var questId))
                 continue;
 
-            if (task.TaskRequirements.Count > 0)
+            for (var index = 0; index < task.TaskRequirements.Count; index++)
             {
-                for (var index = 0; index < task.TaskRequirements.Count; index++)
+                var requirement = task.TaskRequirements[index];
+                if (requirement.Task?.Id is not { Length: > 0 } apiRequiredId)
                 {
-                    var requirement = task.TaskRequirements[index];
-                    if (requirement.Task?.Id is not { Length: > 0 } apiRequiredId ||
-                        !questIdByApiId.TryGetValue(apiRequiredId, out var requiredQuestId))
-                        continue;
-
-                    var oldKey = BuildCompositeKey(questId, requiredQuestId);
-                    var old = requirementOld.GetValueOrDefault(oldKey);
-                    var row = CloneRow(old);
-                    Set(row, "QuestId", questId);
-                    Set(row, "RequiredQuestId", requiredQuestId);
-                    Set(row, "RequirementType", requirement.Status.FirstOrDefault() ?? "complete");
-                    if (!HasValue(row, "GroupId"))
-                        Set(row, "GroupId", 0);
-                    Set(row, "SortOrder", index);
-                    Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-                    questRequirementRows.Add(row);
+                    throw new InvalidDataException(
+                        $"Quest prerequisite is missing an ID: quest={task.Id} ({task.Name}), index={index}.");
                 }
+                if (!questIdByApiId.TryGetValue(apiRequiredId, out var requiredQuestId))
+                {
+                    throw new InvalidDataException(
+                        $"Quest prerequisite points to an unknown quest: quest={task.Id} ({task.Name}), required={apiRequiredId}.");
+                }
+                if (string.Equals(questId, requiredQuestId, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException(
+                        $"Quest prerequisite points to itself: quest={task.Id} ({task.Name}).");
+                }
+
+                var statuses = requirement.Status
+                    .Where(status => !string.IsNullOrWhiteSpace(status))
+                    .Select(status => status.Trim().ToLowerInvariant())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (statuses.Count == 0)
+                    statuses.Add("complete");
+                var row = new RowData();
+                Set(row, "QuestId", questId);
+                Set(row, "RequiredQuestId", requiredQuestId);
+                Set(row, "RequirementType", statuses.FirstOrDefault() ?? "complete");
+                Set(row, "StatusesJson", JsonSerializer.Serialize(statuses));
+                Set(row, "Notes", requirement.Notes);
+                Set(row, "SourceJson", requirement.SourceJson ?? JsonSerializer.Serialize(requirement));
+                Set(row, "GroupId", 0);
+                Set(row, "SortOrder", index);
+                Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                questRequirementRows.Add(row);
             }
-            else if (requirementsOldByQuest.TryGetValue(questId, out var oldRequirements))
-            {
-                foreach (var oldRequirement in oldRequirements)
-                {
-                    var requiredQuestId = ReadString(oldRequirement, "RequiredQuestId");
-                    if (string.IsNullOrWhiteSpace(requiredQuestId) ||
-                        !validQuestIds.Contains(requiredQuestId))
-                        continue;
 
-                    questRequirementRows.Add(CloneRow(oldRequirement));
-                }
+            for (var index = 0; index < task.TraderRequirements.Count; index++)
+            {
+                var requirement = task.TraderRequirements[index];
+                if (requirement.Trader == null)
+                    continue;
+
+                var row = new RowData();
+                Set(row, "QuestId", questId);
+                Set(row, "TraderId", requirement.Trader.Id);
+                Set(row, "TraderName", Fallback(requirement.Trader.Name, requirement.Trader.NormalizedName, requirement.Trader.Id));
+                var localizedRequirement = localized.Korean?.TraderRequirements.FirstOrDefault(value =>
+                    string.Equals(value.Trader?.Id, requirement.Trader.Id, StringComparison.OrdinalIgnoreCase));
+                Set(row, "TraderNameKO", Fallback(localizedRequirement?.Trader?.Name, requirement.Trader.Name, requirement.Trader.Id));
+                Set(row, "RequirementType", requirement.RequirementType);
+                Set(row, "CompareMethod", requirement.CompareMethod);
+                Set(row, "RequiredValue", requirement.Value ?? requirement.Level);
+                Set(row, "SortOrder", index);
+                Set(row, "SourceJson", requirement.SourceJson ?? JsonSerializer.Serialize(requirement));
+                Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                questTraderRequirementRows.Add(row);
             }
 
             var koreanObjectives = localized.Korean?.Objectives
                 .Where(objective => !string.IsNullOrWhiteSpace(objective.Id))
                 .ToDictionary(objective => objective.Id!, StringComparer.OrdinalIgnoreCase)
                 ?? new Dictionary<string, ApiTaskObjective>(StringComparer.OrdinalIgnoreCase);
+
+            var consumableSignatures = task.Objectives
+                .Where(value => QuestRequiredItemObjectivePolicy.IsConsumable(value.Type))
+                .Select(BuildQuestItemObjectiveSignature)
+                .Where(value => value != null)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             for (var index = 0; index < task.Objectives.Count; index++)
             {
@@ -231,6 +291,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 Set(row, "TargetCount", objective.Count);
                 Set(row, "RequiresFIR", objective.FoundInRaid == true ? 1 : 0);
                 Set(row, "DogtagMinLevel", objective.DogTagLevel);
+                Set(row, "MinDurability", objective.MinDurability);
+                Set(row, "MaxDurability", objective.MaxDurability);
+                Set(row, "SourceJson", objective.SourceJson ?? JsonSerializer.Serialize(objective));
                 Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
 
                 var primaryObjectiveItem = objective.Items.FirstOrDefault();
@@ -242,9 +305,16 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
                 questObjectiveRows.Add(row);
 
-                if (!string.Equals(objective.Type, "item", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(objective.TypeName, "TaskObjectiveItem", StringComparison.OrdinalIgnoreCase))
+                var trackingKind = QuestRequiredItemObjectivePolicy.Classify(objective.Type);
+                if (trackingKind == QuestItemTrackingKind.None || objective.Items.Count == 0)
                     continue;
+
+                var signature = BuildQuestItemObjectiveSignature(objective);
+                if (trackingKind == QuestItemTrackingKind.TrackOnly &&
+                    signature != null && consumableSignatures.Contains(signature))
+                {
+                    continue;
+                }
 
                 var koItems = objectiveKo?.Items
                     .Where(item => !string.IsNullOrWhiteSpace(item.Id))
@@ -274,7 +344,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(itemRow, "Count", Math.Max(1, objective.Count ?? 1));
                     Set(itemRow, "RequiresFIR", objective.FoundInRaid == true ? 1 : 0);
                     Set(itemRow, "RequirementType", objective.Type);
+                    Set(itemRow, "ObjectiveType", objective.Type);
+                    Set(itemRow, "ConsumesItem", trackingKind == QuestItemTrackingKind.Consumable ? 1 : 0);
+                    Set(itemRow, "TrackingKind", trackingKind == QuestItemTrackingKind.Consumable ? "consumable" : "track-only");
                     Set(itemRow, "DogtagMinLevel", objective.DogTagLevel);
+                    Set(itemRow, "MinDurability", objective.MinDurability);
+                    Set(itemRow, "MaxDurability", objective.MaxDurability);
+                    Set(itemRow, "SourceJson", objective.SourceJson ?? JsonSerializer.Serialize(objective));
                     Set(itemRow, "RequirementGroupId", objectiveId);
                     Set(itemRow, "IsAlternativeGroup", 1);
                     Set(itemRow, "AlternativeItemIds", JsonSerializer.Serialize(alternativeIds));
@@ -297,7 +373,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(itemRow, "Count", Math.Max(1, objective.Count ?? 1));
                     Set(itemRow, "RequiresFIR", objective.FoundInRaid == true ? 1 : 0);
                     Set(itemRow, "RequirementType", objective.Type);
+                    Set(itemRow, "ObjectiveType", objective.Type);
+                    Set(itemRow, "ConsumesItem", trackingKind == QuestItemTrackingKind.Consumable ? 1 : 0);
+                    Set(itemRow, "TrackingKind", trackingKind == QuestItemTrackingKind.Consumable ? "consumable" : "track-only");
                     Set(itemRow, "DogtagMinLevel", objective.DogTagLevel);
+                    Set(itemRow, "MinDurability", objective.MinDurability);
+                    Set(itemRow, "MaxDurability", objective.MaxDurability);
+                    Set(itemRow, "SourceJson", objective.SourceJson ?? JsonSerializer.Serialize(objective));
                     Set(itemRow, "RequirementGroupId", null);
                     Set(itemRow, "IsAlternativeGroup", 0);
                     Set(itemRow, "AlternativeItemIds", null);
@@ -350,6 +432,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 Set(levelRow, "StationId", station.Id);
                 Set(levelRow, "Level", level.Level);
                 Set(levelRow, "ConstructionTime", level.ConstructionTime);
+                Set(levelRow, "SourceJson", level.SourceJson ?? JsonSerializer.Serialize(level));
                 Set(levelRow, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                 hideoutLevelRows.Add(levelRow);
 
@@ -376,6 +459,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(row, "IconLink", requirement.Item.IconLink);
                     Set(row, "Count", Math.Max(1, requirement.Count ?? requirement.Quantity ?? 1));
                     Set(row, "FoundInRaid", 0);
+                    Set(row, "AttributesJson", requirement.AttributesJson);
+                    Set(row, "SourceJson", requirement.SourceJson ?? JsonSerializer.Serialize(requirement));
                     Set(row, "SortOrder", itemIndex);
                     Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     hideoutItemRows.Add(row);
@@ -419,7 +504,12 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     Set(row, "TraderName", Fallback(requirement.Trader.Name, requirement.Trader.NormalizedName, traderId));
                     Set(row, "TraderNameKO", Fallback(requirementKo?.Trader?.Name, requirement.Trader.Name, traderId));
                     Set(row, "TraderNameJA", null);
-                    Set(row, "RequiredLevel", requirement.Value ?? requirement.Level ?? 0);
+                    var requiredValue = requirement.Value ?? requirement.Level ?? 0;
+                    Set(row, "RequiredLevel", Convert.ToInt32(Math.Round(requiredValue, MidpointRounding.AwayFromZero)));
+                    Set(row, "RequirementType", requirement.RequirementType);
+                    Set(row, "CompareMethod", requirement.CompareMethod);
+                    Set(row, "RequiredValue", requiredValue);
+                    Set(row, "SourceJson", requirement.SourceJson ?? JsonSerializer.Serialize(requirement));
                     Set(row, "SortOrder", traderIndex);
                     Set(row, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     hideoutTraderRequirementRows.Add(row);
@@ -453,12 +543,35 @@ internal sealed partial class TarkovDataDatabaseBuilder
             }
         }
 
+        var metadataRows = new List<RowData>();
+        var metadataRow = new RowData();
+        Set(metadataRow, "Id", "current");
+        Set(metadataRow, "Source", data.Source);
+        Set(metadataRow, "Transport", data.Transport);
+        Set(metadataRow, "BuiltAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        Set(metadataRow, "ItemCount", itemRows.Count);
+        Set(metadataRow, "AmmoCount", ammoRows.Count);
+        Set(metadataRow, "QuestCount", questRows.Count);
+        Set(metadataRow, "QuestObjectiveCount", questObjectiveRows.Count);
+        Set(metadataRow, "QuestRequiredItemCount", questRequiredItemRows.Count);
+        Set(metadataRow, "HideoutStationCount", hideoutStationRows.Count);
+        Set(metadataRow, "ObjectiveTypeHistogramJson", JsonSerializer.Serialize(
+            data.Tasks.SelectMany(value => value.English.Objectives)
+                .GroupBy(value => value.Type ?? "unknown", StringComparer.OrdinalIgnoreCase)
+                .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase)));
+        Set(metadataRow, "SchemaVersion", 2);
+        Set(metadataRow, "UpdatedAt", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        metadataRows.Add(metadataRow);
+
         var writePlan = new[]
         {
             new TableWrite("Items", itemRows),
             new TableWrite("Ammo", ammoRows),
+            new TableWrite("AmmoAcquisitionSources", ammoSourceRows),
             new TableWrite("Quests", questRows),
             new TableWrite("QuestRequirements", questRequirementRows),
+            new TableWrite("QuestTraderRequirements", questTraderRequirementRows),
             new TableWrite("QuestObjectives", questObjectiveRows),
             new TableWrite("QuestRequiredItems", questRequiredItemRows),
             new TableWrite("HideoutStations", hideoutStationRows),
@@ -466,7 +579,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
             new TableWrite("HideoutItemRequirements", hideoutItemRows),
             new TableWrite("HideoutStationRequirements", hideoutStationRequirementRows),
             new TableWrite("HideoutTraderRequirements", hideoutTraderRequirementRows),
-            new TableWrite("HideoutSkillRequirements", hideoutSkillRequirementRows)
+            new TableWrite("HideoutSkillRequirements", hideoutSkillRequirementRows),
+            new TableWrite("ContentBuildMetadata", metadataRows)
         };
 
         var totalRows = writePlan.Sum(plan => plan.Rows.Count);
@@ -477,10 +591,10 @@ internal sealed partial class TarkovDataDatabaseBuilder
         {
             var deleteOrder = new[]
             {
-                "QuestRequiredItems", "QuestObjectives", "QuestRequirements",
+                "QuestRequiredItems", "QuestObjectives", "QuestTraderRequirements", "QuestRequirements",
                 "HideoutItemRequirements", "HideoutStationRequirements",
                 "HideoutTraderRequirements", "HideoutSkillRequirements", "HideoutLevels",
-                "Ammo", "Quests", "HideoutStations", "Items"
+                "AmmoAcquisitionSources", "Ammo", "ContentBuildMetadata", "Quests", "HideoutStations", "Items"
             };
 
             foreach (var table in deleteOrder)
@@ -529,36 +643,11 @@ internal sealed partial class TarkovDataDatabaseBuilder
             hideoutItemRows.Count,
             hideoutStationRequirementRows.Count,
             hideoutTraderRequirementRows.Count,
-            hideoutSkillRequirementRows.Count);
+            hideoutSkillRequirementRows.Count,
+            questTraderRequirementRows.Count,
+            ammoSourceRows.Count,
+            metadataRows.Count);
     }
-    private static async Task EnsureQuestRequiredItemColumnsAsync(
-        SqliteConnection connection,
-        CancellationToken cancellationToken)
-    {
-        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        await using (var command = connection.CreateCommand())
-        {
-            command.CommandText = "PRAGMA table_info(QuestRequiredItems);";
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-                columns.Add(reader.GetString(1));
-        }
-
-        var additions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["ObjectiveId"] = "TEXT",
-            ["RequirementGroupId"] = "TEXT",
-            ["IsAlternativeGroup"] = "INTEGER NOT NULL DEFAULT 0",
-            ["AlternativeItemIds"] = "TEXT",
-            ["AlternativeItemNames"] = "TEXT"
-        };
-        foreach (var (name, definition) in additions)
-        {
-            if (!columns.Contains(name))
-                await ExecuteNonQueryAsync(connection, $"ALTER TABLE QuestRequiredItems ADD COLUMN [{name}] {definition};", cancellationToken);
-        }
-    }
-
     private static async Task EnsureAmmoTableAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
         await ExecuteNonQueryAsync(connection, """
@@ -575,11 +664,77 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 LightBleedModifier REAL NOT NULL DEFAULT 0,
                 HeavyBleedModifier REAL NOT NULL DEFAULT 0,
                 InitialSpeed REAL NOT NULL DEFAULT 0,
+                RicochetChance REAL NOT NULL DEFAULT 0,
+                PenetrationChance REAL NOT NULL DEFAULT 0,
+                BulletMassGrams REAL NOT NULL DEFAULT 0,
+                BulletDiameterMillimeters REAL NOT NULL DEFAULT 0,
+                BallisticCoefficient REAL NOT NULL DEFAULT 0,
+                DurabilityBurnFactor REAL NOT NULL DEFAULT 0,
+                HeatFactor REAL NOT NULL DEFAULT 0,
+                MisfireChance REAL NOT NULL DEFAULT 0,
+                FailureToFeedChance REAL NOT NULL DEFAULT 0,
+                Tracer INTEGER NOT NULL DEFAULT 0,
+                TracerColor TEXT,
+                AmmoType TEXT,
                 AcquisitionSource TEXT,
+                SourceJson TEXT,
                 UpdatedAt TEXT
             );
             CREATE INDEX IF NOT EXISTS IX_Ammo_Caliber ON Ammo(Caliber);
             """, cancellationToken);
+
+        await EnsureColumnsAsync(connection, "Ammo", new Dictionary<string, string>
+        {
+            ["RicochetChance"] = "REAL NOT NULL DEFAULT 0",
+            ["PenetrationChance"] = "REAL NOT NULL DEFAULT 0",
+            ["BulletMassGrams"] = "REAL NOT NULL DEFAULT 0",
+            ["BulletDiameterMillimeters"] = "REAL NOT NULL DEFAULT 0",
+            ["BallisticCoefficient"] = "REAL NOT NULL DEFAULT 0",
+            ["DurabilityBurnFactor"] = "REAL NOT NULL DEFAULT 0",
+            ["HeatFactor"] = "REAL NOT NULL DEFAULT 0",
+            ["MisfireChance"] = "REAL NOT NULL DEFAULT 0",
+            ["FailureToFeedChance"] = "REAL NOT NULL DEFAULT 0",
+            ["Tracer"] = "INTEGER NOT NULL DEFAULT 0",
+            ["TracerColor"] = "TEXT",
+            ["AmmoType"] = "TEXT",
+            ["SourceJson"] = "TEXT"
+        }, cancellationToken);
+    }
+
+    private static string? BuildQuestItemObjectiveSignature(ApiTaskObjective objective)
+    {
+        var ids = objective.Items
+            .Select(item => item.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (ids.Count == 0)
+            return null;
+
+        return $"{string.Join("|", ids)}:{Math.Max(1, objective.Count ?? 1)}:{objective.FoundInRaid == true}";
+    }
+
+    private static IEnumerable<(string Type, string Name, int Level)> ParseAcquisitionSourceEntries(string encoded)
+    {
+        if (string.IsNullOrWhiteSpace(encoded) ||
+            string.Equals(encoded, "raid-found", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return ("raid", "Found in raid", 1);
+            yield break;
+        }
+
+        foreach (var raw in encoded.Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = raw.Split(':', StringSplitOptions.TrimEntries);
+            if (parts.Length < 2)
+                continue;
+
+            var level = 1;
+            if (parts.Length >= 4 && int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                level = Math.Max(1, parsed);
+            yield return (parts[0].ToLowerInvariant(), parts[1], level);
+        }
     }
 
     private static string ResolveAcquisitionSource(ApiItem item, ApiAmmoProperties ammo)

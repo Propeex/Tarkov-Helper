@@ -726,9 +726,37 @@ static void RunApplicationBehaviorSmoke()
         Name = "Actual Status Smoke"
     };
     var progressService = QuestProgressService.Instance;
+    if (Enum.GetNames<QuestStatus>().Any(name =>
+            string.Equals(name, "Available", StringComparison.OrdinalIgnoreCase)))
+    {
+        throw new InvalidDataException("QuestStatus must not expose a separate Available/acceptance state.");
+    }
+
     var eligibleStatus = new ActualQuestStatusEvaluator(progressService).Evaluate(statusTask);
     if (eligibleStatus != QuestStatus.Active)
         throw new InvalidDataException($"Eligible quest must be Active without a separate accept state: actual={eligibleStatus}.");
+
+    if (progressService.IsTaskRequirementSatisfied(statusTask, ["active"]))
+    {
+        throw new InvalidDataException(
+            "A computed Active display state falsely satisfied an explicit active prerequisite.");
+    }
+    if (!progressService.StartQuest(statusTask) ||
+        !progressService.IsTaskRequirementSatisfied(statusTask, ["active"]))
+    {
+        throw new InvalidDataException(
+            "An explicit quest start did not satisfy an active prerequisite.");
+    }
+    if (progressService.IsTaskRequirementSatisfied(statusTask, ["complete"]))
+        throw new InvalidDataException("An explicitly started quest falsely satisfied a complete prerequisite.");
+    progressService.CompleteQuest(statusTask);
+    if (!progressService.IsTaskRequirementSatisfied(statusTask, ["active"]) ||
+        !progressService.IsTaskRequirementSatisfied(statusTask, ["complete"]))
+    {
+        throw new InvalidDataException("A completed quest did not satisfy active and complete prerequisite semantics.");
+    }
+    progressService.ResetQuest(statusTask);
+    progressService.FlushPersistenceAsync().GetAwaiter().GetResult();
 
     var levelLockedTask = new TarkovTask
     {
@@ -963,6 +991,42 @@ static async Task<int> RunExternalApiSmokeAsync()
             LEFT JOIN Quests q ON q.Id = r.RequiredQuestId
             WHERE q.Id IS NULL;
             """);
+        var invalidPrerequisiteStatuses = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequirements r
+            WHERE r.QuestId = r.RequiredQuestId
+               OR json_valid(COALESCE(r.StatusesJson, '')) != 1
+               OR json_array_length(r.StatusesJson) < 1
+               OR EXISTS (
+                    SELECT 1 FROM json_each(r.StatusesJson) status
+                    WHERE LOWER(TRIM(CAST(status.value AS TEXT)))
+                          NOT IN ('active', 'start', 'accept', 'complete', 'failed', 'fail')
+               );
+            """);
+        var questTraderRequirementRows = await ScalarAsync(connection,
+            "SELECT COUNT(*) FROM QuestTraderRequirements;");
+        var contentMetadataRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM ContentBuildMetadata
+            WHERE Id = 'current' AND SchemaVersion >= 2
+              AND ItemCount > 0 AND QuestCount > 0 AND HideoutStationCount > 0;
+            """);
+        var invalidSourceJsonRows = await ScalarAsync(connection, """
+            SELECT
+              (SELECT COUNT(*) FROM Items WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
+              (SELECT COUNT(*) FROM Quests WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
+              (SELECT COUNT(*) FROM QuestObjectives WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1);
+            """);
+        var trackedQuestItemRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM QuestRequiredItems
+            WHERE TrackingKind IN ('consumable', 'track-only')
+              AND ConsumesItem IN (0, 1);
+            """);
+        var expandedAmmoRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM Ammo
+            WHERE InitialSpeed > 0
+              AND BulletMassGrams > 0
+              AND BallisticCoefficient >= 0;
+            """);
         var helpingHandLevel = await ScalarAsync(connection, "SELECT COALESCE(MAX(MinLevel), -1) FROM Quests WHERE Name = 'A Helping Hand';");
         var helpingHandPrerequisites = await ScalarAsync(connection, """
             SELECT COUNT(*)
@@ -979,12 +1043,21 @@ static async Task<int> RunExternalApiSmokeAsync()
                 $"calibers={caliberRows}, permanentSources={specificSourceRows}, raidOnly={sourceSummary.RaidOnlyRows}.");
         }
         if (invalidConcreteRequirements != 0 || invalidAlternativeRequirements != 0 ||
-            unresolvedAlternativeRequirements != 0 || missingPrerequisiteLinks != 0)
+            unresolvedAlternativeRequirements != 0 || missingPrerequisiteLinks != 0 ||
+            invalidPrerequisiteStatuses != 0)
         {
             throw new InvalidDataException(
                 $"Live quest item/prerequisite integrity failed: concrete={invalidConcreteRequirements}, " +
                 $"groups={invalidAlternativeRequirements}, unresolved={unresolvedAlternativeRequirements}, " +
-                $"prerequisites={missingPrerequisiteLinks}.");
+                $"prerequisites={missingPrerequisiteLinks}, statuses={invalidPrerequisiteStatuses}.");
+        }
+        if (questTraderRequirementRows == 0 || contentMetadataRows != 1 ||
+            invalidSourceJsonRows != 0 || trackedQuestItemRows == 0 || expandedAmmoRows < 100)
+        {
+            throw new InvalidDataException(
+                $"Live extended content validation failed: questTraderRequirements={questTraderRequirementRows}, " +
+                $"metadata={contentMetadataRows}, invalidSourceJson={invalidSourceJsonRows}, " +
+                $"trackedQuestItems={trackedQuestItemRows}, expandedAmmo={expandedAmmoRows}.");
         }
         if (helpingHandLevel != 20 || helpingHandPrerequisites != 1)
         {
@@ -996,7 +1069,9 @@ static async Task<int> RunExternalApiSmokeAsync()
         Console.WriteLine(
             $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, permanentSources={specificSourceRows}, " +
             $"traderRows={sourceSummary.TraderRows}, craftRows={sourceSummary.CraftRows}, raidOnly={sourceSummary.RaidOnlyRows}, " +
-            $"A Helping Hand level={helpingHandLevel}, prerequisiteLinks={helpingHandPrerequisites}.");
+            $"questTraderRequirements={questTraderRequirementRows}, trackedQuestItems={trackedQuestItemRows}, " +
+            $"expandedAmmo={expandedAmmoRows}, A Helping Hand level={helpingHandLevel}, " +
+            $"prerequisiteLinks={helpingHandPrerequisites}.");
 
         // The application updater writes to its isolated mutable-content path.
         // Existing release workflows intentionally publish the verified database

@@ -134,6 +134,67 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 string.Join("; ", invalidAmmoSources.Take(12)));
         }
 
+        var invalidQuestItemSemantics = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequiredItems
+            WHERE COALESCE(TrackingKind, '') NOT IN ('consumable', 'track-only')
+               OR COALESCE(ConsumesItem, -1) NOT IN (0, 1)
+               OR (ConsumesItem = 1 AND TrackingKind != 'consumable')
+               OR (ConsumesItem = 0 AND TrackingKind != 'track-only');
+            """, cancellationToken);
+        if (invalidQuestItemSemantics != 0)
+            throw new InvalidDataException($"퀘스트 아이템 추적 의미 오류: {invalidQuestItemSemantics}개");
+
+        var invalidSourceJson = await ExecuteScalarLongAsync(connection, """
+            SELECT
+                (SELECT COUNT(*) FROM Items WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
+                (SELECT COUNT(*) FROM Quests WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
+                (SELECT COUNT(*) FROM QuestObjectives WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1);
+            """, cancellationToken);
+        if (invalidSourceJson != 0)
+            throw new InvalidDataException($"API 원본 JSON 보존 오류: {invalidSourceJson}개");
+
+        var invalidAmmoValues = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*) FROM Ammo
+            WHERE ProjectileCount < 1 OR Damage < 0 OR PenetrationPower < 0 OR ArmorDamage < 0
+               OR FragmentationChance < 0 OR RicochetChance < 0 OR PenetrationChance < 0
+               OR MisfireChance < 0 OR FailureToFeedChance < 0 OR InitialSpeed < 0;
+            """, cancellationToken);
+        if (invalidAmmoValues != 0)
+            throw new InvalidDataException($"탄약 수치 범위 오류: {invalidAmmoValues}개");
+
+        var missingAmmoSourceRows = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*) FROM Ammo a
+            WHERE NOT EXISTS (SELECT 1 FROM AmmoAcquisitionSources s WHERE s.ItemId = a.ItemId);
+            """, cancellationToken);
+        if (missingAmmoSourceRows != 0)
+            throw new InvalidDataException($"탄약 입수 경로 정규화 누락: {missingAmmoSourceRows}개");
+
+        var invalidHideoutTraderRequirements = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*) FROM HideoutTraderRequirements
+            WHERE COALESCE(RequirementType, '') = ''
+               OR COALESCE(CompareMethod, '') = ''
+               OR RequiredValue IS NULL;
+            """, cancellationToken);
+        if (invalidHideoutTraderRequirements != 0)
+            throw new InvalidDataException($"은신처 상인 조건 형식 오류: {invalidHideoutTraderRequirements}개");
+
+        var invalidQuestTraderRequirements = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*) FROM QuestTraderRequirements r
+            LEFT JOIN Quests q ON q.Id = r.QuestId
+            WHERE q.Id IS NULL OR COALESCE(r.RequirementType, '') = ''
+               OR COALESCE(r.CompareMethod, '') = '' OR r.RequiredValue IS NULL;
+            """, cancellationToken);
+        if (invalidQuestTraderRequirements != 0)
+            throw new InvalidDataException($"퀘스트 상인 조건 형식 오류: {invalidQuestTraderRequirements}개");
+
+        var metadataRows = await ExecuteScalarLongAsync(
+            connection,
+            "SELECT COUNT(*) FROM ContentBuildMetadata WHERE Id = 'current' AND SchemaVersion >= 2;",
+            cancellationToken);
+        if (metadataRows != 1)
+            throw new InvalidDataException("콘텐츠 빌드 메타데이터가 생성되지 않았습니다.");
+
         var missingQuestReferences = await ExecuteScalarLongAsync(connection, """
             SELECT COUNT(*)
             FROM QuestRequirements r
@@ -143,6 +204,33 @@ internal sealed partial class TarkovDataDatabaseBuilder
             """, cancellationToken);
         if (missingQuestReferences != 0)
             throw new InvalidDataException($"선행 퀘스트 연결 실패: {missingQuestReferences}개");
+
+        var invalidQuestRequirements = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequirements r
+            WHERE r.QuestId = r.RequiredQuestId
+               OR json_valid(COALESCE(r.StatusesJson, '')) != 1
+               OR json_array_length(r.StatusesJson) < 1
+               OR EXISTS (
+                    SELECT 1
+                    FROM json_each(r.StatusesJson) status
+                    WHERE LOWER(TRIM(CAST(status.value AS TEXT)))
+                          NOT IN ('active', 'start', 'accept', 'complete', 'failed', 'fail')
+               );
+            """, cancellationToken);
+        if (invalidQuestRequirements != 0)
+            throw new InvalidDataException($"선행 퀘스트 상태 조건 형식 오류: {invalidQuestRequirements}개");
+
+        var duplicateQuestRequirements = await ExecuteScalarLongAsync(connection, """
+            SELECT COUNT(*) FROM (
+                SELECT QuestId, RequiredQuestId, COALESCE(GroupId, 0), COALESCE(StatusesJson, '')
+                FROM QuestRequirements
+                GROUP BY QuestId, RequiredQuestId, COALESCE(GroupId, 0), COALESCE(StatusesJson, '')
+                HAVING COUNT(*) > 1
+            );
+            """, cancellationToken);
+        if (duplicateQuestRequirements != 0)
+            throw new InvalidDataException($"중복 선행 퀘스트 조건이 생성되었습니다: {duplicateQuestRequirements}개");
 
         var foreignKeyIssues = await ReadForeignKeyIssuesAsync(connection, cancellationToken);
         if (foreignKeyIssues.Count != 0)
