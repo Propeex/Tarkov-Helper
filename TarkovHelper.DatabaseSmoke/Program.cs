@@ -519,15 +519,14 @@ static async Task SeedPrerequisiteGroupFixtureAsync(string databasePath)
         questCommand.Transaction = (SqliteTransaction)transaction;
         questCommand.CommandText = """
             INSERT OR REPLACE INTO Quests
-                (Id, BsgId, Name, NameEN, NormalizedName, Trader, Location,
+                (Id, BsgId, Name, NameEN, Trader, Location,
                  MinLevel, MinLevelApproved, KappaRequired, IsApproved)
             VALUES
-                ($id, $id, $name, $name, $normalized, 'Trader', 'any',
+                ($id, $id, $name, $name, 'Trader', 'any',
                  1, 1, 0, 1);
             """;
         questCommand.Parameters.AddWithValue("$id", questId);
         questCommand.Parameters.AddWithValue("$name", questId);
-        questCommand.Parameters.AddWithValue("$normalized", questId);
         await questCommand.ExecuteNonQueryAsync();
     }
 

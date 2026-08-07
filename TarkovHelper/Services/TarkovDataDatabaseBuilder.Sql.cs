@@ -145,14 +145,26 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (invalidQuestItemSemantics != 0)
             throw new InvalidDataException($"퀘스트 아이템 추적 의미 오류: {invalidQuestItemSemantics}개");
 
-        var invalidSourceJson = await ExecuteScalarLongAsync(connection, """
-            SELECT
-                (SELECT COUNT(*) FROM Items WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
-                (SELECT COUNT(*) FROM Quests WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
-                (SELECT COUNT(*) FROM QuestObjectives WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1);
-            """, cancellationToken);
+        var invalidItemSourceJson = await ExecuteScalarLongAsync(
+            connection,
+            "SELECT COUNT(*) FROM Items WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;",
+            cancellationToken);
+        var invalidQuestSourceJson = await ExecuteScalarLongAsync(
+            connection,
+            "SELECT COUNT(*) FROM Quests WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;",
+            cancellationToken);
+        var invalidObjectiveSourceJson = await ExecuteScalarLongAsync(
+            connection,
+            "SELECT COUNT(*) FROM QuestObjectives WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;",
+            cancellationToken);
+        var invalidSourceJson = invalidItemSourceJson + invalidQuestSourceJson + invalidObjectiveSourceJson;
         if (invalidSourceJson != 0)
-            throw new InvalidDataException($"API 원본 JSON 보존 오류: {invalidSourceJson}개");
+        {
+            throw new InvalidDataException(
+                $"API 원본 JSON 보존 오류: total={invalidSourceJson}, " +
+                $"items={invalidItemSourceJson}, quests={invalidQuestSourceJson}, " +
+                $"objectives={invalidObjectiveSourceJson}");
+        }
 
         var invalidAmmoValues = await ExecuteScalarLongAsync(connection, """
             SELECT COUNT(*) FROM Ammo
