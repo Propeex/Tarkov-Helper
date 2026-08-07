@@ -411,12 +411,13 @@ public sealed class QuestDbService
 
         var hasStatusesJson = await ColumnExistsAsync(connection, "QuestRequirements", "StatusesJson");
         var hasNotes = await ColumnExistsAsync(connection, "QuestRequirements", "Notes");
+        var hasSortOrder = await ColumnExistsAsync(connection, "QuestRequirements", "SortOrder");
         var sql = $@"
             SELECT QuestId, RequiredQuestId, RequirementType, GroupId,
                    {(hasStatusesJson ? "StatusesJson" : "NULL")},
                    {(hasNotes ? "Notes" : "NULL")}
             FROM QuestRequirements
-            ORDER BY QuestId, GroupId, SortOrder";
+            ORDER BY QuestId, GroupId, {(hasSortOrder ? "SortOrder" : "RequiredQuestId")}";
 
         await using var cmd = new SqliteCommand(sql, connection);
         await using var reader = await cmd.ExecuteReaderAsync();

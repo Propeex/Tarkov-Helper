@@ -33,7 +33,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
         {
             ["StatusesJson"] = "TEXT",
             ["Notes"] = "TEXT",
-            ["SourceJson"] = "TEXT"
+            ["SourceJson"] = "TEXT",
+            ["SortOrder"] = "INTEGER NOT NULL DEFAULT 0"
         }, cancellationToken);
 
         await EnsureColumnsAsync(connection, "QuestObjectives", new Dictionary<string, string>

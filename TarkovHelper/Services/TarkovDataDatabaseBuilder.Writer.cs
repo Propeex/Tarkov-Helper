@@ -422,6 +422,37 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (preservedQuestLocations > 0)
             Log.Info($"기존 퀘스트 지도 좌표 {preservedQuestLocations:N0}개를 보존했습니다.");
 
+        // Legacy coordinate preservation may replace a freshly-built objective
+        // row with the old row. Restore the current API payload afterwards so
+        // hand-maintained coordinates survive without losing source fidelity.
+        var objectiveSourceById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var localized in data.Tasks)
+        {
+            var sourceTask = localized.English;
+            for (var objectiveIndex = 0; objectiveIndex < sourceTask.Objectives.Count; objectiveIndex++)
+            {
+                var sourceObjective = sourceTask.Objectives[objectiveIndex];
+                var sourceObjectiveId = Fallback(
+                    sourceObjective.Id,
+                    $"{sourceTask.Id}:objective:{objectiveIndex}");
+                if (!string.IsNullOrWhiteSpace(sourceObjectiveId))
+                {
+                    objectiveSourceById[sourceObjectiveId!] =
+                        sourceObjective.SourceJson ?? JsonSerializer.Serialize(sourceObjective);
+                }
+            }
+        }
+
+        foreach (var objectiveRow in questObjectiveRows)
+        {
+            var objectiveId = ReadString(objectiveRow, "Id");
+            if (!string.IsNullOrWhiteSpace(objectiveId) &&
+                objectiveSourceById.TryGetValue(objectiveId, out var sourceJson))
+            {
+                Set(objectiveRow, "SourceJson", sourceJson);
+            }
+        }
+
         var hideoutStationRows = new List<RowData>(data.HideoutStations.Count);
         var hideoutLevelRows = new List<RowData>();
         var hideoutItemRows = new List<RowData>();
