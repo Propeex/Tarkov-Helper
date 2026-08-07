@@ -48,6 +48,8 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         await cleanupCommand.ExecuteNonQueryAsync();
     }
 
+    await SeedPrerequisiteGroupFixtureAsync(databasePath);
+
     var fixtureHandler = new FixtureTarkovApiHandler();
     using var httpClient = new HttpClient(
         new TarkovJsonObjectiveIdProtectionHandler(
@@ -115,9 +117,22 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
             $"unique={uniqueQuestKeys}, disambiguated={disambiguatedQuestKeys}.");
     }
     if (QuestDbService.Instance.GetQuestById("fixture-quest-first") == null ||
-        QuestDbService.Instance.GetQuestById("fixture-quest-second") == null)
+        QuestDbService.Instance.GetQuestById("fixture-quest-second") == null ||
+        QuestDbService.Instance.GetQuestById("fixture-quest-third") == null)
     {
-        throw new InvalidDataException("Quest ID lookup lost one of the duplicate-name quests.");
+        throw new InvalidDataException("Quest ID lookup lost one of the fixture quests.");
+    }
+
+    var groupedFixtureQuest = QuestDbService.Instance.GetQuestById("fixture-quest-second");
+    var groupedFixtureRequirements = groupedFixtureQuest?.TaskRequirements?
+        .Where(requirement => requirement.GroupId == 77)
+        .Select(requirement => requirement.TaskId)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    if (groupedFixtureRequirements is not { Count: 2 } ||
+        !groupedFixtureRequirements.Contains("fixture-quest-first") ||
+        !groupedFixtureRequirements.Contains("fixture-quest-third"))
+    {
+        throw new InvalidDataException("Verified prerequisite OR group was not preserved by QuestDbService.");
     }
 
     var connectionString = new SqliteConnectionStringBuilder
@@ -211,6 +226,15 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
               OR json_array_length(AlternativeItemNames) != json_array_length(AlternativeItemIds)
           );
         """);
+    var preservedPrerequisiteGroupRows = await ScalarAsync(connection, """
+        SELECT COUNT(*)
+        FROM QuestRequirements r
+        JOIN Quests q ON q.Id = r.QuestId
+        JOIN Quests required ON required.Id = r.RequiredQuestId
+        WHERE q.BsgId = 'fixture-quest-second'
+          AND required.BsgId IN ('fixture-quest-first', 'fixture-quest-third')
+          AND r.GroupId = 77;
+        """);
     var duplicateDisplayNames = await ScalarAsync(connection, """
         SELECT COUNT(*)
         FROM (
@@ -281,7 +305,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         WHERE r.IsAlternativeGroup = 0 AND (r.ItemId IS NULL OR i.Id IS NULL);
         """);
 
-    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 2 || result.HideoutStationCount != 1)
+    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 3 || result.HideoutStationCount != 1)
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
     if (koreanItems < 4 || koreanQuests < 2)
         throw new InvalidDataException("Korean localized names were not written correctly.");
@@ -303,6 +327,11 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         throw new InvalidDataException($"Neutral quests still contain a faction restriction: {restrictedNeutralQuests}.");
     if (sellItemRequirements != 0)
         throw new InvalidDataException($"Sell catalogues leaked into quest item requirements: {sellItemRequirements}.");
+    if (preservedPrerequisiteGroupRows != 2)
+    {
+        throw new InvalidDataException(
+            $"Verified prerequisite OR group was not preserved during rebuild: rows={preservedPrerequisiteGroupRows}.");
+    }
     if (dogtagAlternativeRows != 1 || validDogtagAlternativeGroups != 1 ||
         unresolvedAlternativeItems != 0 || malformedAlternativeGroups != 0)
     {
@@ -466,6 +495,64 @@ static async Task RunUserProgressResetSmokeAsync()
             $"objectives={counts.Objectives}, hideout={counts.Hideout}, " +
             $"inventory={counts.Inventory}.");
     }
+}
+
+static async Task SeedPrerequisiteGroupFixtureAsync(string databasePath)
+{
+    await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath,
+        Mode = SqliteOpenMode.ReadWrite,
+        Pooling = false
+    }.ConnectionString);
+    await connection.OpenAsync();
+    await using var transaction = await connection.BeginTransactionAsync();
+
+    foreach (var questId in new[]
+             {
+                 "fixture-quest-first",
+                 "fixture-quest-second",
+                 "fixture-quest-third"
+             })
+    {
+        await using var questCommand = connection.CreateCommand();
+        questCommand.Transaction = (SqliteTransaction)transaction;
+        questCommand.CommandText = """
+            INSERT OR REPLACE INTO Quests
+                (Id, BsgId, Name, NameEN, Trader, Location,
+                 MinLevel, MinLevelApproved, KappaRequired, IsApproved)
+            VALUES
+                ($id, $id, $name, $name, 'Trader', 'any',
+                 1, 1, 0, 1);
+            """;
+        questCommand.Parameters.AddWithValue("$id", questId);
+        questCommand.Parameters.AddWithValue("$name", questId);
+        await questCommand.ExecuteNonQueryAsync();
+    }
+
+    await using (var deleteCommand = connection.CreateCommand())
+    {
+        deleteCommand.Transaction = (SqliteTransaction)transaction;
+        deleteCommand.CommandText = "DELETE FROM QuestRequirements WHERE QuestId = 'fixture-quest-second';";
+        await deleteCommand.ExecuteNonQueryAsync();
+    }
+
+    foreach (var requiredId in new[] { "fixture-quest-first", "fixture-quest-third" })
+    {
+        await using var requirementCommand = connection.CreateCommand();
+        requirementCommand.Transaction = (SqliteTransaction)transaction;
+        requirementCommand.CommandText = """
+            INSERT INTO QuestRequirements
+                (Id, QuestId, RequiredQuestId, RequirementType, GroupId, IsApproved)
+            VALUES
+                ($id, 'fixture-quest-second', $requiredId, 'Complete', 77, 1);
+            """;
+        requirementCommand.Parameters.AddWithValue("$id", $"fixture-group-{requiredId}");
+        requirementCommand.Parameters.AddWithValue("$requiredId", requiredId);
+        await requirementCommand.ExecuteNonQueryAsync();
+    }
+
+    await transaction.CommitAsync();
 }
 
 static async Task ForceDuplicateQuestNamesAsync(string databasePath)
@@ -726,9 +813,37 @@ static void RunApplicationBehaviorSmoke()
         Name = "Actual Status Smoke"
     };
     var progressService = QuestProgressService.Instance;
+    if (Enum.GetNames<QuestStatus>().Any(name =>
+            string.Equals(name, "Available", StringComparison.OrdinalIgnoreCase)))
+    {
+        throw new InvalidDataException("QuestStatus must not expose a separate Available/acceptance state.");
+    }
+
     var eligibleStatus = new ActualQuestStatusEvaluator(progressService).Evaluate(statusTask);
     if (eligibleStatus != QuestStatus.Active)
         throw new InvalidDataException($"Eligible quest must be Active without a separate accept state: actual={eligibleStatus}.");
+
+    if (progressService.IsTaskRequirementSatisfied(statusTask, ["active"]))
+    {
+        throw new InvalidDataException(
+            "A computed Active display state falsely satisfied an explicit active prerequisite.");
+    }
+    if (!progressService.StartQuest(statusTask) ||
+        !progressService.IsTaskRequirementSatisfied(statusTask, ["active"]))
+    {
+        throw new InvalidDataException(
+            "An explicit quest start did not satisfy an active prerequisite.");
+    }
+    if (progressService.IsTaskRequirementSatisfied(statusTask, ["complete"]))
+        throw new InvalidDataException("An explicitly started quest falsely satisfied a complete prerequisite.");
+    progressService.CompleteQuest(statusTask);
+    if (!progressService.IsTaskRequirementSatisfied(statusTask, ["active"]) ||
+        !progressService.IsTaskRequirementSatisfied(statusTask, ["complete"]))
+    {
+        throw new InvalidDataException("A completed quest did not satisfy active and complete prerequisite semantics.");
+    }
+    progressService.ResetQuest(statusTask);
+    progressService.FlushPersistenceAsync().GetAwaiter().GetResult();
 
     var levelLockedTask = new TarkovTask
     {
@@ -963,13 +1078,60 @@ static async Task<int> RunExternalApiSmokeAsync()
             LEFT JOIN Quests q ON q.Id = r.RequiredQuestId
             WHERE q.Id IS NULL;
             """);
-        var helpingHandLevel = await ScalarAsync(connection, "SELECT COALESCE(MAX(MinLevel), -1) FROM Quests WHERE Name = 'A Helping Hand';");
-        var helpingHandPrerequisites = await ScalarAsync(connection, """
+        var invalidPrerequisiteStatuses = await ScalarAsync(connection, """
             SELECT COUNT(*)
             FROM QuestRequirements r
-            JOIN Quests source ON source.Id = r.QuestId
-            JOIN Quests required ON required.Id = r.RequiredQuestId
-            WHERE source.Name = 'A Helping Hand' AND required.Name = 'Saving the Mole';
+            WHERE r.QuestId = r.RequiredQuestId
+               OR json_valid(COALESCE(r.StatusesJson, '')) != 1
+               OR json_array_length(r.StatusesJson) < 1
+               OR EXISTS (
+                    SELECT 1 FROM json_each(r.StatusesJson) status
+                    WHERE LOWER(TRIM(CAST(status.value AS TEXT)))
+                          NOT IN ('active', 'start', 'accept', 'complete', 'failed', 'fail')
+               );
+            """);
+        var questTraderRequirementRows = await ScalarAsync(connection,
+            "SELECT COUNT(*) FROM QuestTraderRequirements;");
+        var contentMetadataRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM ContentBuildMetadata
+            WHERE Id = 'current' AND SchemaVersion >= 2
+              AND ItemCount > 0 AND QuestCount > 0 AND HideoutStationCount > 0;
+            """);
+        var invalidSourceJsonRows = await ScalarAsync(connection, """
+            SELECT
+              (SELECT COUNT(*) FROM Items WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
+              (SELECT COUNT(*) FROM Quests WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1) +
+              (SELECT COUNT(*) FROM QuestObjectives WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1);
+            """);
+        var trackedQuestItemRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM QuestRequiredItems
+            WHERE TrackingKind IN ('consumable', 'track-only')
+              AND ConsumesItem IN (0, 1);
+            """);
+        var expandedAmmoRows = await ScalarAsync(connection, """
+            SELECT COUNT(*) FROM Ammo
+            WHERE InitialSpeed > 0
+              AND BulletMassGrams > 0
+              AND BallisticCoefficient >= 0;
+            """);
+        var questMinLevelSourceMismatches = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM Quests q
+            WHERE json_valid(q.SourceJson) = 1
+              AND COALESCE(q.MinLevel, 0) !=
+                  COALESCE(CAST(json_extract(q.SourceJson, '$.minPlayerLevel') AS INTEGER), 0);
+            """);
+        var questPrerequisiteCountMismatches = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM Quests q
+            WHERE json_valid(q.SourceJson) = 1
+              AND COALESCE(json_array_length(json_extract(q.SourceJson, '$.taskRequirements')), 0) !=
+                  (SELECT COUNT(*) FROM QuestRequirements r WHERE r.QuestId = q.Id);
+            """);
+        var invalidPrerequisiteSourceJsonRows = await ScalarAsync(connection, """
+            SELECT COUNT(*)
+            FROM QuestRequirements
+            WHERE SourceJson IS NULL OR json_valid(SourceJson) != 1;
             """);
         if (ammoRows < 150 || linkedAmmoRows != ammoRows || koreanAmmoRows < 150 || caliberRows < 20 ||
             sourceSummary.TotalRows != ammoRows || specificSourceRows < 50)
@@ -979,24 +1141,39 @@ static async Task<int> RunExternalApiSmokeAsync()
                 $"calibers={caliberRows}, permanentSources={specificSourceRows}, raidOnly={sourceSummary.RaidOnlyRows}.");
         }
         if (invalidConcreteRequirements != 0 || invalidAlternativeRequirements != 0 ||
-            unresolvedAlternativeRequirements != 0 || missingPrerequisiteLinks != 0)
+            unresolvedAlternativeRequirements != 0 || missingPrerequisiteLinks != 0 ||
+            invalidPrerequisiteStatuses != 0)
         {
             throw new InvalidDataException(
                 $"Live quest item/prerequisite integrity failed: concrete={invalidConcreteRequirements}, " +
                 $"groups={invalidAlternativeRequirements}, unresolved={unresolvedAlternativeRequirements}, " +
-                $"prerequisites={missingPrerequisiteLinks}.");
+                $"prerequisites={missingPrerequisiteLinks}, statuses={invalidPrerequisiteStatuses}.");
         }
-        if (helpingHandLevel != 20 || helpingHandPrerequisites != 1)
+        if (questTraderRequirementRows == 0 || contentMetadataRows != 1 ||
+            invalidSourceJsonRows != 0 || trackedQuestItemRows == 0 || expandedAmmoRows < 100)
         {
             throw new InvalidDataException(
-                $"A Helping Hand start conditions were lost during API refresh: " +
-                $"level={helpingHandLevel}, prerequisites={helpingHandPrerequisites}.");
+                $"Live extended content validation failed: questTraderRequirements={questTraderRequirementRows}, " +
+                $"metadata={contentMetadataRows}, invalidSourceJson={invalidSourceJsonRows}, " +
+                $"trackedQuestItems={trackedQuestItemRows}, expandedAmmo={expandedAmmoRows}.");
+        }
+        if (questMinLevelSourceMismatches != 0 ||
+            questPrerequisiteCountMismatches != 0 ||
+            invalidPrerequisiteSourceJsonRows != 0)
+        {
+            throw new InvalidDataException(
+                $"Live quest start-condition mapping diverged from current API source data: " +
+                $"minLevels={questMinLevelSourceMismatches}, " +
+                $"prerequisiteCounts={questPrerequisiteCountMismatches}, " +
+                $"prerequisiteSourceJson={invalidPrerequisiteSourceJsonRows}.");
         }
 
         Console.WriteLine(
             $"Live data validated: ammo={ammoRows}, calibers={caliberRows}, permanentSources={specificSourceRows}, " +
             $"traderRows={sourceSummary.TraderRows}, craftRows={sourceSummary.CraftRows}, raidOnly={sourceSummary.RaidOnlyRows}, " +
-            $"A Helping Hand level={helpingHandLevel}, prerequisiteLinks={helpingHandPrerequisites}.");
+            $"questTraderRequirements={questTraderRequirementRows}, trackedQuestItems={trackedQuestItemRows}, " +
+            $"expandedAmmo={expandedAmmoRows}, prerequisiteMinLevelMismatches={questMinLevelSourceMismatches}, " +
+            $"prerequisiteCountMismatches={questPrerequisiteCountMismatches}.");
 
         // The application updater writes to its isolated mutable-content path.
         // Existing release workflows intentionally publish the verified database

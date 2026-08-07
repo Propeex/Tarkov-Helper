@@ -55,7 +55,7 @@ internal sealed class InventoryConsumptionService
             return;
 
         var requirements = task.RequiredItems
-            .Where(item => !string.IsNullOrWhiteSpace(item.ItemNormalizedName) && item.Amount > 0)
+            .Where(item => item.ConsumesItem && !string.IsNullOrWhiteSpace(item.ItemNormalizedName) && item.Amount > 0)
             .Select(item => new InventoryConsumptionRequirement(
                 item.IsAlternativeGroup
                     ? QuestRequirementInventoryKey.BuildGroupKey(task, item)

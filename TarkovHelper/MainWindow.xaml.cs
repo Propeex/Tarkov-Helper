@@ -1626,27 +1626,14 @@ public partial class MainWindow : Window
                 switch (evt.EventType)
                 {
                     case QuestEventType.Completed:
-                        progressService.CompleteQuest(task, completePrerequisites: true);
+                        progressService.CompleteQuest(task, completePrerequisites: false);
                         break;
                     case QuestEventType.Failed:
                         progressService.FailQuest(task);
                         break;
                     case QuestEventType.Started:
-                        // For started quests, complete all prerequisites in batch
-                        var graphService = QuestGraphService.Instance;
-                        if (!string.IsNullOrEmpty(task.NormalizedName))
-                        {
-                            var prereqs = graphService.GetAllPrerequisites(task.NormalizedName);
-                            var prereqsToComplete = prereqs
-                                .Where(p => progressService.GetStatus(p) != QuestStatus.Done)
-                                .ToList();
-
-                            if (prereqsToComplete.Count > 0)
-                            {
-                                // Use batch completion for better performance
-                                progressService.CompleteQuestsBatch(prereqsToComplete);
-                            }
-                        }
+                        // A started event proves that this quest was actually started.
+                        // It must never be used to infer completion of predecessor quests.
                         progressService.StartQuest(task);
                         break;
                 }
@@ -1736,18 +1723,9 @@ public partial class MainWindow : Window
     {
         var progressService = QuestProgressService.Instance;
 
-        // Complete all prerequisites
-        var completedCount = 0;
-        foreach (var prereqName in result.PrerequisitesToComplete)
-        {
-            var prereqTask = progressService.GetTask(prereqName);
-            if (prereqTask != null && progressService.GetStatus(prereqTask) != QuestStatus.Done)
-            {
-                progressService.CompleteQuest(prereqTask, completePrerequisites: false);
-                completedCount++;
-            }
-        }
-
+        // A selected in-progress quest proves only that the quest itself was started.
+        // Do not infer completion of predecessor quests: current Tarkov availability
+        // can also depend on trader, level, faction, prestige, timing, or branch rules.
         var startedCount = 0;
         foreach (var selectedQuest in result.SelectedQuests)
         {
@@ -1760,7 +1738,7 @@ public partial class MainWindow : Window
 
         // Show success message
         MessageBox.Show(
-            string.Format(_loc.QuestsAppliedSuccess, startedCount, completedCount),
+            string.Format(_loc.QuestsAppliedSuccess, startedCount),
             "알림",
             MessageBoxButton.OK,
             MessageBoxImage.Information);

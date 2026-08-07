@@ -100,6 +100,10 @@
                         <CheckBox x:Name="ChkRecoil" Content="반동 %" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
                         <CheckBox x:Name="ChkFragmentation" Content="파편화 확률" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
                         <CheckBox x:Name="ChkBleed" Content="출혈 확률 L/H" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
+                        <CheckBox x:Name="ChkSpeed" Content="초속" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
+                        <CheckBox x:Name="ChkRicochet" Content="도탄 확률" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
+                        <CheckBox x:Name="ChkMass" Content="탄두 중량" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
+                        <CheckBox x:Name="ChkTracer" Content="예광탄" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
                         <CheckBox x:Name="ChkArmorClasses" Content="방탄 등급별 효율" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
                         <CheckBox x:Name="ChkAcquisition" Content="입수 경로" Margin="0,3" Checked="ColumnOption_Changed" Unchecked="ColumnOption_Changed"/>
                     </StackPanel>
@@ -152,6 +156,10 @@
                 <DataGridTextColumn x:Name="ColRecoil" Header="반동 %" Binding="{Binding RecoilText}" Width="75"/>
                 <DataGridTextColumn x:Name="ColFragmentation" Header="파편화 확률" Binding="{Binding FragmentationText}" Width="100"/>
                 <DataGridTextColumn x:Name="ColBleed" Header="출혈 확률 L/H" Binding="{Binding BleedText}" Width="115"/>
+                <DataGridTextColumn x:Name="ColSpeed" Header="초속" Binding="{Binding InitialSpeedText}" Width="90"/>
+                <DataGridTextColumn x:Name="ColRicochet" Header="도탄 확률" Binding="{Binding RicochetText}" Width="90"/>
+                <DataGridTextColumn x:Name="ColMass" Header="탄두 중량" Binding="{Binding BulletMassText}" Width="85"/>
+                <DataGridTextColumn x:Name="ColTracer" Header="예광탄" Binding="{Binding TracerText}" Width="120"/>
                 <DataGridTemplateColumn x:Name="ColArmorClasses" Header="방탄 등급별 탄환 효율" Width="225">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>

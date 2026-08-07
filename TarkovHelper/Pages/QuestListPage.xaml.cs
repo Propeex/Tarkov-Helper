@@ -965,7 +965,7 @@ namespace TarkovHelper.Pages
                 return;
 
             if (ActualQuestStatusService.Instance.CreateEvaluator().Evaluate(vm.Task) == QuestStatus.Active)
-                _progressService.CompleteQuest(vm.Task, true);
+                _progressService.CompleteQuest(vm.Task, false);
         }
 
         private void BtnWiki_Click(object sender, RoutedEventArgs e)
@@ -998,7 +998,7 @@ namespace TarkovHelper.Pages
                 return;
 
             if (ActualQuestStatusService.Instance.CreateEvaluator().Evaluate(selectedVm.Task) == QuestStatus.Active)
-                _progressService.CompleteQuest(selectedVm.Task, true);
+                _progressService.CompleteQuest(selectedVm.Task, false);
         }
 
         private void BtnReset_Click(object sender, RoutedEventArgs e)

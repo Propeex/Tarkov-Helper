@@ -159,6 +159,26 @@ public sealed class HideoutDbService
         return count > 0;
     }
 
+    private static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName)
+    {
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info([{tableName}]);";
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (!reader.IsDBNull(1) &&
+                string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// 기본 스테이션 정보 로드
     /// </summary>
@@ -334,9 +354,15 @@ public sealed class HideoutDbService
         if (!await TableExistsAsync(connection, "HideoutTraderRequirements"))
             return;
 
-        var sql = @"
+        var hasRequirementType = await ColumnExistsAsync(connection, "HideoutTraderRequirements", "RequirementType");
+        var hasCompareMethod = await ColumnExistsAsync(connection, "HideoutTraderRequirements", "CompareMethod");
+        var hasRequiredValue = await ColumnExistsAsync(connection, "HideoutTraderRequirements", "RequiredValue");
+        var sql = $@"
             SELECT
-                StationId, Level, TraderId, TraderName, TraderNameKO, TraderNameJA, RequiredLevel
+                StationId, Level, TraderId, TraderName, TraderNameKO, TraderNameJA, RequiredLevel,
+                {(hasRequirementType ? "RequirementType" : "'level'")},
+                {(hasCompareMethod ? "CompareMethod" : "'>='")},
+                {(hasRequiredValue ? "RequiredValue" : "RequiredLevel")}
             FROM HideoutTraderRequirements";
 
         await using var cmd = new SqliteCommand(sql, connection);
@@ -355,7 +381,10 @@ public sealed class HideoutDbService
                     TraderName = reader.IsDBNull(3) ? "" : reader.GetString(3),
                     TraderNameKo = reader.IsDBNull(4) ? null : reader.GetString(4),
                     TraderNameJa = reader.IsDBNull(5) ? null : reader.GetString(5),
-                    Level = reader.IsDBNull(6) ? 0 : reader.GetInt32(6)
+                    Level = reader.IsDBNull(6) ? 0 : reader.GetInt32(6),
+                    RequirementType = reader.IsDBNull(7) ? "level" : reader.GetString(7),
+                    CompareMethod = reader.IsDBNull(8) ? ">=" : reader.GetString(8),
+                    RequiredValue = reader.IsDBNull(9) ? 0 : reader.GetDouble(9)
                 });
             }
         }

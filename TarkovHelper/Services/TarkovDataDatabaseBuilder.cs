@@ -87,7 +87,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
             Report("API", "한국어 은신처 데이터를 받는 중", 58, 0, null);
             var hideoutKo = await FetchHideoutAsync("ko", 58, 65, cancellationToken);
 
-            var data = MergeApiData(itemsEn, itemsKo, tasksEn, tasksKo, hideoutEn, hideoutKo);
+            var data = MergeApiData(itemsEn, itemsKo, tasksEn, tasksKo, hideoutEn, hideoutKo)
+                with { Transport = "graphql" };
 
             Report("DB", "기존 데이터베이스 구조를 확인하는 중", 65, 0, null);
             var counts = await RewriteDatabaseAsync(tempPath, data, cancellationToken);
@@ -146,6 +147,18 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     lightBleedModifier
                     heavyBleedModifier
                     initialSpeed
+                    ricochetChance
+                    penetrationChance
+                    bulletMassGrams
+                    bulletDiameterMilimeters
+                    ballisticCoeficient
+                    durabilityBurnFactor
+                    heatFactor
+                    misfireChance
+                    failureToFeedChance
+                    tracer
+                    tracerColor
+                    ammoType
                   }
                 }
                 buyFor {
@@ -184,12 +197,25 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 minPlayerLevel
                 factionName
                 kappaRequired
+                lightkeeperRequired
+                restartable
+                availableDelaySecondsMin
+                availableDelaySecondsMax
                 trader { id name normalizedName }
                 map { id name normalizedName }
                 requiredPrestige { prestigeLevel }
                 taskRequirements {
+                  id
                   task { id }
                   status
+                  notes
+                }
+                traderRequirements {
+                  id
+                  trader { id name normalizedName }
+                  requirementType
+                  compareMethod
+                  value
                 }
                 objectives {
                   __typename
@@ -203,6 +229,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     count
                     foundInRaid
                     dogTagLevel
+                    minDurability
+                    maxDurability
                   }
                 }
               }

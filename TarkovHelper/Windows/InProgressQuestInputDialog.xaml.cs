@@ -308,36 +308,12 @@ public partial class InProgressQuestInputDialog : Window
             .Select(q => q.Quest)
             .ToList() ?? new List<TarkovTask>();
 
-        var prerequisitesToComplete = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var quest in selectedQuests)
-        {
-            if (string.IsNullOrEmpty(quest.NormalizedName)) continue;
-
-            var prereqs = _graphService.GetAllPrerequisites(quest.NormalizedName);
-            foreach (var prereq in prereqs)
-            {
-                if (_progressService.GetStatus(prereq) != QuestStatus.Done &&
-                    !string.IsNullOrEmpty(prereq.NormalizedName))
-                {
-                    prerequisitesToComplete.Add(prereq.NormalizedName);
-                }
-            }
-        }
-
-        // Remove selected quests from prerequisites
-        foreach (var quest in selectedQuests)
-        {
-            if (!string.IsNullOrEmpty(quest.NormalizedName))
-            {
-                prerequisitesToComplete.Remove(quest.NormalizedName);
-            }
-        }
-
+        // The prerequisite panel is informational only. A quest being in progress
+        // must never auto-complete predecessor quests because availability may be
+        // governed by non-quest conditions or mutually exclusive branches.
         return new InProgressQuestInputResult
         {
-            SelectedQuests = selectedQuests,
-            PrerequisitesToComplete = prerequisitesToComplete.ToList()
+            SelectedQuests = selectedQuests
         };
     }
 
@@ -410,8 +386,4 @@ public class InProgressQuestInputResult
     /// </summary>
     public List<TarkovTask> SelectedQuests { get; set; } = new();
 
-    /// <summary>
-    /// Prerequisites that need to be completed.
-    /// </summary>
-    public List<string> PrerequisitesToComplete { get; set; } = new();
 }

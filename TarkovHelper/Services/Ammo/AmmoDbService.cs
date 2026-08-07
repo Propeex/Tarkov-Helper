@@ -43,8 +43,12 @@ public sealed class AmmoDbService
                 }
             }
 
+            var ammoColumns = await GetColumnNamesAsync(connection, "Ammo");
+            string AmmoColumn(string name, string fallback) =>
+                ammoColumns.Contains(name) ? $"a.[{name}]" : fallback;
+
             await using var command = connection.CreateCommand();
-            command.CommandText = """
+            command.CommandText = $"""
                 SELECT a.ItemId,
                        i.Id,
                        COALESCE(NULLIF(i.NameKO, ''), NULLIF(i.NameEN, ''), i.Name),
@@ -58,7 +62,19 @@ public sealed class AmmoDbService
                        a.FragmentationChance,
                        a.LightBleedModifier,
                        a.HeavyBleedModifier,
-                       COALESCE(NULLIF(a.AcquisitionSource, ''), 'raid-found')
+                       {AmmoColumn("InitialSpeed", "0")},
+                       {AmmoColumn("RicochetChance", "0")},
+                       {AmmoColumn("PenetrationChance", "0")},
+                       {AmmoColumn("BulletMassGrams", "0")},
+                       {AmmoColumn("BallisticCoefficient", "0")},
+                       {AmmoColumn("DurabilityBurnFactor", "0")},
+                       {AmmoColumn("HeatFactor", "0")},
+                       {AmmoColumn("MisfireChance", "0")},
+                       {AmmoColumn("FailureToFeedChance", "0")},
+                       {AmmoColumn("Tracer", "0")},
+                       {AmmoColumn("TracerColor", "NULL")},
+                       {AmmoColumn("AmmoType", "NULL")},
+                       COALESCE(NULLIF({AmmoColumn("AcquisitionSource", "NULL")}, ''), 'raid-found')
                 FROM Ammo a
                 JOIN Items i ON i.BsgId = a.ItemId OR i.Id = a.ItemId
                 ORDER BY a.Caliber, COALESCE(NULLIF(i.NameKO, ''), NULLIF(i.NameEN, ''), i.Name);
@@ -86,7 +102,19 @@ public sealed class AmmoDbService
                     FragmentationChance = reader.IsDBNull(10) ? 0 : reader.GetDouble(10),
                     LightBleedModifier = reader.IsDBNull(11) ? 0 : reader.GetDouble(11),
                     HeavyBleedModifier = reader.IsDBNull(12) ? 0 : reader.GetDouble(12),
-                    AcquisitionSource = AmmoLocalization.TranslateAcquisition(reader.IsDBNull(13) ? null : reader.GetString(13))
+                    InitialSpeed = reader.IsDBNull(13) ? 0 : reader.GetDouble(13),
+                    RicochetChance = reader.IsDBNull(14) ? 0 : reader.GetDouble(14),
+                    PenetrationChance = reader.IsDBNull(15) ? 0 : reader.GetDouble(15),
+                    BulletMassGrams = reader.IsDBNull(16) ? 0 : reader.GetDouble(16),
+                    BallisticCoefficient = reader.IsDBNull(17) ? 0 : reader.GetDouble(17),
+                    DurabilityBurnFactor = reader.IsDBNull(18) ? 0 : reader.GetDouble(18),
+                    HeatFactor = reader.IsDBNull(19) ? 0 : reader.GetDouble(19),
+                    MisfireChance = reader.IsDBNull(20) ? 0 : reader.GetDouble(20),
+                    FailureToFeedChance = reader.IsDBNull(21) ? 0 : reader.GetDouble(21),
+                    Tracer = !reader.IsDBNull(22) && reader.GetInt32(22) == 1,
+                    TracerColor = reader.IsDBNull(23) ? null : reader.GetString(23),
+                    AmmoType = reader.IsDBNull(24) ? null : reader.GetString(24),
+                    AcquisitionSource = AmmoLocalization.TranslateAcquisition(reader.IsDBNull(25) ? null : reader.GetString(25))
                 });
             }
 
@@ -100,6 +128,23 @@ public sealed class AmmoDbService
             Log.Error("Failed to load ammo data", ex);
             return false;
         }
+    }
+
+    private static async Task<HashSet<string>> GetColumnNamesAsync(
+        SqliteConnection connection,
+        string tableName)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info([{tableName}]);";
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (!reader.IsDBNull(1))
+                columns.Add(reader.GetString(1));
+        }
+
+        return columns;
     }
 }
 

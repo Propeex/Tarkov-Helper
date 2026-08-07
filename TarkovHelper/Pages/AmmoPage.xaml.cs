@@ -95,6 +95,10 @@ public partial class AmmoPage : UserControl
         ChkRecoil.IsChecked = ReadBool("ammo.column.recoil", true);
         ChkFragmentation.IsChecked = ReadBool("ammo.column.fragmentation", true);
         ChkBleed.IsChecked = ReadBool("ammo.column.bleed", true);
+        ChkSpeed.IsChecked = ReadBool("ammo.column.speed", true);
+        ChkRicochet.IsChecked = ReadBool("ammo.column.ricochet", false);
+        ChkMass.IsChecked = ReadBool("ammo.column.mass", false);
+        ChkTracer.IsChecked = ReadBool("ammo.column.tracer", false);
         ChkArmorClasses.IsChecked = ReadBool("ammo.column.armorClasses", true);
         ChkAcquisition.IsChecked = ReadBool("ammo.column.acquisition", true);
         _updating = false;
@@ -113,6 +117,10 @@ public partial class AmmoPage : UserControl
         _settings.SetValue("ammo.column.recoil", (ChkRecoil.IsChecked == true).ToString());
         _settings.SetValue("ammo.column.fragmentation", (ChkFragmentation.IsChecked == true).ToString());
         _settings.SetValue("ammo.column.bleed", (ChkBleed.IsChecked == true).ToString());
+        _settings.SetValue("ammo.column.speed", (ChkSpeed.IsChecked == true).ToString());
+        _settings.SetValue("ammo.column.ricochet", (ChkRicochet.IsChecked == true).ToString());
+        _settings.SetValue("ammo.column.mass", (ChkMass.IsChecked == true).ToString());
+        _settings.SetValue("ammo.column.tracer", (ChkTracer.IsChecked == true).ToString());
         _settings.SetValue("ammo.column.armorClasses", (ChkArmorClasses.IsChecked == true).ToString());
         _settings.SetValue("ammo.column.acquisition", (ChkAcquisition.IsChecked == true).ToString());
         ApplyColumnVisibility();
@@ -127,6 +135,10 @@ public partial class AmmoPage : UserControl
         ColRecoil.Visibility = Visible(ChkRecoil);
         ColFragmentation.Visibility = Visible(ChkFragmentation);
         ColBleed.Visibility = Visible(ChkBleed);
+        ColSpeed.Visibility = Visible(ChkSpeed);
+        ColRicochet.Visibility = Visible(ChkRicochet);
+        ColMass.Visibility = Visible(ChkMass);
+        ColTracer.Visibility = Visible(ChkTracer);
         ColArmorClasses.Visibility = Visible(ChkArmorClasses);
         ColAcquisition.Visibility = Visible(ChkAcquisition);
     }

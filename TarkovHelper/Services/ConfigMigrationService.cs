@@ -316,7 +316,7 @@ public sealed class ConfigMigrationService
 
             foreach (var kvp in data)
             {
-                if (!Enum.TryParse<QuestStatus>(kvp.Value, out var status))
+                if (!QuestStatusPersistence.TryParse(kvp.Value, out var status))
                     continue;
 
                 var normalizedName = kvp.Key;

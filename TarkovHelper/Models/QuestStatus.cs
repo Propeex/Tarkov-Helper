@@ -1,7 +1,8 @@
 namespace TarkovHelper.Models
 {
     /// <summary>
-    /// Quest completion status
+    /// Quest progress status exposed by the helper.
+    /// There is deliberately no separate "available to accept" state.
     /// </summary>
     public enum QuestStatus
     {
@@ -11,7 +12,9 @@ namespace TarkovHelper.Models
         Locked,
 
         /// <summary>
-        /// Quest was actually accepted/started and is currently in progress
+        /// Quest is shown as in progress after all start conditions are met.
+        /// An explicitly persisted Active row separately records a real start event
+        /// for prerequisite rules that require the predecessor to be active.
         /// </summary>
         Active,
 
@@ -31,15 +34,8 @@ namespace TarkovHelper.Models
         LevelLocked,
 
         /// <summary>
-        /// Quest is not available due to edition, prestige, or faction requirements
+        /// Quest is not usable due to edition, prestige, or faction requirements
         /// </summary>
-        Unavailable,
-
-        /// <summary>
-        /// Legacy persisted value from v1.8.1. Runtime status evaluation normalizes
-        /// this value to Active and the UI never exposes it.
-        /// </summary>
-        [Obsolete("Available is a legacy persisted value; eligible quests are Active.")]
-        Available
+        Unavailable
     }
 }

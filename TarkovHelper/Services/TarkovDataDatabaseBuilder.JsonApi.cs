@@ -179,7 +179,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (itemsEn.Count == 0 || tasksEn.Count == 0 || hideoutEn.Count == 0)
             throw new InvalidDataException("tarkov.dev 정적 JSON API 데이터가 비어 있습니다.");
 
-        return MergeApiData(itemsEn, itemsKo, tasksEn, tasksKo, hideoutEn, hideoutKo);
+        return MergeApiData(itemsEn, itemsKo, tasksEn, tasksKo, hideoutEn, hideoutKo)
+            with { Transport = "static-json" };
     }
 
     private static void ResolveStaticTraderPurchases(
@@ -553,7 +554,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 Category = itemCategories.FirstOrDefault(),
                 Categories = itemCategories,
                 Properties = ParseAmmoProperties(itemObject),
-                BuyFor = ParseStaticTraderPurchases(itemObject["buyFromTrader"] as JsonArray)
+                BuyFor = ParseStaticTraderPurchases(itemObject["buyFromTrader"] as JsonArray),
+                SourceJson = itemObject.ToJsonString()
             });
         }
 
@@ -615,7 +617,20 @@ internal sealed partial class TarkovDataDatabaseBuilder
             LightBleedModifier = GetDouble(properties, "lightBleedModifier") ?? 0,
             HeavyBleedModifier = GetDouble(properties, "heavyBleedModifier") ?? 0,
             InitialSpeed = GetDouble(properties, "initialSpeed") ?? 0,
-            AcquisitionSource = ParseAcquisitionSource(itemObject)
+            RicochetChance = GetDouble(properties, "ricochetChance") ?? 0,
+            PenetrationChance = GetDouble(properties, "penetrationChance") ?? 0,
+            BulletMassGrams = GetDouble(properties, "bulletMassGrams") ?? 0,
+            BulletDiameterMillimeters = GetDouble(properties, "bulletDiameterMilimeters", "bulletDiameterMillimeters") ?? 0,
+            BallisticCoefficient = GetDouble(properties, "ballisticCoeficient", "ballisticCoefficient") ?? 0,
+            DurabilityBurnFactor = GetDouble(properties, "durabilityBurnFactor") ?? 0,
+            HeatFactor = GetDouble(properties, "heatFactor") ?? 0,
+            MisfireChance = GetDouble(properties, "misfireChance") ?? 0,
+            FailureToFeedChance = GetDouble(properties, "failureToFeedChance") ?? 0,
+            Tracer = GetBool(properties, "tracer") ?? false,
+            TracerColor = GetString(properties, "tracerColor"),
+            AmmoType = GetString(properties, "ammoType"),
+            AcquisitionSource = ParseAcquisitionSource(itemObject),
+            SourceJson = properties.ToJsonString()
         };
     }
 
@@ -762,6 +777,18 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 MinPlayerLevel = GetInt(taskObject, "minPlayerLevel"),
                 FactionName = GetString(taskObject, "factionName", "faction"),
                 KappaRequired = GetBool(taskObject, "kappaRequired") ?? false,
+                LightkeeperRequired = GetBool(taskObject, "lightkeeperRequired") ?? false,
+                Restartable = GetBool(taskObject, "restartable") ?? false,
+                GameModes = StringList(taskObject["gameMode"]),
+                AvailableDelaySecondsMin = GetInt(taskObject, "availableDelaySecondsMin"),
+                AvailableDelaySecondsMax = GetInt(taskObject, "availableDelaySecondsMax"),
+                TaskImageLink = GetString(taskObject, "taskImageLink"),
+                NeededKeysJson = taskObject["neededKeys"]?.ToJsonString(),
+                OtherRequirementsJson = taskObject["otherRequirements"]?.ToJsonString(),
+                StartRewardsJson = taskObject["startRewards"]?.ToJsonString(),
+                FinishRewardsJson = taskObject["finishRewards"]?.ToJsonString(),
+                FailureOutcomeJson = taskObject["failureOutcome"]?.ToJsonString(),
+                SourceJson = taskObject.ToJsonString(),
                 Trader = ResolveNamed(taskObject["trader"], traderLookup),
                 Map = ResolveNamed(taskObject["map"], mapLookup),
                 RequiredPrestige = ResolvePrestige(taskObject["requiredPrestige"], prestigeLookup)
@@ -780,8 +807,35 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
                     task.TaskRequirements.Add(new ApiTaskRequirement
                     {
+                        Id = GetString(requirementObject, "id"),
                         Task = new ApiIdReference { Id = requiredTaskId },
-                        Status = StringList(requirementObject["status"])
+                        Status = StringList(requirementObject["status"]),
+                        Notes = GetString(requirementObject, "notes"),
+                        SourceJson = requirementObject.ToJsonString()
+                    });
+                }
+            }
+
+            if (taskObject["traderRequirements"] is JsonArray traderRequirements)
+            {
+                foreach (var requirementNode in traderRequirements)
+                {
+                    if (requirementNode is not JsonObject requirementObject)
+                        continue;
+
+                    var trader = ResolveNamed(requirementObject["trader"], traderLookup);
+                    if (trader == null)
+                        continue;
+
+                    task.TraderRequirements.Add(new ApiTraderRequirement
+                    {
+                        Id = GetString(requirementObject, "id"),
+                        Trader = trader,
+                        RequirementType = GetString(requirementObject, "requirementType"),
+                        CompareMethod = GetString(requirementObject, "compareMethod"),
+                        Value = GetDouble(requirementObject, "value"),
+                        Level = GetInt(requirementObject, "level"),
+                        SourceJson = requirementObject.ToJsonString()
                     });
                 }
             }
@@ -818,6 +872,14 @@ internal sealed partial class TarkovDataDatabaseBuilder
             if (singleItem != null)
                 items.Add(singleItem);
         }
+        if (items.Count == 0 && objectiveObject["markerItem"] is not null)
+        {
+            var markerItem = ResolveItem(objectiveObject["markerItem"], itemLookup);
+            if (markerItem != null)
+                items.Add(markerItem);
+        }
+        if (items.Count == 0 && objectiveObject["useAny"] is not null)
+            items.AddRange(ResolveItemList(objectiveObject["useAny"], itemLookup));
 
         var type = GetString(objectiveObject, "type");
         var typeName = GetString(objectiveObject, "__typename");
@@ -837,7 +899,10 @@ internal sealed partial class TarkovDataDatabaseBuilder
             Items = items,
             Count = GetInt(objectiveObject, "count"),
             FoundInRaid = GetBool(objectiveObject, "foundInRaid"),
-            DogTagLevel = GetInt(objectiveObject, "dogTagLevel")
+            DogTagLevel = GetInt(objectiveObject, "dogTagLevel"),
+            MinDurability = GetDouble(objectiveObject, "minDurability"),
+            MaxDurability = GetDouble(objectiveObject, "maxDurability"),
+            SourceJson = objectiveObject.ToJsonString()
         };
     }
 
@@ -878,7 +943,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
                     {
                         Id = GetString(levelObject, "id"),
                         Level = GetInt(levelObject, "level") ?? 0,
-                        ConstructionTime = GetInt(levelObject, "constructionTime") ?? 0
+                        ConstructionTime = GetInt(levelObject, "constructionTime") ?? 0,
+                        SourceJson = levelObject.ToJsonString()
                     };
 
                     if (levelObject["itemRequirements"] is JsonArray itemRequirements)
@@ -896,7 +962,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
                             {
                                 Item = item,
                                 Count = GetInt(requirementObject, "count"),
-                                Quantity = GetInt(requirementObject, "quantity")
+                                Quantity = GetInt(requirementObject, "quantity"),
+                                AttributesJson = requirementObject["attributes"]?.ToJsonString(),
+                                SourceJson = requirementObject.ToJsonString()
                             });
                         }
                     }
@@ -937,11 +1005,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
                             level.TraderRequirements.Add(new ApiTraderRequirement
                             {
+                                Id = GetString(requirementObject, "id"),
                                 Trader = trader,
                                 RequirementType = GetString(requirementObject, "requirementType"),
                                 CompareMethod = GetString(requirementObject, "compareMethod"),
-                                Value = GetInt(requirementObject, "value"),
-                                Level = GetInt(requirementObject, "level")
+                                Value = GetDouble(requirementObject, "value"),
+                                Level = GetInt(requirementObject, "level"),
+                                SourceJson = requirementObject.ToJsonString()
                             });
                         }
                     }

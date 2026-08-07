@@ -16,18 +16,6 @@ public sealed class QuestDbService
     private static QuestDbService? _instance;
     public static QuestDbService Instance => _instance ??= new QuestDbService();
 
-    private static readonly IReadOnlyDictionary<string, string[]> EquivalentAlternativePrerequisitesByQuestName =
-        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Dangerous Road"] = ["Supply Plans", "Kind of Sabotage"],
-            ["Dragnet"] = ["One Less Loose End", "A Healthy Alternative"],
-            ["Safe Corridor"] = ["Chemical - Part 4", "Out of Curiosity", "Big Customer"],
-            ["Swift One"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
-            ["TerraGroup Employee"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
-            ["The Huntsman Path - Relentless"] = ["The Huntsman Path - Sadist", "Colleagues - Part 3"],
-            ["The Huntsman Path - Woods Keeper"] = ["Supply Plans", "Kind of Sabotage"]
-        };
-
     private readonly string _databasePath;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private List<TarkovTask> _allQuests = new();
@@ -129,17 +117,17 @@ public sealed class QuestDbService
             // 2. 선행 퀘스트 요구사항 로드
             await LoadQuestRequirementsAsync(connection, questLookup);
 
-            // 3. 퀘스트 목표 로드
+            // 3. 상인/평판 해금 조건 로드
+            await LoadQuestTraderRequirementsAsync(connection, questLookup);
+
+            // 4. 퀘스트 목표 로드
             await LoadQuestObjectivesAsync(connection, questLookup);
 
-            // 4. 필요 아이템 로드
+            // 5. 필요 아이템 로드
             await LoadQuestRequiredItemsAsync(connection, questLookup);
 
-            // 5. 대체 퀘스트 로드
+            // 6. 대체 퀘스트 로드
             await LoadOptionalQuestsAsync(connection, questLookup);
-
-            // 6. 데이터 소스에서 한 분기만 저장한 공통 후속 퀘스트의 OR 조건 보정
-            NormalizeEquivalentAlternativeRequirementGroups(quests, questLookup);
 
             // 7. LeadsTo 역참조 구축
             BuildLeadsToReferences(quests);
@@ -221,6 +209,11 @@ public sealed class QuestDbService
         var hasRequiredPrestigeLevel = await ColumnExistsAsync(connection, "Quests", "RequiredPrestigeLevel");
         var hasRequiredDecodeCount = await ColumnExistsAsync(connection, "Quests", "RequiredDecodeCount");
         var hasWikiPageLink = await ColumnExistsAsync(connection, "Quests", "WikiPageLink");
+        var hasLightkeeperRequired = await ColumnExistsAsync(connection, "Quests", "LightkeeperRequired");
+        var hasRestartable = await ColumnExistsAsync(connection, "Quests", "Restartable");
+        var hasGameModesJson = await ColumnExistsAsync(connection, "Quests", "GameModesJson");
+        var hasDelayMin = await ColumnExistsAsync(connection, "Quests", "AvailableDelaySecondsMin");
+        var hasDelayMax = await ColumnExistsAsync(connection, "Quests", "AvailableDelaySecondsMax");
         _log.Debug($"BsgId column exists: {hasBsgId}");
 
         // NormalizedName이 없으면 Name에서 생성
@@ -240,7 +233,12 @@ public sealed class QuestDbService
                 {(hasExcludedEdition ? "ExcludedEdition" : "NULL")} as ExcludedEdition,
                 {(hasRequiredPrestigeLevel ? "RequiredPrestigeLevel" : "NULL")} as RequiredPrestigeLevel,
                 {(hasRequiredDecodeCount ? "RequiredDecodeCount" : "NULL")} as RequiredDecodeCount,
-                {(hasWikiPageLink ? "WikiPageLink" : "NULL")} as WikiPageLink
+                {(hasWikiPageLink ? "WikiPageLink" : "NULL")} as WikiPageLink,
+                {(hasLightkeeperRequired ? "LightkeeperRequired" : "0")} as LightkeeperRequired,
+                {(hasRestartable ? "Restartable" : "0")} as Restartable,
+                {(hasGameModesJson ? "GameModesJson" : "NULL")} as GameModesJson,
+                {(hasDelayMin ? "AvailableDelaySecondsMin" : "NULL")} as AvailableDelaySecondsMin,
+                {(hasDelayMax ? "AvailableDelaySecondsMax" : "NULL")} as AvailableDelaySecondsMax
             FROM Quests
             ORDER BY Name, Id";
 
@@ -269,7 +267,12 @@ public sealed class QuestDbService
                 ExcludedEdition = reader.IsDBNull(13) ? null : reader.GetString(13),
                 RequiredPrestigeLevel = reader.IsDBNull(14) ? null : reader.GetInt32(14),
                 RequiredDecodeCount = reader.IsDBNull(15) ? null : reader.GetInt32(15),
-                WikiPageLink = reader.IsDBNull(16) ? null : reader.GetString(16)
+                WikiPageLink = reader.IsDBNull(16) ? null : reader.GetString(16),
+                LightkeeperRequired = !reader.IsDBNull(17) && reader.GetInt32(17) == 1,
+                Restartable = !reader.IsDBNull(18) && reader.GetInt32(18) == 1,
+                GameModes = ParseStringArray(reader.IsDBNull(19) ? null : reader.GetString(19)),
+                AvailableDelaySecondsMin = reader.IsDBNull(20) ? null : reader.GetInt32(20),
+                AvailableDelaySecondsMax = reader.IsDBNull(21) ? null : reader.GetInt32(21)
             };
 
             // BsgId가 있으면 Ids에 추가
@@ -406,10 +409,15 @@ public sealed class QuestDbService
         if (!await TableExistsAsync(connection, "QuestRequirements"))
             return false;
 
-        var sql = @"
-            SELECT QuestId, RequiredQuestId, RequirementType, GroupId
+        var hasStatusesJson = await ColumnExistsAsync(connection, "QuestRequirements", "StatusesJson");
+        var hasNotes = await ColumnExistsAsync(connection, "QuestRequirements", "Notes");
+        var hasSortOrder = await ColumnExistsAsync(connection, "QuestRequirements", "SortOrder");
+        var sql = $@"
+            SELECT QuestId, RequiredQuestId, RequirementType, GroupId,
+                   {(hasStatusesJson ? "StatusesJson" : "NULL")},
+                   {(hasNotes ? "Notes" : "NULL")}
             FROM QuestRequirements
-            ORDER BY QuestId, GroupId";
+            ORDER BY QuestId, GroupId, {(hasSortOrder ? "SortOrder" : "RequiredQuestId")}";
 
         await using var cmd = new SqliteCommand(sql, connection);
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -420,6 +428,10 @@ public sealed class QuestDbService
             var requiredQuestId = reader.GetString(1);
             var requirementType = reader.IsDBNull(2) ? "Complete" : reader.GetString(2);
             var groupId = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
+            var statuses = ParseStringArray(reader.IsDBNull(4) ? null : reader.GetString(4));
+            if (statuses.Count == 0)
+                statuses.Add(requirementType.ToLowerInvariant());
+            var notes = reader.IsDBNull(5) ? null : reader.GetString(5);
 
             if (!questLookup.TryGetValue(questId, out var quest))
                 continue;
@@ -448,10 +460,46 @@ public sealed class QuestDbService
                 {
                     TaskId = requiredQuestId,
                     TaskNormalizedName = requiredNormalizedName,
-                    Status = new List<string> { requirementType.ToLowerInvariant() },
-                    GroupId = groupId
+                    Status = statuses,
+                    GroupId = groupId,
+                    Notes = notes
                 });
             }
+        }
+
+        return true;
+    }
+
+    private async Task<bool> LoadQuestTraderRequirementsAsync(
+        SqliteConnection connection,
+        Dictionary<string, TarkovTask> questLookup)
+    {
+        if (!await TableExistsAsync(connection, "QuestTraderRequirements"))
+            return false;
+
+        const string sql = """
+            SELECT QuestId, TraderId, TraderName, TraderNameKO,
+                   RequirementType, CompareMethod, RequiredValue
+            FROM QuestTraderRequirements
+            ORDER BY QuestId, SortOrder;
+            """;
+        await using var command = new SqliteCommand(sql, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var questId = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+            if (!questLookup.TryGetValue(questId, out var quest))
+                continue;
+
+            quest.TraderRequirements.Add(new QuestTraderRequirement
+            {
+                TraderId = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                TraderName = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                TraderNameKo = reader.IsDBNull(3) ? null : reader.GetString(3),
+                RequirementType = reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                CompareMethod = reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
+                RequiredValue = reader.IsDBNull(6) ? 0 : reader.GetDouble(6)
+            });
         }
 
         return true;
@@ -503,12 +551,24 @@ public sealed class QuestDbService
         var hasAlternativeFlag = await ColumnExistsAsync(connection, "QuestRequiredItems", "IsAlternativeGroup");
         var hasAlternativeIds = await ColumnExistsAsync(connection, "QuestRequiredItems", "AlternativeItemIds");
         var hasAlternativeNames = await ColumnExistsAsync(connection, "QuestRequiredItems", "AlternativeItemNames");
+        var hasObjectiveId = await ColumnExistsAsync(connection, "QuestRequiredItems", "ObjectiveId");
+        var hasObjectiveType = await ColumnExistsAsync(connection, "QuestRequiredItems", "ObjectiveType");
+        var hasConsumesItem = await ColumnExistsAsync(connection, "QuestRequiredItems", "ConsumesItem");
+        var hasTrackingKind = await ColumnExistsAsync(connection, "QuestRequiredItems", "TrackingKind");
+        var hasMinDurability = await ColumnExistsAsync(connection, "QuestRequiredItems", "MinDurability");
+        var hasMaxDurability = await ColumnExistsAsync(connection, "QuestRequiredItems", "MaxDurability");
         var sql = $@"
             SELECT QuestId, ItemId, ItemName, Count, RequiresFIR, RequirementType, DogtagMinLevel,
                    {(hasGroupId ? "RequirementGroupId" : "NULL")},
                    {(hasAlternativeFlag ? "IsAlternativeGroup" : "0")},
                    {(hasAlternativeIds ? "AlternativeItemIds" : "NULL")},
-                   {(hasAlternativeNames ? "AlternativeItemNames" : "NULL")}
+                   {(hasAlternativeNames ? "AlternativeItemNames" : "NULL")},
+                   {(hasObjectiveId ? "ObjectiveId" : "NULL")},
+                   {(hasObjectiveType ? "ObjectiveType" : "RequirementType")},
+                   {(hasConsumesItem ? "ConsumesItem" : "1")},
+                   {(hasTrackingKind ? "TrackingKind" : "'consumable'")},
+                   {(hasMinDurability ? "MinDurability" : "NULL")},
+                   {(hasMaxDurability ? "MaxDurability" : "NULL")}
             FROM QuestRequiredItems
             ORDER BY QuestId, SortOrder";
 
@@ -530,6 +590,12 @@ public sealed class QuestDbService
             var isAlternative = !reader.IsDBNull(8) && reader.GetInt32(8) == 1;
             var alternativeIds = ParseStringArray(reader.IsDBNull(9) ? null : reader.GetString(9));
             var alternativeNames = ParseStringArray(reader.IsDBNull(10) ? null : reader.GetString(10));
+            var objectiveId = reader.IsDBNull(11) ? null : reader.GetString(11);
+            var objectiveType = reader.IsDBNull(12) ? requirementType : reader.GetString(12);
+            var consumesItem = reader.IsDBNull(13) || reader.GetInt32(13) == 1;
+            var trackingKind = reader.IsDBNull(14) ? "consumable" : reader.GetString(14);
+            var minDurability = reader.IsDBNull(15) ? (double?)null : reader.GetDouble(15);
+            var maxDurability = reader.IsDBNull(16) ? (double?)null : reader.GetDouble(16);
 
             if (isAlternative && alternativeIds.Count == 0)
                 continue;
@@ -548,7 +614,13 @@ public sealed class QuestDbService
                 RequirementGroupId = groupId,
                 IsAlternativeGroup = isAlternative,
                 AlternativeItemIds = alternativeIds,
-                AlternativeItemNames = alternativeNames
+                AlternativeItemNames = alternativeNames,
+                ObjectiveId = objectiveId,
+                ObjectiveType = objectiveType,
+                ConsumesItem = consumesItem,
+                TrackingKind = trackingKind,
+                MinDurability = minDurability,
+                MaxDurability = maxDurability
             });
         }
 
@@ -608,121 +680,6 @@ public sealed class QuestDbService
         }
 
         return true;
-    }
-
-    /// <summary>
-    /// 공통 후속 퀘스트가 선택지 중 한 퀘스트만 선행 조건으로 저장된 경우, 확인된 동등 선택지만
-    /// 같은 OR 그룹에 보충합니다. 실패 상태를 요구하는 평판 복구 퀘스트 등 분기 전용 조건은
-    /// 명시 목록에 포함하지 않아 기존 판정을 유지합니다.
-    /// </summary>
-    private void NormalizeEquivalentAlternativeRequirementGroups(
-        List<TarkovTask> quests,
-        Dictionary<string, TarkovTask> questLookup)
-    {
-        var questsByName = quests
-            .GroupBy(quest => quest.Name, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-
-        var addedRequirements = 0;
-
-        foreach (var pair in EquivalentAlternativePrerequisitesByQuestName)
-        {
-            if (!questsByName.TryGetValue(pair.Key, out var targetQuest) ||
-                targetQuest.TaskRequirements == null)
-            {
-                continue;
-            }
-
-            var allowedNames = new HashSet<string>(pair.Value, StringComparer.OrdinalIgnoreCase);
-            var matchingRequirements = targetQuest.TaskRequirements
-                .Where(requirement => requirement.GroupId > 0)
-                .Select(requirement => new
-                {
-                    Requirement = requirement,
-                    RequiredQuest = ResolveRequiredQuest(requirement, questLookup, quests)
-                })
-                .Where(value => value.RequiredQuest != null && allowedNames.Contains(value.RequiredQuest.Name))
-                .ToList();
-
-            if (matchingRequirements.Count == 0)
-            {
-                _log.Warning($"Equivalent prerequisite group was not found for {targetQuest.Name}.");
-                continue;
-            }
-
-            var groupId = matchingRequirements[0].Requirement.GroupId;
-            var templateStatus = matchingRequirements[0].Requirement.Status?.ToList()
-                ?? new List<string> { "complete" };
-
-            foreach (var requiredName in pair.Value)
-            {
-                if (!questsByName.TryGetValue(requiredName, out var requiredQuest))
-                    continue;
-
-                var requiredId = requiredQuest.Ids?.FirstOrDefault();
-                if (string.IsNullOrWhiteSpace(requiredId) ||
-                    string.IsNullOrWhiteSpace(requiredQuest.NormalizedName))
-                {
-                    continue;
-                }
-
-                var alreadyExists = targetQuest.TaskRequirements.Any(existing =>
-                    existing.GroupId == groupId &&
-                    (string.Equals(existing.TaskId, requiredId, StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(
-                         existing.TaskNormalizedName,
-                         requiredQuest.NormalizedName,
-                         StringComparison.OrdinalIgnoreCase)));
-
-                if (alreadyExists)
-                    continue;
-
-                targetQuest.TaskRequirements.Add(new TaskRequirement
-                {
-                    TaskId = requiredId,
-                    TaskNormalizedName = requiredQuest.NormalizedName,
-                    Status = templateStatus.ToList(),
-                    GroupId = groupId
-                });
-
-                targetQuest.Previous ??= new List<string>();
-                if (!targetQuest.Previous.Contains(
-                        requiredQuest.NormalizedName,
-                        StringComparer.OrdinalIgnoreCase))
-                {
-                    targetQuest.Previous.Add(requiredQuest.NormalizedName);
-                }
-
-                addedRequirements++;
-            }
-        }
-
-        if (addedRequirements > 0)
-        {
-            _log.Info(
-                $"Expanded {addedRequirements} verified alternative prerequisites into OR groups.");
-        }
-    }
-
-    private static TarkovTask? ResolveRequiredQuest(
-        TaskRequirement requirement,
-        Dictionary<string, TarkovTask> questLookup,
-        List<TarkovTask> quests)
-    {
-        if (!string.IsNullOrWhiteSpace(requirement.TaskId) &&
-            questLookup.TryGetValue(requirement.TaskId, out var requiredById))
-        {
-            return requiredById;
-        }
-
-        if (string.IsNullOrWhiteSpace(requirement.TaskNormalizedName))
-            return null;
-
-        return quests.FirstOrDefault(quest =>
-            string.Equals(
-                quest.NormalizedName,
-                requirement.TaskNormalizedName,
-                StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

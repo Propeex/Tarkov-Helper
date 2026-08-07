@@ -36,6 +36,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
         public List<ApiItemPrice> BuyFor { get; set; } = [];
         public List<ApiSourceReference> BartersFor { get; set; } = [];
         public List<ApiSourceReference> CraftsFor { get; set; } = [];
+        public string? SourceJson { get; set; }
     }
 
     private sealed class ApiAmmoProperties
@@ -51,7 +52,22 @@ internal sealed partial class TarkovDataDatabaseBuilder
         public double? LightBleedModifier { get; set; }
         public double? HeavyBleedModifier { get; set; }
         public double? InitialSpeed { get; set; }
+        public double? RicochetChance { get; set; }
+        public double? PenetrationChance { get; set; }
+        public double? BulletMassGrams { get; set; }
+        [JsonPropertyName("bulletDiameterMilimeters")]
+        public double? BulletDiameterMillimeters { get; set; }
+        [JsonPropertyName("ballisticCoeficient")]
+        public double? BallisticCoefficient { get; set; }
+        public double? DurabilityBurnFactor { get; set; }
+        public double? HeatFactor { get; set; }
+        public double? MisfireChance { get; set; }
+        public double? FailureToFeedChance { get; set; }
+        public bool? Tracer { get; set; }
+        public string? TracerColor { get; set; }
+        public string? AmmoType { get; set; }
         public string? AcquisitionSource { get; set; }
+        public string? SourceJson { get; set; }
     }
 
     private sealed class ApiItemPrice
@@ -87,14 +103,30 @@ internal sealed partial class TarkovDataDatabaseBuilder
         public ApiNamedEntity? Trader { get; set; }
         public ApiNamedEntity? Map { get; set; }
         public ApiPrestige? RequiredPrestige { get; set; }
+        public bool LightkeeperRequired { get; set; }
+        public bool Restartable { get; set; }
+        public List<string> GameModes { get; set; } = [];
+        public int? AvailableDelaySecondsMin { get; set; }
+        public int? AvailableDelaySecondsMax { get; set; }
+        public string? TaskImageLink { get; set; }
+        public string? NeededKeysJson { get; set; }
+        public string? OtherRequirementsJson { get; set; }
+        public string? StartRewardsJson { get; set; }
+        public string? FinishRewardsJson { get; set; }
+        public string? FailureOutcomeJson { get; set; }
+        public string? SourceJson { get; set; }
         public List<ApiTaskRequirement> TaskRequirements { get; set; } = [];
+        public List<ApiTraderRequirement> TraderRequirements { get; set; } = [];
         public List<ApiTaskObjective> Objectives { get; set; } = [];
     }
 
     private sealed class ApiTaskRequirement
     {
+        public string? Id { get; set; }
         public ApiIdReference? Task { get; set; }
         public List<string> Status { get; set; } = [];
+        public string? Notes { get; set; }
+        public string? SourceJson { get; set; }
     }
 
     private sealed class ApiTaskObjective
@@ -105,10 +137,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
         [JsonPropertyName("__typename")]
         public string? TypeName
         {
-            // The legacy writer recognizes TaskObjectiveItem through this property.
-            // Expose it only for actual item-submission objectives so paired acquisition
-            // and handover objectives cannot both become inventory requirements.
-            get => QuestRequiredItemObjectivePolicy.IsConsumable(_type) ? _typeName : null;
+            get => _typeName;
             set => _typeName = value;
         }
 
@@ -116,12 +145,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
         public string? Type
         {
-            // A generic "item" value carries no spending semantics. Give it a neutral
-            // database label so the writer's legacy exact "item" check cannot treat it
-            // as a consumable requirement without an explicit HandOver/giveItem type.
-            get => string.Equals(_type, "item", StringComparison.OrdinalIgnoreCase)
-                ? "genericItem"
-                : _type;
+            get => _type;
             set => _type = value;
         }
 
@@ -132,6 +156,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
         public int? Count { get; set; }
         public bool? FoundInRaid { get; set; }
         public int? DogTagLevel { get; set; }
+        public double? MinDurability { get; set; }
+        public double? MaxDurability { get; set; }
+        public string? SourceJson { get; set; }
     }
 
     private sealed class ApiHideoutStation : IApiEntity
@@ -152,6 +179,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
         public List<ApiStationRequirement> StationLevelRequirements { get; set; } = [];
         public List<ApiTraderRequirement> TraderRequirements { get; set; } = [];
         public List<ApiSkillRequirement> SkillRequirements { get; set; } = [];
+        public string? SourceJson { get; set; }
     }
 
     private sealed class ApiHideoutItemRequirement
@@ -159,6 +187,8 @@ internal sealed partial class TarkovDataDatabaseBuilder
         public ApiItemReference? Item { get; set; }
         public int? Count { get; set; }
         public int? Quantity { get; set; }
+        public string? AttributesJson { get; set; }
+        public string? SourceJson { get; set; }
     }
 
     private sealed class ApiStationRequirement
@@ -169,11 +199,13 @@ internal sealed partial class TarkovDataDatabaseBuilder
 
     private sealed class ApiTraderRequirement
     {
+        public string? Id { get; set; }
         public ApiNamedEntity? Trader { get; set; }
         public string? RequirementType { get; set; }
         public string? CompareMethod { get; set; }
-        public int? Value { get; set; }
+        public double? Value { get; set; }
         public int? Level { get; set; }
+        public string? SourceJson { get; set; }
     }
 
     private sealed class ApiSkillRequirement
@@ -257,7 +289,9 @@ internal sealed partial class TarkovDataDatabaseBuilder
     private sealed record MergedApiData(
         List<LocalizedItem> Items,
         List<LocalizedTask> Tasks,
-        List<LocalizedHideoutStation> HideoutStations);
+        List<LocalizedHideoutStation> HideoutStations,
+        string Source = "tarkov.dev",
+        string Transport = "unknown");
 
     private sealed record ColumnInfo(
         string Name,
@@ -298,11 +332,15 @@ internal sealed partial class TarkovDataDatabaseBuilder
         int HideoutItemRequirements,
         int HideoutStationRequirements,
         int HideoutTraderRequirements,
-        int HideoutSkillRequirements)
+        int HideoutSkillRequirements,
+        int QuestTraderRequirements,
+        int AmmoAcquisitionSources,
+        int ContentBuildMetadata)
     {
         public int TotalRows => Items + Ammo + Quests + QuestRequirements + QuestObjectives + QuestRequiredItems +
                                 HideoutStations + HideoutLevels + HideoutItemRequirements +
-                                HideoutStationRequirements + HideoutTraderRequirements + HideoutSkillRequirements;
+                                HideoutStationRequirements + HideoutTraderRequirements + HideoutSkillRequirements +
+                                QuestTraderRequirements + AmmoAcquisitionSources + ContentBuildMetadata;
     }
 }
 
