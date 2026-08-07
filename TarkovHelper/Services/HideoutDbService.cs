@@ -159,6 +159,26 @@ public sealed class HideoutDbService
         return count > 0;
     }
 
+    private static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName)
+    {
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info([{tableName}]);";
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (!reader.IsDBNull(1) &&
+                string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// 기본 스테이션 정보 로드
     /// </summary>
