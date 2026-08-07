@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Verify, apply, and commit v2 overhaul
+      - name: Verify, apply, and commit v2 source overhaul
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -41,7 +41,7 @@ jobs:
           grep -q '_userDataDb.SaveQuestProgressAsync' TarkovHelper/Services/QuestProgressService.cs
           grep -q 'CompleteQuest(TarkovTask task, bool completePrerequisites = false)' TarkovHelper/Services/QuestProgressService.cs
           test -s TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs
-          git checkout 4d1ecbb3d967b0d60aeb7fc6a925a8ed3a4427c2 -- .github/workflows/build.yml .github/workflows/startup-smoke.yml
+          git checkout 4d1ecbb3d967b0d60aeb7fc6a925a8ed3a4427c2 -- .github/workflows/build.yml .github/workflows/startup-smoke.yml .github/workflows/release.yml
           git rm -r .github/final-patch
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
