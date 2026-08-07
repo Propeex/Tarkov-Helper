@@ -1,75 +1,37 @@
-name: Apply Verified Quest Overhaul
+name: Inspect Verified Quest Overhaul
 
 on:
   pull_request:
     types: [reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
+  inspect:
     if: github.event.pull_request.number == 31 && github.head_ref == 'agent/quest-data-overhaul'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Verify and apply v2 overhaul
+      - name: Apply verified patch and inspect quest persistence
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git init .
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            +refs/heads/agent/quest-data-overhaul:refs/remotes/origin/agent/quest-data-overhaul
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags origin +refs/heads/agent/quest-data-overhaul:refs/remotes/origin/agent/quest-data-overhaul
           git checkout -B agent/quest-data-overhaul refs/remotes/origin/agent/quest-data-overhaul
-
-          cat > /tmp/v2-sha256sums <<'EOF'
-          8cf526a4d85e5b159dd756615d5ba5baccaf732c7216351ebbe7dad29291a01b  .github/final-patch/v2-00
-          2dedb99be3d3d43572ab4539d56007cc8b353c41d3ce33e1c4e5f2b243dc80cd  .github/final-patch/v2-01
-          f930f870a4625f4d8dd76c63071eef1c043e5b65bd648e870516403a33efbf50  .github/final-patch/v2-02
-          97724b4c366f3fa0879f355fa96aa0e02518094163b5a8f1370d0eeafa8f0b75  .github/final-patch/v2-03
-          ebe063112b72b8f2f5e3416aa30f2480f89dee002b56313603aa3337518de596  .github/final-patch/v2-04
-          a7a76566b69cb1acc22887640fed2590466f6a7fa2c88d1a7f43f774dc518abf  .github/final-patch/v2-05
-          5c2722d3ae6fc293b1902a0876c4fffb19031aa0ebedb4ebd45e76362a4c67a0  .github/final-patch/v2-06
-          2a02ecaa77ae2e4d76de164a438a8c9e479c7e81a2538331132735f1a9a3eb9f  .github/final-patch/v2-07
-          870a8e59dcbd332cd2a0e9e7635d595f6eb939f2896260bc45b861ace079195f  .github/final-patch/v2-08
-          EOF
-          sed -i 's/^          //' /tmp/v2-sha256sums
-          sha256sum --check /tmp/v2-sha256sums
           cat .github/final-patch/v2-* > /tmp/final-overhaul.patch.gz.b64
           echo '76d10a38ed1d3344da3b414790405d5ad85545457d7e2851e36381b7016bde6f  /tmp/final-overhaul.patch.gz.b64' | sha256sum --check
           base64 --decode /tmp/final-overhaul.patch.gz.b64 > /tmp/final-overhaul.patch.gz
           echo '029441f8dd6ce05abf9cac68ee60fba6feddadc3cf7df322dfa0ad86ad74f1a8  /tmp/final-overhaul.patch.gz' | sha256sum --check
           gzip --decompress --stdout /tmp/final-overhaul.patch.gz > /tmp/final-overhaul.patch
           echo 'd221a60bbb37b2c31eccc4c33cf9d0b0f77c0978401b57b240c742eeee7d330e  /tmp/final-overhaul.patch' | sha256sum --check
-
-          echo 'CHECK: three-way applicability'
-          git apply --3way --check --verbose /tmp/final-overhaul.patch
-          git apply --3way --verbose /tmp/final-overhaul.patch
-          echo 'CHECK: unresolved conflicts'
-          test -z "$(git ls-files -u)" || { git ls-files -u; exit 1; }
-          echo 'CHECK: whitespace'
-          if ! git diff --check; then git diff --check || true; exit 1; fi
-          echo 'CHECK: forbidden Available enum'
-          if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then echo 'Available enum found'; exit 1; fi
-          echo 'CHECK: forbidden QuestStatus.Available refs'
-          if grep -R -n 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then echo 'QuestStatus.Available found'; exit 1; fi
-          echo 'CHECK: manual prerequisite auto-completion'
-          if grep -n 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then echo 'Prerequisite auto-completion found'; exit 1; fi
-          echo 'CHECK: start-state persistence model'
-          grep -n 'QuestStatusPersistence' TarkovHelper/Services/QuestProgressService.cs || { echo 'QuestStatusPersistence missing'; exit 1; }
-          echo 'CHECK: content schema marker'
-          grep -n 'ContentSchemaVersion' TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs || { echo 'ContentSchemaVersion missing'; exit 1; }
-          echo 'CHECKS PASSED'
-
-          git checkout 4d1ecbb3d967b0d60aeb7fc6a925a8ed3a4427c2 -- .github/workflows/build.yml .github/workflows/startup-smoke.yml
-          git rm -r .github/final-patch
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          git commit -m 'Overhaul quest and content data pipeline'
-          git push origin HEAD:agent/quest-data-overhaul
+          git apply --3way --check /tmp/final-overhaul.patch
+          git apply --3way /tmp/final-overhaul.patch
+          test -z "$(git ls-files -u)"
+          git diff --check
+          echo '--- QuestProgressService diff ---'
+          git diff -- TarkovHelper/Services/QuestProgressService.cs
+          echo '--- Quest persistence symbols ---'
+          grep -R -n -E 'StartQuest|StartedQuest|Explicit|Accepted|active requirement|started' TarkovHelper/Services/QuestProgressService.cs TarkovHelper/Services/UserDataDbService.cs TarkovHelper/Models/QuestStatusPersistence.cs || true
