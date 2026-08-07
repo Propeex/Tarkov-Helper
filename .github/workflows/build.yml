@@ -241,39 +241,3 @@ jobs:
             TarkovHelper_JH.zip
             TarkovHelper_JH.zip.sha256
           if-no-files-found: error
-
-  quest-catalog-maintenance:
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 34 && github.head_ref == 'agent/quest-catalog-sync-fix'
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-
-      - name: Apply deterministic quest catalog patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          script=.github/maintenance/apply-quest-catalog-sync.py
-          if [[ ! -f "$script" ]]; then
-            echo "Maintenance script already consumed; nothing to do."
-            exit 0
-          fi
-          python "$script"
-          rm "$script"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add TarkovHelper/Services/TarkovDataDatabaseBuilder.JsonApi.cs \
-                  TarkovHelper/Services/TarkovDataDatabaseBuilder.Overlay.cs \
-                  TarkovHelper.DatabaseSmoke/FixtureTarkovApiHandler.cs \
-                  TarkovHelper.DatabaseSmoke/Program.cs \
-                  .github/maintenance/apply-quest-catalog-sync.py
-          git diff --cached --check
-          git commit -m "Apply quest catalog correction overlay"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
