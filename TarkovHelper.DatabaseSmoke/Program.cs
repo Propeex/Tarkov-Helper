@@ -31,6 +31,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     var databasePath = Path.Combine(AppContext.BaseDirectory, "Assets", "tarkov_data.db");
 
     await RunOutageHandlingSmokeAsync(databasePath);
+    await RunQuestCatalogFailClosedSmokeAsync(databasePath);
 
     // The deterministic fixture intentionally contains only two quests. Remove
     // legacy alternative-quest rows from the copied production DB so this test
@@ -395,7 +396,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
     RunApplicationBehaviorSmoke();
 
     Console.WriteLine(
-        $"Deterministic database smoke passed: profile=PVP, transport=static-json, " +
+        $"Deterministic database smoke passed: profile=PVP, transport=static-json+overlay, " +
         $"requests={fixtureHandler.StaticRequestCount}, items={result.ItemCount}, ammo={result.AmmoCount}, quests={result.QuestCount}, " +
         $"hideout={result.HideoutStationCount}, questLinks={questItemLinks}, hideoutLinks={hideoutItemLinks}, " +
         $"acquisitionRows={acquisitionRequirementRows}, pairedBolts={pairedBoltRequirementRows}, " +
@@ -411,6 +412,77 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         $"missingIds={missingChildIds}, invalidMaxLevels={invalidMaxLevels}, " +
         $"missingPrerequisites={missingPrerequisiteLinks}, invalidConcreteItems={invalidConcreteRequirementLinks}");
     return 0;
+}
+
+
+static async Task RunQuestCatalogFailClosedSmokeAsync(string seedDatabasePath)
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "TarkovHelperQuestCatalogFailClosed",
+        Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+
+    try
+    {
+        await RunScenarioAsync(
+            "post-overlay-static-failure",
+            new FixtureTarkovApiHandler(failHideoutAfterOverlay: true));
+        await RunScenarioAsync(
+            "invalid-overlay",
+            new FixtureTarkovApiHandler(invalidQuestOverlay: true));
+    }
+    finally
+    {
+        try
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+        catch
+        {
+            // Best-effort cleanup only; validation already completed.
+        }
+    }
+
+    async Task RunScenarioAsync(string name, FixtureTarkovApiHandler fixtureHandler)
+    {
+        var scenarioPath = Path.Combine(root, name + ".db");
+        File.Copy(seedDatabasePath, scenarioPath, overwrite: true);
+        var before = await File.ReadAllBytesAsync(scenarioPath);
+
+        using var httpClient = new HttpClient(fixtureHandler)
+        {
+            Timeout = TimeSpan.FromMinutes(2)
+        };
+        var builder = new TarkovDataDatabaseBuilder(
+            httpClient,
+            progress => Console.WriteLine($"[fail-closed:{name}] {progress.Message}"),
+            enrichAmmoSources: false);
+
+        Exception? failure = null;
+        try
+        {
+            await builder.BuildPreferredAsync(scenarioPath);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or InvalidDataException)
+        {
+            failure = exception;
+        }
+
+        if (failure == null)
+            throw new InvalidDataException($"Fail-closed scenario unexpectedly succeeded: {name}.");
+        if (fixtureHandler.GraphQlRequestCount != 0)
+        {
+            throw new InvalidDataException(
+                $"Fail-closed scenario leaked into GraphQL fallback: {name}, " +
+                $"requests={fixtureHandler.GraphQlRequestCount}.");
+        }
+
+        var after = await File.ReadAllBytesAsync(scenarioPath);
+        if (!before.AsSpan().SequenceEqual(after))
+            throw new InvalidDataException($"Fail-closed scenario replaced the existing database: {name}.");
+    }
 }
 
 static async Task RunPersistenceWriteQueueSmokeAsync()

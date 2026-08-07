@@ -77,30 +77,11 @@ internal sealed partial class TarkovDataDatabaseBuilder
         catch (Exception staticException) when (!staticDataReady)
         {
             CleanupFile(tempPath);
-            _lastPercent = 0;
-            Report(
-                "API",
-                $"정적 JSON API 실패: {CompactApiError(staticException.Message)} · GraphQL 예비 경로로 전환",
-                1,
-                0,
-                null);
-
-            try
-            {
-                return await BuildAsync(databasePath, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception graphQlException)
-            {
-                throw new InvalidOperationException(
-                    "tarkov.dev 정적 JSON API와 GraphQL API가 모두 응답하지 않았습니다. " +
-                    $"JSON: {CompactApiError(staticException.Message)} / " +
-                    $"GraphQL: {CompactApiError(graphQlException.Message)}",
-                    new AggregateException(staticException, graphQlException));
-            }
+            throw new InvalidOperationException(
+                "현재 퀘스트 목록은 검증된 정적 JSON API와 보정 데이터 경로가 필요합니다. " +
+                "보정되지 않은 퀘스트 목록으로 되돌아갈 수 있는 GraphQL 예비 경로는 사용하지 않습니다. " +
+                $"JSON: {CompactApiError(staticException.Message)}",
+                staticException);
         }
         catch
         {

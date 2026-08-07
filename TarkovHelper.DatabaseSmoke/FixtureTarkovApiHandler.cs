@@ -4,6 +4,16 @@ using System.Text.Json;
 
 internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
 {
+    private readonly bool _failHideoutAfterOverlay;
+    private readonly bool _invalidQuestOverlay;
+
+    public FixtureTarkovApiHandler(
+        bool failHideoutAfterOverlay = false,
+        bool invalidQuestOverlay = false)
+    {
+        _failHideoutAfterOverlay = failHideoutAfterOverlay;
+        _invalidQuestOverlay = invalidQuestOverlay;
+    }
     public int StaticRequestCount { get; private set; }
     public int GraphQlRequestCount { get; private set; }
 
@@ -46,9 +56,17 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
         return JsonResponse(HttpStatusCode.OK, new { data });
     }
 
-    private static HttpResponseMessage HandleStaticJsonRequest(string path)
+    private HttpResponseMessage HandleStaticJsonRequest(string path)
     {
         var normalized = path.Trim('/');
+
+        if (_failHideoutAfterOverlay &&
+            string.Equals(normalized, "regular/hideout", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse(
+                HttpStatusCode.BadRequest,
+                new { error = "Injected post-overlay hideout failure" });
+        }
 
         return normalized switch
         {
@@ -69,7 +87,11 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
             "regular/tasks_ko" => TranslationResponse(KoreanTranslations()),
 
             "tarkovtracker-org/tarkov-data-overlay/main/dist/overlay.json" =>
-                JsonResponse(HttpStatusCode.OK, CreateQuestCatalogOverlay()),
+                JsonResponse(
+                    HttpStatusCode.OK,
+                    _invalidQuestOverlay
+                        ? CreateInvalidQuestCatalogOverlay()
+                        : CreateQuestCatalogOverlay()),
 
             "regular/hideout" => JsonResponse(HttpStatusCode.OK, CreateStaticHideout()),
             "regular/hideout_en" => TranslationResponse(EnglishTranslations()),
@@ -298,6 +320,17 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                 }
             },
             translations = Array.Empty<string>()
+        };
+    }
+
+    private static object CreateInvalidQuestCatalogOverlay()
+    {
+        return new Dictionary<string, object>
+        {
+            ["$meta"] = new
+            {
+                version = "fixture-invalid"
+            }
         };
     }
 

@@ -95,17 +95,81 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (string.IsNullOrWhiteSpace(version))
             throw new InvalidDataException("퀘스트 보정 데이터 버전이 없습니다.");
 
-        if (overlay["tasks"] is not null && overlay["tasks"] is not JsonObject)
-            throw new InvalidDataException("퀘스트 보정 데이터의 tasks 형식이 잘못되었습니다.");
-        if (overlay["tasksAdd"] is not null && overlay["tasksAdd"] is not JsonObject)
-            throw new InvalidDataException("퀘스트 보정 데이터의 tasksAdd 형식이 잘못되었습니다.");
-        if (overlay["modes"] is not null && overlay["modes"] is not JsonObject)
-            throw new InvalidDataException("퀘스트 보정 데이터의 modes 형식이 잘못되었습니다.");
+        var prestige = RequireOverlayObject(overlay, "prestige", "prestige");
+        var tasks = RequireOverlayObject(overlay, "tasks", "tasks");
+        var tasksAdd = RequireOverlayObject(overlay, "tasksAdd", "tasksAdd");
+        var locales = RequireOverlayObject(overlay, "locales", "locales");
+        var modes = RequireOverlayObject(overlay, "modes", "modes");
+
+        if (modes["regular"] is not JsonObject regularMode)
+            throw new InvalidDataException("퀘스트 보정 데이터에 modes.regular 객체가 없습니다.");
+
+        var modeCorrectionCount = 0;
+        foreach (var (modeName, modeNode) in modes)
+        {
+            if (modeNode is not JsonObject modeObject)
+                throw new InvalidDataException($"퀘스트 보정 데이터의 modes.{modeName} 형식이 잘못되었습니다.");
+
+            modeCorrectionCount += ValidateTaskOverlayContainer(modeObject, $"modes.{modeName}");
+        }
+
+        var localeCorrectionCount = 0;
+        foreach (var (localeName, localeNode) in locales)
+        {
+            if (localeNode is not JsonObject localeObject)
+                throw new InvalidDataException($"퀘스트 보정 데이터의 locales.{localeName} 형식이 잘못되었습니다.");
+
+            if (localeObject["tasks"] is not null && localeObject["tasks"] is not JsonObject)
+            {
+                throw new InvalidDataException(
+                    $"퀘스트 보정 데이터의 locales.{localeName}.tasks 형식이 잘못되었습니다.");
+            }
+
+            if (localeObject["tasks"] is JsonObject localeTasks)
+                localeCorrectionCount += localeTasks.Count;
+        }
+
+        var totalCorrections = prestige.Count + tasks.Count + tasksAdd.Count +
+                               modeCorrectionCount + localeCorrectionCount;
+        if (totalCorrections <= 0)
+        {
+            throw new InvalidDataException(
+                "퀘스트 보정 데이터에 적용 가능한 prestige/tasks/tasksAdd/mode/locale 보정이 없습니다.");
+        }
+
+        // regular is the only runtime mode used by Tarkov Helper. Validate it
+        // explicitly even when it currently has no task-specific overrides.
+        ValidateTaskOverlayContainer(regularMode, "modes.regular");
 
         return new QuestCatalogOverlayInfo(
             version,
             NodeString(meta["generated"]),
             NodeString(meta["sha256"]));
+    }
+
+    private static JsonObject RequireOverlayObject(
+        JsonObject overlay,
+        string propertyName,
+        string label)
+    {
+        if (overlay[propertyName] is not JsonObject value)
+            throw new InvalidDataException($"퀘스트 보정 데이터의 {label} 형식이 잘못되었습니다.");
+        return value;
+    }
+
+    private static int ValidateTaskOverlayContainer(JsonObject container, string label)
+    {
+        var correctionCount = 0;
+        if (container["tasks"] is not null && container["tasks"] is not JsonObject)
+            throw new InvalidDataException($"퀘스트 보정 데이터의 {label}.tasks 형식이 잘못되었습니다.");
+        if (container["tasksAdd"] is not null && container["tasksAdd"] is not JsonObject)
+            throw new InvalidDataException($"퀘스트 보정 데이터의 {label}.tasksAdd 형식이 잘못되었습니다.");
+
+        if (container["tasks"] is JsonObject tasks)
+            correctionCount += tasks.Count;
+        if (container["tasksAdd"] is JsonObject tasksAdd)
+            correctionCount += tasksAdd.Count;
+        return correctionCount;
     }
 
     private static QuestCatalogOverlayInfo ApplyQuestCatalogOverlay(
