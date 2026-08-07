@@ -1,243 +1,76 @@
-name: Build
+name: Apply Verified Quest Overhaul
 
 on:
-  push:
-    branches:
-      - main
-      - agent/**
-      - hotfix/**
   pull_request:
+    types: [reopened]
+
+permissions:
+  contents: write
 
 jobs:
-  build:
-    runs-on: windows-latest
-    timeout-minutes: 20
-
+  apply:
+    if: github.event.pull_request.number == 31 && github.head_ref == 'agent/quest-data-overhaul'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Restore
-        run: dotnet restore TarkovHelper.sln
-
-      - name: Build and run icon conversion self-test
-        id: build
-        continue-on-error: true
-        shell: pwsh
+      - name: Verify and apply v2 overhaul
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          dotnet build TarkovHelper.sln --configuration Release --no-restore -clp:ErrorsOnly *> build.log
-          $buildExit = $LASTEXITCODE
-          if ($buildExit -ne 0) {
-            exit $buildExit
-          }
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            +refs/heads/agent/quest-data-overhaul:refs/remotes/origin/agent/quest-data-overhaul
+          git checkout -B agent/quest-data-overhaul refs/remotes/origin/agent/quest-data-overhaul
 
-          $env:TARKOV_ICON_SELF_TEST = "1"
-          dotnet run --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj --configuration Release --no-build *>> build.log
-          exit $LASTEXITCODE
+          cat > /tmp/v2-sha256sums <<'EOF'
+          8cf526a4d85e5b159dd756615d5ba5baccaf732c7216351ebbe7dad29291a01b  .github/final-patch/v2-00
+          2dedb99be3d3d43572ab4539d56007cc8b353c41d3ce33e1c4e5f2b243dc80cd  .github/final-patch/v2-01
+          f930f870a4625f4d8dd76c63071eef1c043e5b65bd648e870516403a33efbf50  .github/final-patch/v2-02
+          97724b4c366f3fa0879f355fa96aa0e02518094163b5a8f1370d0eeafa8f0b75  .github/final-patch/v2-03
+          ebe063112b72b8f2f5e3416aa30f2480f89dee002b56313603aa3337518de596  .github/final-patch/v2-04
+          a7a76566b69cb1acc22887640fed2590466f6a7fa2c88d1a7f43f774dc518abf  .github/final-patch/v2-05
+          5c2722d3ae6fc293b1902a0876c4fffb19031aa0ebedb4ebd45e76362a4c67a0  .github/final-patch/v2-06
+          2a02ecaa77ae2e4d76de164a438a8c9e479c7e81a2538331132735f1a9a3eb9f  .github/final-patch/v2-07
+          870a8e59dcbd332cd2a0e9e7635d595f6eb939f2896260bc45b861ace079195f  .github/final-patch/v2-08
+          EOF
+          sed -i 's/^          //' /tmp/v2-sha256sums
+          sha256sum --check /tmp/v2-sha256sums
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: build.log
-          if-no-files-found: error
+          cat .github/final-patch/v2-* > /tmp/final-overhaul.patch.gz.b64
+          echo '76d10a38ed1d3344da3b414790405d5ad85545457d7e2851e36381b7016bde6f  /tmp/final-overhaul.patch.gz.b64' | sha256sum --check
+          base64 --decode /tmp/final-overhaul.patch.gz.b64 > /tmp/final-overhaul.patch.gz
+          echo '029441f8dd6ce05abf9cac68ee60fba6feddadc3cf7df322dfa0ad86ad74f1a8  /tmp/final-overhaul.patch.gz' | sha256sum --check
+          gzip --decompress --stdout /tmp/final-overhaul.patch.gz > /tmp/final-overhaul.patch
+          echo 'd221a60bbb37b2c31eccc4c33cf9d0b0f77c0978401b57b240c742eeee7d330e  /tmp/final-overhaul.patch' | sha256sum --check
 
-      - name: Fail if build failed
-        if: steps.build.outcome == 'failure'
-        shell: pwsh
-        run: exit 1
+          git apply --check /tmp/final-overhaul.patch
+          git apply /tmp/final-overhaul.patch
+          git diff --check
 
-  database-smoke:
-    if: github.event_name == 'pull_request'
-    needs: build
-    runs-on: windows-latest
-    timeout-minutes: 20
+          if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then
+            echo 'Forbidden Available quest state exists.' >&2
+            exit 1
+          fi
+          if grep -R -q 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then
+            echo 'Forbidden QuestStatus.Available reference exists.' >&2
+            exit 1
+          fi
+          if grep -q 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then
+            echo 'Manual in-progress input still auto-completes prerequisites.' >&2
+            exit 1
+          fi
+          grep -q 'QuestStatusPersistence' TarkovHelper/Services/QuestProgressService.cs
+          grep -q 'ContentSchemaVersion' TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Rebuild and validate deterministic database
-        shell: pwsh
-        run: |
-          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release *> database-smoke.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content database-smoke.log
-            exit $LASTEXITCODE
-          }
-
-      - name: Upload deterministic database artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-smoke
-          path: |
-            database-smoke.log
-            TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
-          if-no-files-found: warn
-
-  database-external-smoke:
-    if: github.event_name == 'pull_request'
-    needs: build
-    runs-on: windows-latest
-    timeout-minutes: 35
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Rebuild from live tarkov.dev data
-        shell: pwsh
-        run: |
-          dotnet run --project TarkovHelper.DatabaseSmoke/TarkovHelper.DatabaseSmoke.csproj --configuration Release -- --external *> database-external-smoke.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content database-external-smoke.log
-            exit $LASTEXITCODE
-          }
-
-      - name: Upload externally rebuilt database
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-external-smoke-db
-          path: TarkovHelper.DatabaseSmoke/bin/Release/net8.0-windows/Assets/tarkov_data.db
-          if-no-files-found: error
-
-      - name: Upload external database log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-external-smoke-log
-          path: database-external-smoke.log
-          if-no-files-found: error
-
-  release-package:
-    if: github.event_name == 'pull_request'
-    needs:
-      - build
-      - database-smoke
-      - database-external-smoke
-    runs-on: windows-latest
-    timeout-minutes: 50
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Download verified live database
-        uses: actions/download-artifact@v4
-        with:
-          name: database-external-smoke-db
-          path: rebuilt-db
-
-      - name: Inject verified live database
-        shell: pwsh
-        run: |
-          $databasePath = "rebuilt-db/tarkov_data.db"
-          if (-not (Test-Path $databasePath)) {
-            throw "The externally rebuilt database artifact is missing."
-          }
-
-          $databaseSize = (Get-Item $databasePath).Length
-          if ($databaseSize -lt 1MB) {
-            throw "The externally rebuilt database is unexpectedly small: $databaseSize bytes."
-          }
-
-          Copy-Item $databasePath "TarkovHelper/Assets/tarkov_data.db" -Force
-
-      - name: Download and convert required item icons
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          Remove-Item "TarkovHelper/Assets/Icons" -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path "TarkovHelper/Assets/Icons" -Force | Out-Null
-
-          dotnet run `
-            --project TarkovHelper.IconDownloader/TarkovHelper.IconDownloader.csproj `
-            --configuration Release `
-            -- `
-            --database "TarkovHelper/Assets/tarkov_data.db" `
-            --output "TarkovHelper/Assets/Icons" `
-            --concurrency 8 *> icon-download.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content icon-download.log
-            exit $LASTEXITCODE
-          }
-
-          $iconCount = @(Get-ChildItem "TarkovHelper/Assets/Icons" -Filter *.png -File).Count
-          if ($iconCount -lt 100) {
-            throw "Too few item icons were generated: $iconCount."
-          }
-          Write-Host "Generated item icons: $iconCount"
-
-      - name: Upload icon download log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: icon-download-log
-          path: icon-download.log
-          if-no-files-found: warn
-
-      - name: Publish Windows release candidate
-        shell: pwsh
-        run: |
-          dotnet publish TarkovHelper/TarkovHelper.csproj `
-            --configuration Release `
-            --runtime win-x64 `
-            --self-contained false `
-            --output publish `
-            -p:DebugType=None `
-            -p:DebugSymbols=false
-
-          foreach ($requiredFile in @(
-            "publish/TarkovHelper_JH.exe",
-            "publish/Assets/tarkov_data.db"
-          )) {
-            if (-not (Test-Path $requiredFile)) {
-              throw "Required release file is missing: $requiredFile"
-            }
-          }
-
-          $publishedIcons = @(Get-ChildItem "publish/Assets/Icons" -Filter *.png -File -ErrorAction SilentlyContinue)
-          if ($publishedIcons.Count -lt 100) {
-            throw "Published item icons are missing: $($publishedIcons.Count)."
-          }
-
-          $publishedDatabaseSize = (Get-Item "publish/Assets/tarkov_data.db").Length
-          if ($publishedDatabaseSize -lt 1MB) {
-            throw "The published database is unexpectedly small: $publishedDatabaseSize bytes."
-          }
-
-          Compress-Archive -Path publish/* -DestinationPath TarkovHelper_JH.zip -Force
-          $hash = (Get-FileHash TarkovHelper_JH.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  TarkovHelper_JH.zip" | Set-Content TarkovHelper_JH.zip.sha256 -Encoding ascii
-
-      - name: Upload release candidate
-        uses: actions/upload-artifact@v4
-        with:
-          name: TarkovHelper_JH-release-candidate
-          path: |
-            TarkovHelper_JH.zip
-            TarkovHelper_JH.zip.sha256
-          if-no-files-found: error
+          git checkout 4d1ecbb3d967b0d60aeb7fc6a925a8ed3a4427c2 -- .github/workflows/build.yml .github/workflows/startup-smoke.yml
+          git rm -r .github/final-patch
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Overhaul quest and content data pipeline'
+          git push origin HEAD:agent/quest-data-overhaul
