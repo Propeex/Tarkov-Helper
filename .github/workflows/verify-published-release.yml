@@ -1,0 +1,209 @@
+name: Verify Published Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: verify-published-release
+  cancel-in-progress: false
+
+jobs:
+  verify-published-release:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          [xml]$project = Get-Content "TarkovHelper/TarkovHelper.csproj"
+          $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Project version could not be read."
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=v$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Verify published release and assets
+        id: verify
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ steps.version.outputs.tag }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $expectedTitle = "타르코프헬퍼_JH v$version"
+
+          $release = $null
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+            $json = gh release view $tag --repo $env:GITHUB_REPOSITORY --json name,isDraft,isPrerelease,url,assets 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              $candidate = $json | ConvertFrom-Json
+              $assetNames = @($candidate.assets | ForEach-Object { $_.name })
+              if ($candidate.name -eq $expectedTitle -and
+                  -not $candidate.isDraft -and
+                  -not $candidate.isPrerelease -and
+                  $assetNames -contains "TarkovHelper_JH.zip" -and
+                  $assetNames -contains "TarkovHelper_JH.zip.sha256") {
+                $release = $candidate
+                break
+              }
+            }
+
+            if ($attempt -lt 30) {
+              Write-Host "Release $tag is not fully published yet; retrying ($attempt/30)."
+              Start-Sleep -Seconds 10
+            }
+          }
+
+          if ($null -eq $release) {
+            throw "Release $tag or its required assets were not available after the verification window."
+          }
+
+          New-Item -ItemType Directory -Path release-verification -Force | Out-Null
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip" --dir release-verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the release ZIP." }
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "TarkovHelper_JH.zip.sha256" --dir release-verification
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the SHA-256 file." }
+
+          $zipPath = "release-verification/TarkovHelper_JH.zip"
+          $shaPath = "release-verification/TarkovHelper_JH.zip.sha256"
+          $declaredHash = ((Get-Content $shaPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($declaredHash -ne $actualHash) {
+            throw "Published SHA-256 mismatch: declared=$declaredHash actual=$actualHash"
+          }
+
+          Expand-Archive $zipPath -DestinationPath release-verification/extracted -Force
+          foreach ($requiredFile in @(
+            "release-verification/extracted/TarkovHelper_JH.exe",
+            "release-verification/extracted/Assets/tarkov_data.db"
+          )) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Required file is missing from the published ZIP: $requiredFile"
+            }
+          }
+
+          $publishedVersion = (Get-Item "release-verification/extracted/TarkovHelper_JH.exe").VersionInfo.FileVersion
+          if ($publishedVersion -ne "$version.0") {
+            throw "Published executable version is invalid: expected=$version.0 actual=$publishedVersion"
+          }
+
+          @'
+          import pathlib
+          import sqlite3
+          import sys
+          import zipfile
+
+          zip_path = pathlib.Path(sys.argv[1])
+          db_path = pathlib.Path(sys.argv[2])
+
+          with zipfile.ZipFile(zip_path) as archive:
+              names = [name.replace('\\', '/') for name in archive.namelist()]
+              if len(names) != len(set(names)):
+                  raise SystemExit('duplicate ZIP entries')
+              if any(name.startswith('/') or '..' in name.split('/') for name in names):
+                  raise SystemExit('unsafe ZIP path')
+
+              forbidden = {
+                  'user_data.db', 'quest_progress.json', 'quest_progress_v2.json',
+                  'objective_progress.json', 'hideout_progress.json', 'item_inventory.json',
+                  'settings.json', 'app_settings.json'
+              }
+              if any(
+                  pathlib.PurePosixPath(name).name.lower() in forbidden or name.lower().endswith('.pdb')
+                  for name in names
+              ):
+                  raise SystemExit('user-data or debug file included')
+
+              item_icons = {
+                  pathlib.PurePosixPath(name).stem.lower()
+                  for name in names
+                  if name.lower().startswith('assets/icons/') and name.lower().endswith('.png')
+              }
+              if len(item_icons) < 100:
+                  raise SystemExit(f'too few packaged item icons: {len(item_icons)}')
+
+          connection = sqlite3.connect(db_path)
+          try:
+              if connection.execute('pragma integrity_check').fetchone()[0] != 'ok':
+                  raise SystemExit('SQLite integrity_check failed')
+              if connection.execute('pragma foreign_key_check').fetchall():
+                  raise SystemExit('SQLite foreign-key violation')
+
+              item_count = connection.execute('select count(*) from Items').fetchone()[0]
+              quest_count = connection.execute('select count(*) from Quests').fetchone()[0]
+              hideout_count = connection.execute('select count(*) from HideoutStations').fetchone()[0]
+              metadata = connection.execute('''
+                  select SchemaVersion, ItemCount, QuestCount, HideoutStationCount
+                  from ContentBuildMetadata where Id = 'current'
+              ''').fetchone()
+
+              if item_count < 5000 or quest_count < 500 or hideout_count < 20:
+                  raise SystemExit(
+                      f'published database counts are implausible: items={item_count}, '
+                      f'quests={quest_count}, hideout={hideout_count}'
+                  )
+              if metadata is None or metadata[0] < 2:
+                  raise SystemExit(f'ContentBuildMetadata is invalid: {metadata}')
+              if tuple(metadata[1:]) != (item_count, quest_count, hideout_count):
+                  raise SystemExit(
+                      f'ContentBuildMetadata counts do not match database rows: '
+                      f'metadata={metadata}, actual={(item_count, quest_count, hideout_count)}'
+                  )
+          finally:
+              connection.close()
+          '@ | Set-Content release-verification/verify_release.py -Encoding utf8
+
+          python release-verification/verify_release.py `
+            $zipPath `
+            "release-verification/extracted/Assets/tarkov_data.db"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Published release content verification failed."
+          }
+
+          Write-Host "Published release verified: tag=$tag sha256=$actualHash url=$($release.url)"
+
+      - name: Publish verification commit status
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $outcome = "${{ steps.verify.outcome }}"
+          if ($outcome -eq "success") {
+            $state = "success"
+            $description = "Published release ZIP, SHA-256, version and database verified"
+          }
+          else {
+            $state = "failure"
+            $description = "Published release verification failed"
+          }
+
+          $targetUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          gh api `
+            --method POST `
+            "repos/$env:GITHUB_REPOSITORY/statuses/$env:GITHUB_SHA" `
+            -f state=$state `
+            -f context="release/published-assets" `
+            -f description="$description" `
+            -f target_url="$targetUrl" | Out-Null
