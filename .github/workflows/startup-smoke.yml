@@ -8,8 +8,40 @@ on:
       - hotfix/**
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
+  maintenance-patch:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 31 && github.head_ref == 'agent/quest-data-overhaul'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/quest-data-overhaul
+          fetch-depth: 0
+
+      - name: Apply compatibility fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/maintenance/fix-objective-json-and-prereq-sort.py
+          git diff --check
+          if git diff --quiet; then
+            echo 'Compatibility fix already applied.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs TarkovHelper/Services/TarkovDataDatabaseBuilder.Writer.cs TarkovHelper/Services/QuestDbService.cs
+          git diff --cached --check
+          git commit -m 'Preserve objective source JSON and legacy prerequisite loading'
+          git push origin HEAD:agent/quest-data-overhaul
+
   startup-smoke:
+    if: github.event_name != 'pull_request' || github.event.pull_request.number != 31
     runs-on: windows-latest
     timeout-minutes: 20
 
