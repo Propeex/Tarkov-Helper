@@ -450,6 +450,25 @@ internal sealed partial class TarkovDataDatabaseBuilder
                 objectiveSourceById.TryGetValue(objectiveId, out var sourceJson))
             {
                 Set(objectiveRow, "SourceJson", sourceJson);
+                continue;
+            }
+
+            // Some hand-maintained map-coordinate rows no longer have a stable
+            // objective ID in the current API. Keep those rows for map fidelity,
+            // but record their provenance explicitly instead of pretending they
+            // came from the current API or leaving the source unauditable.
+            if (string.IsNullOrWhiteSpace(ReadString(objectiveRow, "SourceJson")))
+            {
+                Set(objectiveRow, "SourceJson", JsonSerializer.Serialize(new
+                {
+                    sourceKind = "legacy-preserved",
+                    id = objectiveId,
+                    questId = ReadString(objectiveRow, "QuestId"),
+                    objectiveType = ReadString(objectiveRow, "ObjectiveType"),
+                    description = ReadString(objectiveRow, "Description"),
+                    mapName = ReadString(objectiveRow, "MapName"),
+                    locationName = ReadString(objectiveRow, "LocationName")
+                }));
             }
         }
 

@@ -305,7 +305,7 @@ static async Task<int> RunDeterministicDatabaseSmokeAsync()
         WHERE r.IsAlternativeGroup = 0 AND (r.ItemId IS NULL OR i.Id IS NULL);
         """);
 
-    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 2 || result.HideoutStationCount != 1)
+    if (result.ItemCount != 4 || result.AmmoCount != 1 || result.QuestCount != 3 || result.HideoutStationCount != 1)
         throw new InvalidDataException("Fixture row counts do not match the generated database.");
     if (koreanItems < 4 || koreanQuests < 2)
         throw new InvalidDataException("Korean localized names were not written correctly.");

@@ -161,7 +161,7 @@ internal sealed partial class TarkovDataDatabaseBuilder
         if (invalidSourceJson != 0)
         {
             throw new InvalidDataException(
-                $"API 원본 JSON 보존 오류: total={invalidSourceJson}, " +
+                $"콘텐츠 소스 JSON 보존 오류: total={invalidSourceJson}, " +
                 $"items={invalidItemSourceJson}, quests={invalidQuestSourceJson}, " +
                 $"objectives={invalidObjectiveSourceJson}");
         }
