@@ -343,7 +343,7 @@ internal sealed class FixtureTarkovApiHandler : HttpMessageHandler
                     normalizedName = "overlay-added-quest",
                     wikiLink = "https://example.invalid/overlay-added",
                     minPlayerLevel = 5,
-                    factionName = "Any",
+                    factionName = (string?)null,
                     kappaRequired = false,
                     trader = "fixture-trader",
                     map = (string?)null,
