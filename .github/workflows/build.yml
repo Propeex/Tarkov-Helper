@@ -1,4 +1,4 @@
-name: Apply Verified Quest Overhaul
+name: Apply Verified Prerequisite Delta
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Verify, apply, and commit v2 source overhaul
+      - name: Verify, apply, and commit v3 prerequisite delta
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -21,31 +21,33 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main +refs/heads/agent/quest-data-overhaul:refs/remotes/origin/agent/quest-data-overhaul
+          git fetch --no-tags origin +refs/heads/agent/quest-data-overhaul:refs/remotes/origin/agent/quest-data-overhaul
           git checkout -B agent/quest-data-overhaul refs/remotes/origin/agent/quest-data-overhaul
-          cat .github/final-patch/v2-* > /tmp/p.gz.b64
-          echo '76d10a38ed1d3344da3b414790405d5ad85545457d7e2851e36381b7016bde6f  /tmp/p.gz.b64' | sha256sum --check
-          base64 --decode /tmp/p.gz.b64 > /tmp/p.gz
-          echo '029441f8dd6ce05abf9cac68ee60fba6feddadc3cf7df322dfa0ad86ad74f1a8  /tmp/p.gz' | sha256sum --check
-          gzip -dc /tmp/p.gz > /tmp/p.patch
-          echo 'd221a60bbb37b2c31eccc4c33cf9d0b0f77c0978401b57b240c742eeee7d330e  /tmp/p.patch' | sha256sum --check
-          git apply --3way --check /tmp/p.patch
-          git apply --3way /tmp/p.patch
+
+          echo '631ed3c242ccb397c0a990c341907ba25b527c49704f7b0d639b58478f8432d8  .github/final-patch/v3-delta-00' | sha256sum --check
+          echo '16350abeda4fe59a5f92a75489386fe2835ca55072b8f1c838ccc50616b717c7  .github/final-patch/v3-delta-01' | sha256sum --check
+          cat .github/final-patch/v3-delta-* > /tmp/v3.gz.b64
+          echo '28e3acb05df2eeddc44d94265aa50638c8a1fa6fa980fe669c6f213ea7589b64  /tmp/v3.gz.b64' | sha256sum --check
+          base64 --decode /tmp/v3.gz.b64 > /tmp/v3.gz
+          echo 'b9a66a4851f78a82eeceb1153bc9a08f27106550c81fb508f5db1ca7573d7d6e  /tmp/v3.gz' | sha256sum --check
+          gzip -dc /tmp/v3.gz > /tmp/v3.patch
+          echo '53945dd38e377380b12be9416c89f01e9cc189d817f056241f02a7f26c032535  /tmp/v3.patch' | sha256sum --check
+
+          git apply --3way --check /tmp/v3.patch
+          git apply --3way /tmp/v3.patch
           test -z "$(git ls-files -u)"
           git diff --check
-          if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then exit 11; fi
-          if grep -R -q 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then exit 12; fi
-          if grep -q 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then exit 13; fi
-          grep -q 'internal bool HasExplicitStart' TarkovHelper/Services/QuestProgressService.cs
-          grep -q 'public bool StartQuest' TarkovHelper/Services/QuestProgressService.cs
-          grep -q '_userDataDb.SaveQuestProgressAsync' TarkovHelper/Services/QuestProgressService.cs
-          grep -q 'CompleteQuest(TarkovTask task, bool completePrerequisites = false)' TarkovHelper/Services/QuestProgressService.cs
-          test -s TarkovHelper/Services/TarkovDataDatabaseBuilder.Schema.cs
-          git checkout 4d1ecbb3d967b0d60aeb7fc6a925a8ed3a4427c2 -- .github/workflows/build.yml .github/workflows/startup-smoke.yml .github/workflows/release.yml
+          grep -q 'questRequirementOldByPair' TarkovHelper/Services/TarkovDataDatabaseBuilder.Writer.cs
+          if grep -q 'NormalizeEquivalentAlternativeRequirementGroups' TarkovHelper/Services/QuestDbService.cs; then exit 21; fi
+          grep -q 'preservedPrerequisiteGroupRows != 2' TarkovHelper.DatabaseSmoke/Program.cs
+          if grep -Eq '^\s*Available\s*,?\s*$' TarkovHelper/Models/QuestStatus.cs; then exit 22; fi
+          if grep -R -q 'QuestStatus\.Available' TarkovHelper --include='*.cs'; then exit 23; fi
+          if grep -q 'result\.PrerequisitesToComplete' TarkovHelper/MainWindow.xaml.cs; then exit 24; fi
+
           git rm -r .github/final-patch
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --check
-          git commit -m 'Overhaul quest and content data pipeline'
+          git commit -m 'Preserve verified quest prerequisite groups'
           git push origin HEAD:agent/quest-data-overhaul
